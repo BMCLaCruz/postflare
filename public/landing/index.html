@@ -1,5 +1,11 @@
 <!doctype html>
-<html lang="en">
+<!--
+  LAUNCH FLAG: data-launched="false" shows GitHub / Deploy to Cloudflare as "Coming soon" pills (the default markup, also
+  without JS). Set it to "true" on launch day: the script at the end turns every [data-launch-href] pill back into a
+  real link and hides [data-prelaunch] elements. X profile for "Follow for launch updates": the href of #follow-x
+  (hero); every other [data-follow] link copies it. See docs/RELEASING.md "Launch day checklist".
+-->
+<html lang="en" data-launched="false">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -73,7 +79,7 @@ header.nav{position:sticky;top:0;z-index:50;backdrop-filter:saturate(1.6) blur(1
 .brand{display:flex;align-items:center;gap:10px;text-decoration:none;font-weight:650;font-size:17px;letter-spacing:-.01em}
 .brand svg{width:30px;height:30px}
 .nav nav{display:flex;gap:24px;margin-left:8px}
-.nav nav a{color:var(--mut);text-decoration:none;font-size:14px;transition:color .2s}
+.nav nav a{color:var(--mut);text-decoration:none;font-size:14px;transition:color .2s;white-space:nowrap}
 .nav nav a:hover{color:var(--fg)}
 .nav .sp{flex:1}
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:44px;padding:0 20px;border-radius:12px;font:600 15px/1 var(--sans);text-decoration:none;white-space:nowrap;transition:transform .2s,box-shadow .2s,background-color .2s,border-color .2s}
@@ -95,6 +101,18 @@ header.nav{position:sticky;top:0;z-index:50;backdrop-filter:saturate(1.6) blur(1
 .soon b{font:700 10px/1 var(--sans);letter-spacing:.07em;text-transform:uppercase;color:var(--accent);background:rgba(249,115,22,.12);padding:5px 7px;border-radius:6px}
 .soon.lg{height:44px;border-radius:12px;font-size:15px;padding:0 8px 0 20px}
 .soon.lg b{padding:7px 9px;border-radius:8px}
+/* Pre-launch: GitHub / Deploy buttons render as .soon pills until <html data-launched="true"> */
+.soon svg{width:16px;height:16px;fill:currentColor;opacity:.75}
+.soon.lg svg{width:18px;height:18px}
+.fsoon{cursor:not-allowed}
+.fsoon small{font-size:12px;opacity:.8}
+.btn.x{color:var(--bg);background:var(--fg);box-shadow:var(--shadow)}
+.btn.x:hover{transform:translateY(-1px);box-shadow:0 10px 24px -10px rgba(0,0,0,.45)}
+.btn.x svg{width:16px;height:16px}
+.soon-row{margin-top:12px}
+.soon-row .soon{gap:8px}
+.launch-note{display:flex;align-items:flex-start;gap:10px;margin:0 0 14px;font-size:15px;color:var(--fg2)}
+.launch-note::before{content:"";flex:none;margin-top:8px;width:8px;height:8px;border-radius:50%;background:var(--grad);box-shadow:0 0 0 4px var(--glow)}
 
 /* Hero */
 .hero{position:relative;padding:72px 0 40px}
@@ -249,9 +267,15 @@ h2{font-size:clamp(30px,3.6vw,46px);line-height:1.08;letter-spacing:-.035em;font
 @keyframes flow{from{transform:translateX(-100%)}to{transform:translateX(560%)}}
 
 /* Platforms grid */
-.grid{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(6,1fr);gap:10px}
+.grid{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px}
 .grid li{display:flex;align-items:center;gap:11px;padding:11px 12px;border-radius:14px;border:1px solid var(--line);background:var(--card);font-size:14px;font-weight:500;color:var(--fg2);line-height:1.25;transition:transform .25s,border-color .25s}
 .grid li:hover{transform:translateY(-2px);border-color:var(--line2)}
+.grid .tag{margin-left:auto;font:700 9.5px/1 var(--sans);font-style:normal;letter-spacing:.06em;text-transform:uppercase;padding:4px 6px;border-radius:6px;white-space:nowrap;cursor:help}
+.grid .tag.v{color:var(--ok);background:rgba(22,163,74,.12)}
+.grid .tag.e{color:var(--warn);background:rgba(217,119,6,.13)}
+.marquee .tag{display:none}
+.legend{display:flex;flex-wrap:wrap;justify-content:center;text-align:center;gap:6px 18px;margin:18px 0 0;font-size:13px;color:var(--mut)}
+.legend b{font-weight:600;color:var(--fg2)}
 
 /* Data use */
 .trust{display:grid;grid-template-columns:1.35fr 1fr;gap:16px}
@@ -304,21 +328,25 @@ footer .brand svg{width:24px;height:24px}
   .hero .wrap{grid-template-columns:1fr;text-align:center}
   .hero .lead{margin-inline:auto}.ctas,.meta{justify-content:center}
   .stage{--k:.9;margin-top:8px}
-  .grid{grid-template-columns:repeat(4,1fr)}
+  .grid{grid-template-columns:repeat(4,minmax(0,1fr))}
   .s3,.s2,.s4{grid-column:span 6}
   .oss{grid-template-columns:1fr;padding:40px}
   .trust{grid-template-columns:1fr}
   .nav nav{display:none}
 }
 @media (max-width:1279px){.nav .gh{display:none}}
+@media (max-width:1379px){.nav .soon.gh{display:none}}
+html[data-launched="false"] .nav .wrap{gap:18px}
 @media (max-width:720px){
   .hero{padding-top:44px}
   section{padding:72px 0}
   .stage{--k:.62}
   .steps{grid-template-columns:1fr}
-  .grid{grid-template-columns:repeat(2,1fr)}
+  .grid{grid-template-columns:repeat(2,minmax(0,1fr))}
   .grid li{font-size:13px;padding:9px 10px;gap:9px}
   .grid .pi{width:30px;height:30px;border-radius:9px}
+  .grid .tag{font-size:8.5px;padding:3px 4px;letter-spacing:.03em}
+  .grid li{gap:7px}
   .oss{padding:28px 22px;border-radius:22px}
   .card{padding:22px}
   .trust .card{padding:24px}
@@ -327,7 +355,8 @@ footer .brand svg{width:24px;height:24px}
   .hero .ctas .btn.ghost{flex:1 1 100%;border:1px solid var(--line2)}
   .nav .gh,.nav .soon{display:none}
   .hcard{padding:40px 22px;border-radius:22px}
-  .hcard .soon{flex:1 1 100%}
+  .hcard .soon,.ctas .soon{flex:1 1 100%}
+  .hero .ctas .soon.gh{display:none}
   .comp .bar .meter,.comp .bar .ov{display:none}
   .cal{grid-template-columns:36px repeat(7,1fr);gap:4px}
   .cal .ev span.l{display:none}
@@ -356,7 +385,7 @@ footer .brand svg{width:24px;height:24px}
     <a class="brand" href="/" aria-label="Postflare home"><svg aria-hidden="true"><use href="#logo"/></svg>Postflare</a>
     <nav aria-label="Primary"><a href="#features">Features</a><a href="#how">How it works</a><a href="#platforms">Platforms</a><a href="#data">Data use</a><a href="#open-source">Open source</a></nav>
     <span class="sp"></span>
-    <a class="btn sec sm gh" href="https://github.com/FerdiKT/postflare"><svg aria-hidden="true"><use href="#i-github"/></svg>GitHub</a>
+    <span class="soon gh" data-launch-href="https://github.com/FerdiKT/postflare" data-launch-class="btn sec sm gh" role="link" aria-disabled="true" title="The GitHub repository goes public at launch"><svg aria-hidden="true"><use href="#i-github"/></svg>GitHub<b data-soon>Soon</b></span>
     <span class="soon" role="link" aria-disabled="true" title="Hosted Postflare accounts are coming soon">Sign up<b>Coming soon</b></span>
     <a class="btn pri sm" href="/demo" data-demo>Live demo</a>
     <a class="btn sec sm" href="/login">Sign in</a>
@@ -371,14 +400,15 @@ footer .brand svg{width:24px;height:24px}
     <div>
       <a class="pill rv" href="#open-source"><b>Open source</b>Self-hosted on Cloudflare&rsquo;s free plan</a>
       <h1 id="hero-title" class="rv" style="--rd:.06s">Schedule once.<br><span class="gt">Publish everywhere.</span></h1>
-      <p class="lead rv" style="--rd:.12s"><strong>Postflare</strong> is a social media scheduler you run on your own Cloudflare account. Write a post once, tailor it per network, put it on a calendar, and Postflare publishes it to Instagram, TikTok, YouTube, X, LinkedIn, Threads and 30 more networks through their official APIs, right on time.</p>
+      <p class="lead rv" style="--rd:.12s"><strong>Postflare</strong> is a social media scheduler you run on your own Cloudflare account. Write a post once, tailor it per network, put it on a calendar, and Postflare publishes it to Instagram, TikTok, YouTube, X, LinkedIn, Threads and 29 more networks through their official APIs, right on time.</p>
       <div class="ctas rv" style="--rd:.18s">
         <a class="btn pri" href="/demo" data-demo><svg class="play" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 2.8v10.4a.8.8 0 0 0 1.2.7l8.3-5.2a.8.8 0 0 0 0-1.4L5.7 2.1a.8.8 0 0 0-1.2.7Z"/></svg>Live demo</a>
-        <a class="btn cf" href="https://deploy.workers.cloudflare.com/?url=https://github.com/FerdiKT/postflare"><svg aria-hidden="true"><use href="#i-cloudflare"/></svg>Deploy to Cloudflare</a>
-        <a class="btn sec" href="https://github.com/FerdiKT/postflare"><svg aria-hidden="true"><use href="#i-github"/></svg>GitHub</a>
+        <a class="btn x" id="follow-x" href="https://x.com/ferdikt" target="_blank" rel="noopener" data-follow data-prelaunch><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-x"/></svg>Follow for launch updates</a>
+        <span class="soon lg" data-launch-href="https://deploy.workers.cloudflare.com/?url=https://github.com/FerdiKT/postflare" data-launch-class="btn cf" role="link" aria-disabled="true" title="One-click deploy opens at launch"><svg aria-hidden="true"><use href="#i-cloudflare"/></svg>Deploy to Cloudflare<b data-soon>Soon</b></span>
+        <span class="soon lg gh" data-launch-href="https://github.com/FerdiKT/postflare" data-launch-class="btn sec" role="link" aria-disabled="true" title="The GitHub repository goes public at launch"><svg aria-hidden="true"><use href="#i-github"/></svg>GitHub<b data-soon>Soon</b></span>
         <a class="btn ghost" href="/login">Sign in</a>
       </div>
-      <div class="meta rv" style="--rd:.24s"><span>36 platforms</span><span>REST API + MCP server</span><span>AGPL-3.0</span><span data-demo>Demo: no sign-up needed</span></div>
+      <div class="meta rv" style="--rd:.24s"><span>36 integrations</span><span>REST API + MCP server</span><span>AGPL-3.0</span><span data-demo>Demo: no sign-up needed</span></div>
     </div>
 
     <div class="stage" role="img" aria-label="Illustration: one scheduled post flaring out to Instagram, TikTok, YouTube, X, LinkedIn, Threads, Bluesky, Facebook, Pinterest, Reddit, Mastodon, Telegram, Discord and Google Business Profile.">
@@ -471,7 +501,7 @@ curl https://<span class="c1">your-domain</span>/api/posts \
 
 <section id="how" aria-labelledby="h-title">
   <div class="wrap">
-    <div class="head c rv"><span class="eyebrow">How it works</span><h2 id="h-title">From idea to published in three steps</h2><p class="sub">No browser extensions, no scraping, no shared passwords. Postflare only uses each platform's official sign-in and publishing APIs.</p></div>
+    <div class="head c rv"><span class="eyebrow">How it works</span><h2 id="h-title">From idea to published in three steps</h2><p class="sub">No browser extensions, no scraping, no shared passwords. Postflare uses each platform's official sign-in and publishing APIs; the one unofficial integration (Skool) is experimental and off by default.</p></div>
     <div class="flow rv" aria-hidden="true"></div>
     <ol class="steps" style="list-style:none;margin:0;padding:0">
       <li class="step rv"><div class="n" aria-hidden="true">1</div><h3>Connect your accounts</h3><p>Sign in to each network with its official OAuth screen (Google, TikTok, Meta, X, LinkedIn and others). You choose which accounts Postflare may post to, and you can revoke access at any time.</p></li>
@@ -483,11 +513,11 @@ curl https://<span class="c1">your-domain</span>/api/posts \
 
 <section id="platforms" aria-labelledby="p-title">
   <div class="wrap">
-    <div class="head c rv"><span class="eyebrow">Supported platforms</span><h2 id="p-title"><span data-count="36">36</span> networks, one composer</h2><p class="sub">Social networks, video platforms, communities, chat apps and blogs. Each integration uses the platform's official API.</p></div>
+    <div class="head c rv"><span class="eyebrow">Supported platforms</span><h2 id="p-title"><span data-count="36">36</span> networks, one composer</h2><p class="sub">36 integrations &mdash; 2 verified, the rest in beta. Social networks, video platforms, communities, chat apps and blogs, each through the platform's official API (Skool, the exception, is experimental and off by default).</p></div>
     <ul class="grid rv" aria-label="Supported platforms">
 <li><span class="pi" style="--c:#E4405F;--f:#fff" title="Instagram"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-instagram"/></svg></span><span>Instagram</span></li>
 <li><span class="pi" style="--c:#C13584;--f:#fff" title="Instagram Business"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-instagram"/></svg></span><span>Instagram Business</span></li>
-<li><span class="pi" style="--c:#000000;--f:#fff" title="TikTok"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-tiktok"/></svg></span><span>TikTok</span></li>
+<li><span class="pi" style="--c:#000000;--f:#fff" title="TikTok"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-tiktok"/></svg></span><span>TikTok</span><em class="tag v" title="Publishing verified with a live account">Verified</em></li>
 <li><span class="pi" style="--c:#000000;--f:#fff" title="TikTok Business"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-tiktok"/></svg></span><span>TikTok Business</span></li>
 <li><span class="pi" style="--c:#FF0000;--f:#fff" title="YouTube"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-youtube"/></svg></span><span>YouTube</span></li>
 <li><span class="pi" style="--c:#000000;--f:#fff" title="X"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-x"/></svg></span><span>X</span></li>
@@ -517,11 +547,12 @@ curl https://<span class="c1">your-domain</span>/api/posts \
 <li><span class="pi" style="--c:#2962FF;--f:#fff" title="Hashnode"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-hashnode"/></svg></span><span>Hashnode</span></li>
 <li><span class="pi" style="--c:#21759B;--f:#fff" title="WordPress"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-wordpress"/></svg></span><span>WordPress</span></li>
 <li><span class="pi" style="--c:#0055D4;--f:#fff" title="Listmonk"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-listmonk"/></svg></span><span>Listmonk</span></li>
-<li><span class="pi" style="--c:#F8D24B;--f:#1c1917" title="Skool"><b aria-hidden="true">S</b></span><span>Skool</span></li>
+<li><span class="pi" style="--c:#F8D24B;--f:#1c1917" title="Skool"><b aria-hidden="true">S</b></span><span>Skool</span><em class="tag e" title="Unofficial, cookie-based API: may break. Off unless an admin enables experimental integrations">Exp.</em></li>
 <li><span class="pi" style="--c:#FF6243;--f:#fff" title="Whop"><b aria-hidden="true">W</b></span><span>Whop</span></li>
 <li><span class="pi" style="--c:#E01B24;--f:#fff" title="Moltbook"><b aria-hidden="true">M</b></span><span>Moltbook</span></li>
-<li><span class="pi" style="--c:#52525B;--f:#fff" title="Webhook"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-hook"/></svg></span><span>Webhook</span></li>
+<li><span class="pi" style="--c:#52525B;--f:#fff" title="Webhook"><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-hook"/></svg></span><span>Webhook</span><em class="tag v" title="Publishing verified with a live account">Verified</em></li>
     </ul>
+    <p class="legend rv"><span><b>Verified</b>: confirmed with a live account</span><span><b>Beta</b> (unmarked): built on the official API, tested with mocked responses</span><span><b>Exp.</b>: unofficial API, off by default</span></p>
   </div>
 </section>
 
@@ -563,10 +594,12 @@ curl https://<span class="c1">your-domain</span>/api/posts \
         <p class="sub">Postflare is AGPL-3.0 licensed and fits comfortably in the Cloudflare Workers Free plan. One click deploys the Worker, database, storage bucket and workflow to your account; your tokens and media never leave it.</p>
         <p class="sub" style="margin-top:12px;font-size:15px">Inspired by <a href="https://github.com/gitroomhq/postiz-app" style="color:var(--accent)">Postiz</a>, the open-source social media scheduler, and rebuilt to be Cloudflare-native: no servers, no database to run. Postflare is an independent project, not affiliated with Postiz.</p>
         <div class="stack" aria-label="Built on"><span>Workers</span><span>D1</span><span>R2</span><span>Workflows</span><span>Hono</span><span>React</span></div>
-        <div class="ctas"><a class="btn cf" href="https://deploy.workers.cloudflare.com/?url=https://github.com/FerdiKT/postflare"><svg aria-hidden="true"><use href="#i-cloudflare"/></svg>Deploy to Cloudflare</a><a class="btn sec" href="https://github.com/FerdiKT/postflare"><svg aria-hidden="true"><use href="#i-github"/></svg>View on GitHub</a></div>
+        <p class="launch-note" data-prelaunch><span>Open source on GitHub &mdash; coming soon. Follow for the launch.</span></p>
+        <div class="ctas"><a class="btn x" href="#follow-x" data-follow data-prelaunch><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#i-x"/></svg>Follow for launch updates</a></div>
+        <div class="ctas soon-row"><span class="soon" data-launch-href="https://deploy.workers.cloudflare.com/?url=https://github.com/FerdiKT/postflare" data-launch-class="btn cf" role="link" aria-disabled="true" title="One-click deploy opens at launch"><svg aria-hidden="true"><use href="#i-cloudflare"/></svg>Deploy to Cloudflare<b data-soon>Coming soon</b></span><span class="soon" data-launch-href="https://github.com/FerdiKT/postflare" data-launch-class="btn sec" role="link" aria-disabled="true" title="The GitHub repository goes public at launch"><svg aria-hidden="true"><use href="#i-github"/></svg>View on GitHub<b data-soon>Coming soon</b></span></div>
       </div>
       <div class="stats">
-        <div class="stat"><b data-count="36">36</b><span>platforms supported</span></div>
+        <div class="stat"><b data-count="36">36</b><span>integrations, 2 verified and the rest in beta</span></div>
         <div class="stat"><b>$<span data-count="0">0</span></b><span>per month on the Workers Free plan</span></div>
         <div class="stat"><b data-count="100" data-suffix="%">100%</b><span>of your data stays in your account</span></div>
         <div class="stat"><b data-count="1">1</b><span>click to deploy your own instance</span></div>
@@ -594,13 +627,31 @@ curl https://<span class="c1">your-domain</span>/api/posts \
   <div class="wrap">
     <a class="brand" href="/"><svg aria-hidden="true"><use href="#logo"/></svg>Postflare</a>
     <span>&copy; 2026 Postflare</span>
-    <nav aria-label="Footer"><a href="/privacy/">Privacy Policy</a><a href="/terms/">Terms of Service</a><a href="https://github.com/FerdiKT/postflare">GitHub</a><a href="/demo" data-demo>Live demo</a><a href="/login">Sign in</a></nav>
+    <nav aria-label="Footer"><a href="/privacy/">Privacy Policy</a><a href="/terms/">Terms of Service</a><span class="fsoon" data-launch-href="https://github.com/FerdiKT/postflare" role="link" aria-disabled="true" title="The GitHub repository goes public at launch">GitHub<small data-soon> (coming soon)</small></span><a href="#follow-x" data-follow>Follow on X</a><a href="/demo" data-demo>Live demo</a><a href="/login">Sign in</a></nav>
   </div>
 </footer>
 
 <script>
 (function () {
   var reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  // "Follow for launch updates": the X profile URL lives only on #follow-x; other [data-follow] links copy it.
+  var follow = document.getElementById("follow-x");
+  if (follow) document.querySelectorAll("[data-follow]").forEach(function (a) { a.href = follow.href; a.target = "_blank"; a.rel = "noopener"; });
+
+  // Launch flag (<html data-launched>): turn the "Coming soon" pills back into the real GitHub / Deploy links.
+  if (document.documentElement.getAttribute("data-launched") === "true") {
+    document.querySelectorAll("[data-prelaunch]").forEach(function (el) { el.hidden = true; el.style.display = "none"; });
+    document.querySelectorAll("[data-launch-href]").forEach(function (el) {
+      var a = document.createElement("a");
+      a.href = el.getAttribute("data-launch-href");
+      var cls = el.getAttribute("data-launch-class");
+      if (cls) a.className = cls;
+      el.querySelectorAll("[data-soon]").forEach(function (b) { b.remove(); });
+      while (el.firstChild) a.appendChild(el.firstChild);
+      el.replaceWith(a);
+    });
+  }
 
   // "Live demo" links only work on instances with DEMO_MODE on: hide them elsewhere (they stay without JS).
   fetch("/api/auth/status", { credentials: "same-origin" })

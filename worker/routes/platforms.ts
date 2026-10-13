@@ -2,22 +2,28 @@ import { Hono } from "hono";
 import { requireInstancePermission, type AppEnv } from "../lib/auth";
 import { encryptJson } from "../lib/crypto";
 import { getAppConfig } from "../lib/accounts";
-import { baseUrl } from "../lib/settings";
+import { baseUrl, experimentalEnabled } from "../lib/settings";
 import { now } from "../lib/util";
 import { getProvider, providerInfo, providers, redirectUriFor } from "../providers/registry";
 
 export const platformRoutes = new Hono<AppEnv>();
 
-/** All providers with whether their developer app is configured. */
+/**
+ * All providers with whether their developer app is configured and whether new accounts can be connected (`enabled`:
+ * false for experimental providers while experimental integrations are off). Disabled ones stay listed so already
+ * connected accounts keep their metadata.
+ */
 platformRoutes.get("/providers", async (c) => {
   const { results } = await c.env.DB.prepare("SELECT provider FROM platform_apps").all<{ provider: string }>();
   const configured = new Set(results.map((r) => r.provider));
   const base = await baseUrl(c.env, c.req.url);
+  const experimental = await experimentalEnabled(c.env.DB);
   return c.json(
     providers.map((p) => ({
       ...providerInfo(p),
       configured: !p.appFields.some((f) => f.required) || configured.has(p.id),
       redirectUri: redirectUriFor(base, p),
+      enabled: p.status !== "experimental" || experimental,
     })),
   );
 });

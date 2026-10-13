@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { ApiKeyDTO } from "../../shared/types";
 import { createApiKey, forbidDemoUser, isInstanceAdmin, requireInstancePermission, requirePermission, wsId, type AppEnv } from "../lib/auth";
-import { baseUrl, getSetting, setSetting } from "../lib/settings";
+import { EXPERIMENTAL_SETTING, baseUrl, experimentalEnabled, getSetting, setSetting } from "../lib/settings";
 
 export const settingsRoutes = new Hono<AppEnv>();
 
@@ -11,11 +11,12 @@ settingsRoutes.get("/settings", async (c) => {
     publicUrlLocked: !!c.env.PUBLIC_URL,
     timezone: (await getSetting(c.env.DB, "timezone")) ?? null,
     encryptionKeyFromSecret: !!c.env.SECRET_KEY,
+    experimentalIntegrations: await experimentalEnabled(c.env.DB),
   });
 });
 
 settingsRoutes.put("/settings", requireInstancePermission("instance.settings.manage"), async (c) => {
-  const body = await c.req.json<{ publicUrl?: string; timezone?: string }>();
+  const body = await c.req.json<{ publicUrl?: string; timezone?: string; experimentalIntegrations?: boolean }>();
   if (body.publicUrl !== undefined && !c.env.PUBLIC_URL) {
     let url: URL;
     try {
@@ -33,6 +34,9 @@ settingsRoutes.put("/settings", requireInstancePermission("instance.settings.man
       return c.json({ error: "Unknown timezone" }, 400);
     }
     await setSetting(c.env.DB, "timezone", String(body.timezone));
+  }
+  if (body.experimentalIntegrations !== undefined) {
+    await setSetting(c.env.DB, EXPERIMENTAL_SETTING, body.experimentalIntegrations === true ? "true" : "false");
   }
   return c.json({ ok: true });
 });

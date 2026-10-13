@@ -34,9 +34,22 @@ const tones: Record<Tone, string> = {
   brand: "bg-brand-50 text-brand-700 ring-brand-200 dark:bg-brand-950/60 dark:text-brand-300 dark:ring-brand-900",
 };
 
-export function Badge({ tone = "zinc", children, className, dot }: { tone?: Tone; children: ReactNode; className?: string; dot?: boolean }) {
+export function Badge({
+  tone = "zinc",
+  children,
+  className,
+  dot,
+  title,
+}: {
+  tone?: Tone;
+  children: ReactNode;
+  className?: string;
+  dot?: boolean;
+  title?: string;
+}) {
   return (
     <span
+      title={title}
       className={cn(
         "inline-flex items-center gap-1 whitespace-nowrap rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset",
         tones[tone],

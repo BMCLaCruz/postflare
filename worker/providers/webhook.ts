@@ -9,6 +9,7 @@ export const webhook: Provider = {
   color: "6B7280",
   category: "messaging",
   auth: "credentials",
+  status: "verified",
   appFields: [],
   credentialFields: [
     { key: "name", label: "Name", type: "text", required: true, placeholder: "My automation" },

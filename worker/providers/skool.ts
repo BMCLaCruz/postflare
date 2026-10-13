@@ -68,6 +68,8 @@ export const skool: Provider = {
   color: "F8D24B",
   category: "community",
   auth: "credentials",
+  status: "experimental",
+  statusNote: "Uses Skool's unofficial, cookie-based API; may break and may conflict with Skool's terms",
   appFields: [],
   credentialFields: [
     { key: "auth_token", label: "auth_token cookie", type: "password", required: true },

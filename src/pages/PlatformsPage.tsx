@@ -4,6 +4,8 @@ import { ArrowLeft, BookOpen, CheckCircle2, ExternalLink, Plug, Search, Trash2 }
 import { CATEGORY_LABELS, CATEGORY_ORDER, ConnectDialog } from "../components/accounts/ConnectDialog";
 import { Markdown } from "../components/Markdown";
 import { ProviderLogo } from "../components/ProviderLogo";
+import { PROVIDER_STATUS, ProviderStatusBadge } from "../components/ProviderStatusBadge";
+import { Notice } from "../components/ui/Section";
 import { SettingsForm, fieldErrors } from "../components/SettingsForm";
 import { Button } from "../components/ui/Button";
 import { useConfirm } from "../components/ui/Confirm";
@@ -82,13 +84,18 @@ export function PlatformsPage() {
                     <Link
                       key={p.id}
                       to={`/platforms/${p.id}`}
+                      title={p.enabled ? undefined : "Experimental integrations are off (Instance settings)"}
                       className={cn(
                         "flex items-center gap-3 rounded-lg px-2.5 py-2 text-sm transition",
                         p.id === id ? "bg-zinc-100 dark:bg-zinc-800" : "hover:bg-zinc-50 dark:hover:bg-zinc-800/50",
+                        !p.enabled && "opacity-60",
                       )}
                     >
                       <ProviderLogo provider={p} size="md" />
-                      <span className="min-w-0 flex-1 truncate font-medium">{p.name}</span>
+                      <span className="flex min-w-0 flex-1 items-center gap-1.5">
+                        <span className="truncate font-medium">{p.name}</span>
+                        <ProviderStatusBadge provider={p} className="px-1.5 py-0 text-[10px]" />
+                      </span>
                       {counts.get(p.id) ? <span className="text-xs tabular-nums text-zinc-400">{counts.get(p.id)}</span> : null}
                       {!needsApp(p) ? (
                         <span className="size-2 rounded-full bg-zinc-300 dark:bg-zinc-600" title="No setup needed" />
@@ -195,6 +202,7 @@ function PlatformDetail({ provider: p, accountCount }: { provider: Provider; acc
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-lg font-semibold">{p.name}</h2>
+              <ProviderStatusBadge provider={p} showVerified />
               {!app ? <Badge>No app needed</Badge> : p.configured ? <Badge tone="green" dot>Configured</Badge> : <Badge tone="amber" dot>Needs setup</Badge>}
             </div>
             <p className="mt-0.5 text-sm text-zinc-500">
@@ -208,10 +216,26 @@ function PlatformDetail({ provider: p, accountCount }: { provider: Provider; acc
               {cap.thread && <Badge tone="violet">{cap.threadLabel ?? "Follow-ups"}</Badge>}
             </div>
           </div>
-          <Button variant={p.configured ? "primary" : "secondary"} disabled={!p.configured} onClick={() => setConnect(true)}>
+          <Button variant={p.configured && p.enabled ? "primary" : "secondary"} disabled={!p.configured || !p.enabled} onClick={() => setConnect(true)}>
             Connect account
           </Button>
         </div>
+        {(p.status !== "verified" || p.statusNote) && (
+          <Notice tone={p.status === "experimental" ? "amber" : "zinc"} className="mt-4">
+            {p.statusNote && <strong className="font-medium">{p.statusNote}. </strong>}
+            {PROVIDER_STATUS[p.status].help}
+            {!p.enabled && (
+              <>
+                {" "}
+                New connections are off:{" "}
+                <Link to="/admin/settings#integrations" className="font-medium underline">
+                  enable experimental integrations
+                </Link>
+                {accountCount > 0 && "; connected accounts keep publishing"}.
+              </>
+            )}
+          </Notice>
+        )}
       </Card>
 
       {p.appFields.length > 0 && (

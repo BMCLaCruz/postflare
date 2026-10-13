@@ -202,7 +202,7 @@ export const api = {
   },
   settings: {
     get: () => get<AppSettings>("/settings"),
-    save: (body: { publicUrl?: string; timezone?: string }) => request<{ ok: true }>("PUT", "/settings", body),
+    save: (body: { publicUrl?: string; timezone?: string; experimentalIntegrations?: boolean }) => request<{ ok: true }>("PUT", "/settings", body),
   },
   version: () => get<VersionDTO>("/version"),
   updates: {

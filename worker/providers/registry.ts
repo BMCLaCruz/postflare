@@ -66,6 +66,8 @@ export function providerInfo(p: Provider): ProviderInfo {
     docsUrl: p.docsUrl,
     setupNotes: p.setupNotes,
     composerNotice: p.composerNotice,
+    status: p.status ?? "beta",
+    statusNote: p.statusNote,
     analytics: {
       post: !!(p.postMetrics && p.metrics?.post.length),
       account: !!(p.accountMetrics && p.metrics?.account.length),

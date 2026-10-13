@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { providers } from "../worker/providers/registry";
+import { providerInfo, providers } from "../worker/providers/registry";
 
 describe("provider registry", () => {
   it("has unique ids", () => {
@@ -7,8 +7,16 @@ describe("provider registry", () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
+  it("defaults to beta, with tiktok/webhook verified and skool experimental", () => {
+    const by = (status: string) => providers.filter((p) => providerInfo(p).status === status).map((p) => p.id).sort();
+    expect(by("verified")).toEqual(["tiktok", "webhook"]);
+    expect(by("experimental")).toEqual(["skool"]);
+    expect(by("beta").length).toBe(providers.length - 3);
+  });
+
   for (const p of providers) {
     describe(p.id, () => {
+      const info = providerInfo(p);
       it("implements its auth flow", () => {
         if (p.auth === "oauth2") {
           expect(p.authorize, "authorize").toBeTypeOf("function");
@@ -42,6 +50,13 @@ describe("provider registry", () => {
           expect(p.postMetrics || p.accountMetrics, "metrics without postMetrics/accountMetrics").toBeTruthy();
           expect(p.metrics.batch ?? 1).toBeGreaterThanOrEqual(1);
         }
+      });
+
+      it("has a valid status", () => {
+        expect(["verified", "beta", "experimental"]).toContain(info.status);
+        if (p.statusNote !== undefined) expect(p.statusNote.trim().length).toBeGreaterThan(0);
+        // Experimental means an unofficial API: the note says which and why.
+        if (info.status === "experimental") expect(p.statusNote, "statusNote").toBeTruthy();
       });
 
       it("has metadata", () => {

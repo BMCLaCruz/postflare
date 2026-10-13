@@ -13,7 +13,7 @@
     "db:migrate:local": "wrangler d1 migrations apply DB --local",
     "typecheck": "tsc -b",
     "test": "vitest run",
-    "cli:build": "tsc -p cli/tsconfig.json",
+    "cli:build": "node scripts/embed-skill.mjs && tsc -p cli/tsconfig.json",
     "cli:typecheck": "tsc -p cli/tsconfig.test.json",
     "cf-typegen": "wrangler types -c wrangler.jsonc worker/worker-configuration.d.ts"
   },

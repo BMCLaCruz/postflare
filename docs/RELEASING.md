@@ -59,7 +59,38 @@ so CI runs on release PRs; PRs opened with the default `GITHUB_TOKEN` trigger no
 3. Make sure the repository is public before relying on the update check: private repositories answer 404 and
    instances then report no updates (silently).
 
-## First public release (by hand)
+## Launch day checklist
+
+Until launch the repository is private and the landing page (`public/landing/index.html`) is in **teaser mode**: every
+GitHub / Deploy to Cloudflare button is a non-clickable "Coming soon" pill and the hero and open-source section ask
+visitors to follow on X. The real URLs stay in the markup (`data-launch-href` on each pill).
+
+- **X profile URL** (the "Follow for launch updates" buttons and the footer "Follow on X" link): edit the `href` of
+  `<a id="follow-x">` in the hero; every other `[data-follow]` link copies it at load time.
+- **Launch flag**: `<html lang="en" data-launched="false">` at the top of `public/landing/index.html`.
+
+On launch day, in this order:
+
+1. [ ] Make the repository public (Settings → General → Danger zone → Change visibility). Check that
+       `https://github.com/FerdiKT/postflare` and the Deploy button URL
+       (`https://deploy.workers.cloudflare.com/?url=https://github.com/FerdiKT/postflare`) work while logged out.
+2. [ ] Flip the flag: `data-launched="true"` in `public/landing/index.html`. With it, the page script turns each
+       "Coming soon" pill into its real link and hides the pre-launch elements (`[data-prelaunch]`: the follow
+       buttons in the hero and open-source section, the "coming soon" note). The footer "Follow on X" link stays.
+       Preview: `npx vite preview` (or open the file) and check the hero, open-source section and footer.
+3. [ ] Deploy (see [Deploying your own instance](#deploying-your-own-instance-after-a-release)) and check
+       https://postflare.ferdi.app/ (desktop and mobile).
+4. [ ] Cut the releases: follow [First public release](#first-public-release-by-hand) (tags `cli-v0.1.0`, `v0.1.0`),
+       then merge the open release-please PRs so the newer CLI (with `pf skill install`) reaches npm.
+5. [ ] Enable branch protection on `main` (Settings → Branches / Rulesets: require pull requests and the CI checks,
+       block force pushes and deletions).
+6. [ ] Enable **private vulnerability reporting** (Settings → Code security → Private vulnerability reporting), which
+       [SECURITY.md](../SECURITY.md) points to, plus Dependabot alerts.
+7. [ ] Finish the [one-time setup](#one-time-setup) that needs a public repo (npm trusted publishing with provenance,
+       Actions permission to open PRs).
+8. [ ] Announce: tweet the repository and the live demo, and invite beta platform reports ("Tried a beta platform?
+       Open an issue with the result").
+
 
 release-please starts from the manifest (`0.1.0` for both) and looks for the tags `v0.1.0` and `cli-v0.1.0`; create
 them once, by hand, with GitHub releases:

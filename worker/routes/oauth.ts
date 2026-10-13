@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { sessionUser, workspaceAccess, type AppEnv } from "../lib/auth";
 import { providerContext, saveConnectedAccounts } from "../lib/accounts";
+import { connectBlocked } from "../lib/settings";
 import { errorMessage, now } from "../lib/util";
 import { getProvider } from "../providers/registry";
 
@@ -39,6 +40,8 @@ oauthRoutes.on(["GET", "POST"], ["/:provider/callback", "/:provider/callback/"],
   const ws = await workspaceAccess(c.env.DB, session.user.id, session.instancePermissions, state.workspace_id);
   if (!ws?.permissions.includes("accounts.manage")) return back({ error: "You can no longer connect accounts in this workspace" });
   if (ws.demo) return back({ error: "Connecting accounts is disabled in the demo workspace" });
+  const blocked = await connectBlocked(c.env.DB, provider);
+  if (blocked) return back({ error: blocked });
 
   try {
     const ctx = await providerContext(c.env, provider, { requestUrl: c.req.url });

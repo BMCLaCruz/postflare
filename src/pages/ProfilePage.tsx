@@ -343,8 +343,8 @@ function CommandLine({ command }: { command: string }) {
   );
 }
 
-const SKILL_INSTALL =
-  "mkdir -p ~/.claude/skills/postflare && curl -fsSL https://raw.githubusercontent.com/FerdiKT/postflare/main/skills/postflare/SKILL.md -o ~/.claude/skills/postflare/SKILL.md";
+/** Writes the SKILL.md bundled with the CLI to ~/.claude/skills/postflare (re-run after updating the CLI). */
+const SKILL_INSTALL = "pf skill install";
 
 function CliSection() {
   const { accounts } = useApp();
@@ -394,7 +394,9 @@ function CliSection() {
           <p className="text-xs font-semibold uppercase tracking-wide text-zinc-400">Claude Code skill</p>
           <CommandLine command={SKILL_INSTALL} />
           <p className="text-sm text-zinc-500">
-            Teaches Claude Code to schedule posts and write performance reports with the CLI. Prefer MCP? The server below works without the CLI.
+            Teaches Claude Code to schedule posts and write performance reports with the CLI. Installs into{" "}
+            <code className="font-mono text-xs">~/.claude/skills/postflare</code> (<code className="font-mono text-xs">--dir .claude/skills</code> for one
+            project); re-run it after updating the CLI. Prefer MCP? The server below works without the CLI.
           </p>
         </div>
       </div>

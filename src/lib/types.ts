@@ -2,7 +2,8 @@ import type { PostDTO, PostLogDTO, PostStatus, ProviderInfo } from "@shared/type
 
 export type * from "@shared/types";
 
-export type Provider = ProviderInfo & { configured: boolean; redirectUri: string };
+/** GET /api/providers. `enabled`: new accounts can be connected (false for experimental ones while they are off). */
+export type Provider = ProviderInfo & { configured: boolean; redirectUri: string; enabled: boolean };
 
 export interface AuthStatus {
   setup: boolean;
@@ -27,6 +28,8 @@ export interface AppSettings {
   publicUrlLocked: boolean;
   timezone: string | null;
   encryptionKeyFromSecret?: boolean;
+  /** "Enable experimental integrations" (providers on unofficial APIs). */
+  experimentalIntegrations?: boolean;
 }
 
 export interface PlatformConfig {

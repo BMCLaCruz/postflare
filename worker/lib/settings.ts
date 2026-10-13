@@ -22,3 +22,19 @@ export async function baseUrl(env: Env, requestUrl?: string): Promise<string> {
   }
   throw new Error("Public URL unknown: open the app once in the browser or set PUBLIC_URL");
 }
+
+/** Instance setting "Enable experimental integrations" (providers with status "experimental", e.g. unofficial APIs). */
+export const EXPERIMENTAL_SETTING = "experimental_integrations";
+
+export async function experimentalEnabled(db: D1Database): Promise<boolean> {
+  return (await getSetting(db, EXPERIMENTAL_SETTING)) === "true";
+}
+
+/**
+ * Error message when a provider cannot be connected because it is experimental and experimental integrations are
+ * off; null when it can be connected. Already connected accounts keep publishing either way.
+ */
+export async function connectBlocked(db: D1Database, provider: { name: string; status?: string }): Promise<string | null> {
+  if (provider.status !== "experimental" || (await experimentalEnabled(db))) return null;
+  return `${provider.name} is an experimental integration (unofficial API) and is disabled on this instance. An instance admin can turn on "Enable experimental integrations" in Instance settings.`;
+}

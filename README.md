@@ -26,10 +26,11 @@ workspace with sample data that never publishes anything, reset daily).
 
 ## Features
 
-- **36 platforms**: X, LinkedIn (profile + pages), Facebook Pages, Instagram (Facebook login and Instagram login), Threads,
-  YouTube, TikTok, TikTok for Business, Pinterest, Reddit, Bluesky, Mastodon, Tumblr, VK, Nostr, Farcaster, Lemmy,
-  Dribbble, Google Business Profile, Telegram, Discord, Slack, Twitch, Kick, DEV, Hashnode, Medium, WordPress, Listmonk,
-  MeWe, Skool, Whop, Moltbook and a generic Webhook.
+- **36 integrations, 2 verified and the rest in beta** (see [Platform status](#platform-status)): X, LinkedIn (profile +
+  pages), Facebook Pages, Instagram (Facebook login and Instagram login), Threads, YouTube, TikTok, TikTok for Business,
+  Pinterest, Reddit, Bluesky, Mastodon, Tumblr, VK, Nostr, Farcaster, Lemmy, Dribbble, Google Business Profile,
+  Telegram, Discord, Slack, Twitch, Kick, DEV, Hashnode, Medium, WordPress, Listmonk, MeWe, Whop, Moltbook, a generic
+  Webhook and (experimental, off by default) Skool.
 - Composer with per-account customisation, live limits per platform, platform-specific settings (titles, privacy, boards,
   subreddits, channels, playlists...), threads / first comments, previews, drafts.
 - Calendar (month/week, drag to reschedule), posts list with publishing logs, retry/cancel.
@@ -50,6 +51,61 @@ workspace with sample data that never publishes anything, reset daily).
 - **Runs on the Workers Free plan**: media is streamed, never buffered, and every provider call stays within the
   Free plan's CPU and subrequest limits.
 - Secrets (platform tokens, app credentials) are encrypted at rest with AES-GCM.
+
+## Platform status
+
+Every integration is implemented against the platform's API and covered by tests with mocked API responses, but only
+some have been confirmed end to end with a real account so far. Each platform shows its status as a badge in the app
+(Platforms page and connect dialog).
+
+| Status | Meaning |
+|---|---|
+| **Verified** | Publishing confirmed against the live API with a real account. |
+| **Beta** | Built against the official API and tested with mocked responses; not yet confirmed with a live account. Please report issues. |
+| **Experimental** | Uses an unofficial API: may break without notice and may conflict with the platform's terms. Hidden until an instance admin turns on **Admin → Instance settings → Enable experimental integrations** (already connected accounts keep publishing when it is off). |
+
+| Platform | Status | Notes |
+|---|---|---|
+| TikTok | Verified | Publishing verified with a sandbox app; unaudited apps post privately ("Only me") |
+| Webhook | Verified | Generic outgoing webhook (Zapier, Make, n8n, your backend) |
+| Instagram (Instagram login) | Beta | Connection verified; publishing being verified |
+| Instagram (Facebook login) | Beta | Needs a Facebook Page linked to the Instagram account |
+| X (Twitter) | Beta | Reading metrics needs a paid X API plan or credits |
+| LinkedIn | Beta | |
+| LinkedIn Page | Beta | |
+| Facebook Page | Beta | |
+| Threads | Beta | |
+| Bluesky | Beta | App password, no developer app |
+| Mastodon | Beta | Access token, any instance |
+| Pinterest | Beta | |
+| Reddit | Beta | |
+| Tumblr | Beta | |
+| VK | Beta | |
+| Nostr | Beta | Private key, notes signed in your Worker |
+| Farcaster | Beta | Neynar managed signers |
+| Lemmy | Beta | |
+| Dribbble | Beta | |
+| MeWe | Beta | Needs MeWe developer access; tokens cannot be refreshed (reconnect about monthly) |
+| Whop | Beta | |
+| Moltbook | Beta | |
+| YouTube | Beta | Uploads from unverified Google projects are private |
+| TikTok Business | Beta | TikTok API for Business (business accounts) |
+| Google Business Profile | Beta | Needs approved access to the Business Profile APIs |
+| Twitch | Beta | Chat messages / announcements in your own channel |
+| Kick | Beta | Chat messages in your own channel |
+| Telegram | Beta | Bot token |
+| Discord | Beta | |
+| Slack | Beta | |
+| DEV | Beta | API key |
+| Hashnode | Beta | Personal access token |
+| Medium | Beta | Medium no longer issues integration tokens; existing tokens keep working |
+| WordPress | Beta | Application password |
+| Listmonk | Beta | |
+| Skool | Experimental | Uses Skool's unofficial, cookie-based API; may break and may conflict with Skool's terms |
+
+**Tried a beta platform? [Open an issue](https://github.com/FerdiKT/postflare/issues/new) with the result — that's how
+platforms move to Verified.** Statuses live in the code (`status` / `statusNote` in `worker/providers/<id>.ts`,
+default `beta`), so a pull request that verifies a platform updates it there and in this table.
 
 ## Installing
 
@@ -290,11 +346,11 @@ pf analytics --range 7d
 ### Claude Code skill
 
 [`skills/postflare/SKILL.md`](skills/postflare/SKILL.md) teaches Claude Code to schedule posts and write performance
-reports with the CLI (checks, per-platform settings, recipes, pitfalls). Install it with:
+reports with the CLI (checks, per-platform settings, recipes, pitfalls). The CLI bundles it:
 
 ```bash
-mkdir -p ~/.claude/skills/postflare && curl -fsSL \
-  https://raw.githubusercontent.com/FerdiKT/postflare/main/skills/postflare/SKILL.md -o ~/.claude/skills/postflare/SKILL.md
+pf skill install                       # writes ~/.claude/skills/postflare/SKILL.md; re-run after updating the CLI
+pf skill install --dir .claude/skills  # project-level instead
 # or, from a clone: cp -r skills/postflare ~/.claude/skills/
 ```
 
@@ -322,6 +378,12 @@ Architecture:
 - `migrations/` – D1 schema.
 
 Adding a platform: see [docs/provider-brief.md](docs/provider-brief.md) and `worker/providers/types.ts`.
+
+## Project status / support
+
+Postflare is an actively developed hobby project, maintained in spare time. Support is best effort: issues and pull
+requests are welcome and read, but there is no guaranteed response time or SLA. Check the
+[Platform status](#platform-status) before relying on a platform for anything important.
 
 ## Contributing and security
 

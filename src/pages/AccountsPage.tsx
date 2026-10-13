@@ -4,6 +4,7 @@ import { AlertTriangle, BarChart3, ExternalLink, Loader2, Plus, Power, RefreshCw
 import { MetricsStatusBadge } from "../components/analytics/bits";
 import { ConnectDialog } from "../components/accounts/ConnectDialog";
 import { AccountAvatar, ProviderLogo } from "../components/ProviderLogo";
+import { ProviderStatusBadge } from "../components/ProviderStatusBadge";
 import { Button, IconButton } from "../components/ui/Button";
 import { useConfirm } from "../components/ui/Confirm";
 import { Badge, Card, EmptyState, PageHeader, Skeleton } from "../components/ui/Misc";
@@ -178,6 +179,7 @@ function AccountCard({ account: a, provider, onReconnect }: { account: AccountDT
           <p className="mt-1.5 flex items-center gap-1.5 text-xs text-zinc-500">
             <ProviderLogo provider={provider} size="xs" />
             {provider?.name ?? a.provider}
+            {provider?.status === "experimental" && <ProviderStatusBadge provider={provider} className="px-1.5 py-0 text-[10px]" />}
           </p>
         </div>
         {a.status === "active" ? (

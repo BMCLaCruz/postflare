@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router";
-import { ArrowLeft, ArrowRight, KeyRound, Search, Settings2 } from "lucide-react";
+import { ArrowLeft, ArrowRight, FlaskConical, KeyRound, Search, Settings2 } from "lucide-react";
 import { api } from "../../lib/api";
 import { useApp } from "../../lib/app";
 import { cn } from "../../lib/format";
@@ -9,6 +9,7 @@ import type { Provider, ProviderCategory } from "../../lib/types";
 import { invalidate } from "../../lib/useFetch";
 import { Markdown } from "../Markdown";
 import { ProviderLogo } from "../ProviderLogo";
+import { ProviderStatusBadge } from "../ProviderStatusBadge";
 import { SettingsForm, defaultValues, fieldErrors } from "../SettingsForm";
 import { Button } from "../ui/Button";
 import { Dialog } from "../ui/Dialog";
@@ -43,7 +44,7 @@ export function ConnectDialog({ open, onClose, initialProvider }: { open: boolea
     setSelected(initialProvider ? (providerMap.get(initialProvider) ?? null) : null);
     if (initialProvider) {
       const p = providerMap.get(initialProvider);
-      if (p && p.auth === "oauth2" && p.configured) void startOAuth(p);
+      if (p && p.enabled && p.auth === "oauth2" && p.configured) void startOAuth(p);
     }
   }, [open, initialProvider]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -67,7 +68,8 @@ export function ConnectDialog({ open, onClose, initialProvider }: { open: boolea
 
   const groups = useMemo(() => {
     const needle = q.trim().toLowerCase();
-    const list = providers.filter((p) => !needle || p.name.toLowerCase().includes(needle) || p.id.includes(needle));
+    // Experimental platforms stay hidden until an instance admin enables them.
+    const list = providers.filter((p) => p.enabled && (!needle || p.name.toLowerCase().includes(needle) || p.id.includes(needle)));
     return CATEGORY_ORDER.map((c) => ({ category: c, items: list.filter((p) => p.category === c) })).filter((g) => g.items.length);
   }, [providers, q]);
 
@@ -80,7 +82,9 @@ export function ConnectDialog({ open, onClose, initialProvider }: { open: boolea
       description={selected ? undefined : "Choose a platform. You can connect as many accounts as you like."}
     >
       {selected ? (
-        !selected.configured ? (
+        !selected.enabled ? (
+          <ExperimentalDisabled provider={selected} onClose={onClose} />
+        ) : !selected.configured ? (
           <NeedsSetup provider={selected} onClose={onClose} />
         ) : selected.auth === "credentials" ? (
           <CredentialsForm provider={selected} onDone={onClose} />
@@ -129,7 +133,10 @@ export function ConnectDialog({ open, onClose, initialProvider }: { open: boolea
                     >
                       <ProviderLogo provider={p} size="lg" />
                       <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm font-medium">{p.name}</span>
+                        <span className="flex items-center gap-1.5">
+                          <span className="truncate text-sm font-medium">{p.name}</span>
+                          <ProviderStatusBadge provider={p} className="px-1.5 py-0 text-[10px]" />
+                        </span>
                         <span className="block text-xs text-zinc-500">
                           {redirecting === p.id ? "Redirecting…" : !p.configured ? "App setup required" : p.auth === "oauth2" ? "Sign in with OAuth" : "Connect with credentials"}
                         </span>
@@ -161,7 +168,42 @@ function BackTitle({ provider, onBack }: { provider: Provider; onBack?: () => vo
       )}
       <ProviderLogo provider={provider} size="md" />
       Connect {provider.name}
+      <ProviderStatusBadge provider={provider} />
     </span>
+  );
+}
+
+function ExperimentalDisabled({ provider, onClose }: { provider: Provider; onClose: () => void }) {
+  const navigate = useNavigate();
+  const canManage = useSession().canInstance("instance.settings.manage");
+  return (
+    <div className="p-6">
+      <div className="flex gap-4 rounded-xl bg-amber-50 p-4 ring-1 ring-amber-200 dark:bg-amber-950/30 dark:ring-amber-900">
+        <FlaskConical className="mt-0.5 size-5 shrink-0 text-amber-600" />
+        <div className="text-sm">
+          <p className="font-medium text-amber-900 dark:text-amber-200">{provider.name} is an experimental integration</p>
+          <p className="mt-1 text-amber-800/80 dark:text-amber-200/70">
+            {provider.statusNote ? `${provider.statusNote}. ` : ""}
+            New connections are off on this instance.{" "}
+            {canManage ? "You can turn on experimental integrations in Instance settings." : "Ask an instance admin to turn on experimental integrations."}
+          </p>
+        </div>
+      </div>
+      <div className="mt-5 flex justify-end gap-2">
+        <Button onClick={onClose}>Close</Button>
+        {canManage && (
+          <Button
+            variant="primary"
+            onClick={() => {
+              onClose();
+              navigate("/admin/settings#integrations");
+            }}
+          >
+            Open Instance settings
+          </Button>
+        )}
+      </div>
+    </div>
   );
 }
 

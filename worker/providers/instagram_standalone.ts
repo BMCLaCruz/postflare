@@ -68,6 +68,7 @@ export const instagramStandalone: Provider = {
   icon: "instagram",
   category: "social",
   auth: "oauth2",
+  statusNote: "Connection verified; publishing being verified",
   appFields: clientFields("Instagram App ID", "Instagram App Secret"),
   docsUrl: "https://developers.facebook.com/apps",
   setupNotes: [

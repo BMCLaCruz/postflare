@@ -1,8 +1,8 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useLocation } from "react-router";
-import { ArrowUpCircle, ExternalLink, Globe, Info, Lock, RefreshCw, ShieldCheck } from "lucide-react";
+import { AlertTriangle, ArrowUpCircle, ExternalLink, FlaskConical, Globe, Info, Lock, RefreshCw, ShieldCheck } from "lucide-react";
 import { Button } from "../components/ui/Button";
-import { Field, Input, Select } from "../components/ui/Form";
+import { Field, Input, Select, Switch } from "../components/ui/Form";
 import { Badge, CodeBlock, PageHeader, Skeleton } from "../components/ui/Misc";
 import { Section } from "../components/ui/Section";
 import { useToast } from "../components/ui/Toast";
@@ -13,7 +13,7 @@ import { useUpdateStatus } from "../lib/updates";
 import { invalidate } from "../lib/useFetch";
 import { CHANGELOG_URL, COMMIT, REPO_URL, UPDATING_URL, VERSION, releaseUrl } from "@shared/version";
 
-/** Admin → Instance settings: public URL and default timezone (API keys moved to the profile), version and updates. */
+/** Admin → Instance settings: public URL and default timezone (API keys moved to the profile), integrations, version and updates. */
 export function InstanceSettingsPage() {
   const { hash } = useLocation();
   // Links from the sidebar (#about, #updating) land on the section.
@@ -25,6 +25,7 @@ export function InstanceSettingsPage() {
       <PageHeader title="Instance settings" description="Settings shared by every user and workspace of this Postflare instance." />
       <div className="space-y-6">
         <GeneralSection />
+        <IntegrationsSection />
         <AboutSection />
         <UpdatingSection />
       </div>
@@ -247,5 +248,61 @@ function GeneralSection() {
         </form>
       )}
     </Section>
+  );
+}
+
+/** "Enable experimental integrations": platforms on unofficial APIs (status "experimental") are hidden until turned on. */
+function IntegrationsSection() {
+  const { settings, providers } = useApp();
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const enabled = !!settings?.experimentalIntegrations;
+  const experimental = providers.filter((p) => p.status === "experimental");
+
+  async function toggle(next: boolean) {
+    setBusy(true);
+    try {
+      await api.settings.save({ experimentalIntegrations: next });
+      toast.success(next ? "Experimental integrations enabled" : "Experimental integrations disabled");
+      invalidate("settings", "providers");
+    } catch (err) {
+      toast.error(err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div id="integrations" className="scroll-mt-6">
+      <Section
+        icon={<FlaskConical />}
+        title="Integrations"
+        description="Experimental integrations use unofficial APIs. They are hidden from the connect dialog until you turn them on."
+      >
+        {!settings ? (
+          <Skeleton className="h-9 w-full max-w-xl" />
+        ) : (
+          <div className="max-w-xl space-y-4 text-sm">
+            <label className="flex items-start gap-3">
+              <Switch id="experimental-integrations" checked={enabled} disabled={busy} onChange={toggle} label="Enable experimental integrations" />
+              <span>
+                <span className="block font-medium text-zinc-900 dark:text-zinc-100">Enable experimental integrations</span>
+                <span className="mt-0.5 block text-zinc-500">
+                  {experimental.length ? `${experimental.map((p) => p.name).join(", ")}. ` : ""}
+                  When off, new accounts cannot be connected; already connected ones keep publishing.
+                </span>
+              </span>
+            </label>
+            <p className="flex gap-2 rounded-lg bg-amber-50 px-3 py-2 text-amber-900 ring-1 ring-amber-200 dark:bg-amber-950/40 dark:text-amber-200 dark:ring-amber-900">
+              <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+              <span>
+                These integrations rely on unofficial, undocumented APIs (often your session cookies). They can break without notice and
+                may conflict with the platform&rsquo;s terms of service, which could put the connected account at risk. Use at your own risk.
+              </span>
+            </p>
+          </div>
+        )}
+      </Section>
+    </div>
   );
 }

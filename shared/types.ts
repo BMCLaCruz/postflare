@@ -55,6 +55,14 @@ export interface ProviderCapabilities {
   threadLabel?: string;
 }
 
+/**
+ * How far a provider is proven (README "Platform status"):
+ * - verified: publishing confirmed against the live API with a real account.
+ * - beta: built against the official API and covered by mocked tests, not yet confirmed with a live account.
+ * - experimental: relies on an unofficial API; hidden until an instance admin enables experimental integrations.
+ */
+export type ProviderStatus = "verified" | "beta" | "experimental";
+
 export interface ProviderInfo {
   id: string;
   name: string;
@@ -79,6 +87,9 @@ export interface ProviderInfo {
   setupNotes?: string;
   /** Which analytics the platform provides (both false when none). */
   analytics: ProviderAnalytics;
+  status: ProviderStatus;
+  /** Short qualifier of `status` (shown in tooltips and the README table). */
+  statusNote?: string;
 }
 
 export type PostStatus = "draft" | "scheduled" | "publishing" | "published" | "failed" | "cancelled";

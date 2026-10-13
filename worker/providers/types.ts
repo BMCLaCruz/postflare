@@ -144,8 +144,10 @@ export interface ProviderMetrics {
   scopes?: string[];
 }
 
-export interface Provider extends Omit<ProviderInfo, "auth" | "analytics"> {
+export interface Provider extends Omit<ProviderInfo, "auth" | "analytics" | "status"> {
   auth: ProviderInfo["auth"];
+  /** Defaults to "beta" (see ProviderStatus). */
+  status?: ProviderInfo["status"];
   /** The platform only accepts redirect URLs ending in "/" (TikTok for Business). */
   redirectTrailingSlash?: boolean;
   /** Build the authorization URL (oauth2). `codeChallenge` is S256 PKCE of `codeVerifier`. */

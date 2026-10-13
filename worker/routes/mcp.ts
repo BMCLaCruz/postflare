@@ -82,6 +82,7 @@ export function mcpRoutes(api: { fetch: (req: Request, env: Env, ctx: ExecutionC
           id: p.id,
           name: p.name,
           configured: p.configured,
+          status: p.status,
           capabilities: p.capabilities,
           settingsFields: p.settingsFields,
         })),

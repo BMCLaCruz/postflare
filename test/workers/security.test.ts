@@ -156,6 +156,42 @@ describe("accounts", () => {
   });
 });
 
+describe("experimental integrations", () => {
+  afterEach(() => vi.restoreAllMocks());
+  const skoolValues = { values: { auth_token: "tok", client_id: "cid" } };
+
+  it("are refused while the instance setting is off and allowed once on; connected accounts stay", async () => {
+    expect((await call(owner, "/api/settings")).json.experimentalIntegrations).toBe(false);
+    const providers = (await call(owner, "/api/providers")).json as Array<{ id: string; status: string; enabled: boolean }>;
+    expect(providers.find((p) => p.id === "skool")).toMatchObject({ status: "experimental", enabled: false });
+    expect(providers.find((p) => p.id === "tiktok")).toMatchObject({ status: "verified", enabled: true });
+    expect(providers.find((p) => p.id === "x")).toMatchObject({ status: "beta", enabled: true });
+
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      Response.json({ id: "u1", first_name: "Sam", last_name: "S", name: "sam-s", metadata: {} }),
+    );
+    const refused = await call(owner, "/api/connect/skool", { body: skoolValues });
+    expect(refused.status).toBe(403);
+    expect(refused.json.error).toMatch(/experimental integration.*Instance settings/);
+    expect(spy).not.toHaveBeenCalled();
+    // API keys cannot flip the instance setting.
+    expect((await call({ key }, "/api/settings", { method: "PUT", body: { experimentalIntegrations: true } })).status).toBe(403);
+
+    expect((await call(owner, "/api/settings", { method: "PUT", body: { experimentalIntegrations: true } })).status).toBe(200);
+    expect((await call(owner, "/api/settings")).json.experimentalIntegrations).toBe(true);
+    expect(((await call(owner, "/api/providers")).json as any[]).find((p) => p.id === "skool").enabled).toBe(true);
+    const ok = await call(owner, "/api/connect/skool", { body: skoolValues });
+    expect(ok.status, ok.text).toBe(200);
+    expect(spy).toHaveBeenCalled();
+
+    // Turning it off again blocks new connections but keeps the connected account.
+    expect((await call(owner, "/api/settings", { method: "PUT", body: { experimentalIntegrations: false } })).status).toBe(200);
+    expect((await call(owner, "/api/connect/skool", { body: skoolValues })).status).toBe(403);
+    const accounts = (await call(owner, "/api/accounts")).json as Array<{ provider: string; status: string }>;
+    expect(accounts.find((a) => a.provider === "skool")).toMatchObject({ status: "active" });
+  });
+});
+
 describe("upload links", () => {
   it(`accept at most ${MAX_LINK_FILES} files`, async () => {
     const link = await call(owner, "/api/upload-links", { body: {} });

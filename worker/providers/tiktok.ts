@@ -272,6 +272,8 @@ export const tiktok: Provider = {
   icon: "tiktok",
   category: "video",
   auth: "oauth2",
+  status: "verified",
+  statusNote: "Publishing verified with a sandbox app; unaudited apps post privately",
   docsUrl: "https://developers.tiktok.com/apps",
   setupNotes: [
     "1. Create an app on [TikTok for Developers](https://developers.tiktok.com/apps) and add the products **Login Kit** and **Content Posting API** (enable *Direct Post*).",
