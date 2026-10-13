@@ -15,6 +15,7 @@ import { encryptJson } from "./crypto";
 import { DEMO_ACCOUNTS, DEMO_MEDIA, SIMULATED_LOG, fakeExternalId, fakePostUrl, seedPosts } from "./demo-seed";
 import { demoAccountMetrics, demoPostMetrics, demoSnapshotTimes } from "./demo-metrics";
 import { CHECKPOINTS, nextAccountRun, nextCheckpoint, utcDay } from "./metrics";
+import { demoPublishEventsStatement } from "./usage";
 import { DEMO_ROLE, DEMO_WORKSPACE_PERMISSIONS } from "./permissions";
 import { getSetting, setSetting } from "./settings";
 import { newId, now, parseJson, randomToken } from "./util";
@@ -314,16 +315,18 @@ export async function publishDemoPosts(env: Env, ids: string[]): Promise<number>
   const db = env.DB;
   const { results } = await db
     .prepare(
-      `SELECT p.id, p.thread, a.provider FROM posts p JOIN accounts a ON a.id = p.account_id JOIN workspaces w ON w.id = p.workspace_id
+      `SELECT p.id, p.thread, p.content, a.provider FROM posts p JOIN accounts a ON a.id = p.account_id JOIN workspaces w ON w.id = p.workspace_id
        WHERE w.is_demo = 1 AND p.status IN ('scheduled', 'publishing') AND p.id IN (${ids.map(() => "?").join(",")})`,
     )
     .bind(...ids)
-    .all<{ id: string; thread: string; provider: string }>();
+    .all<{ id: string; thread: string; content: string; provider: string }>();
   if (!results.length) return 0;
   const t = now();
   const statements: D1PreparedStatement[] = [];
+  const pairs: Array<[string, string]> = [];
   for (const r of results) {
     const external = fakeExternalId();
+    pairs.push([r.id, external]);
     const url = fakePostUrl(r.provider, external);
     const name = getProvider(r.provider)?.name ?? r.provider;
     const logs: Array<[string, string, number]> = [
@@ -351,8 +354,10 @@ export async function publishDemoPosts(env: Env, ids: string[]): Promise<number>
         .bind(r.id, JSON.stringify(logs), r.id, external),
     );
   }
+  // Usage events (flagged demo, excluded from instance totals): one statement for all, after the updates above.
+  statements.push(demoPublishEventsStatement(db, pairs, Object.fromEntries(results.map((r) => [r.id, r.content])), t));
   const res = await db.batch(statements);
-  return res.filter((_, i) => i % 2 === 0 && res[i].meta.changes > 0).length;
+  return res.filter((_, i) => i % 2 === 0 && i < statements.length - 1 && res[i].meta.changes > 0).length;
 }
 
 /**

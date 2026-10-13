@@ -23,14 +23,17 @@ describe("0003_users_workspaces", () => {
     for (const s of stmts) expect(s.includes(";\n"), s.slice(0, 60)).toBe(false);
   });
 
-  it("seeds the built-in roles exactly as worker/lib/permissions.ts defines them", () => {
+  it("seeds the built-in roles exactly as worker/lib/permissions.ts defines them (with 0007's additions)", () => {
+    // 0007 grants instance.overview.view to the built-in instance Admin.
+    const later: Record<string, string[]> = { role_instance_admin: ["instance.overview.view"] };
+    expect(readFileSync("migrations/0007_usage_events.sql", "utf8")).toMatch(/json_insert\(permissions, '\$\[#\]', 'instance\.overview\.view'\)\s+WHERE id = 'role_instance_admin'/);
     const insert = stmts.find((s) => s.startsWith("INSERT OR IGNORE INTO roles"))!;
     const rows = [...insert.matchAll(/\('(role_[a-z_]+)', '(instance|workspace)', '([^']+)', '[^']*', '(\[[^\]]*\])', 1, 0\)/g)];
     expect(rows.length).toBe(Object.keys(BUILTIN_ROLES).length);
     for (const [, id, scope, name, perms] of rows) {
       const role = BUILTIN_ROLES[id];
       expect(role, id).toBeDefined();
-      expect({ scope, name, permissions: JSON.parse(perms).sort() }).toEqual({ scope: role.scope, name: role.name, permissions: [...role.permissions].sort() });
+      expect({ scope, name, permissions: [...JSON.parse(perms), ...(later[id] ?? [])].sort() }).toEqual({ scope: role.scope, name: role.name, permissions: [...role.permissions].sort() });
     }
   });
 });

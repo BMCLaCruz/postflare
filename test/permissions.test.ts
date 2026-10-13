@@ -4,7 +4,7 @@ import { BUILTIN_ROLES, INSTANCE_PERMISSIONS, PERMISSIONS, WORKSPACE_PERMISSIONS
 
 describe("permission catalog", () => {
   it("has the keys of the spec, each with a description", () => {
-    expect(INSTANCE_PERMISSIONS).toEqual(["instance.platforms.manage", "instance.users.manage", "instance.settings.manage", "instance.workspaces.create"]);
+    expect(INSTANCE_PERMISSIONS).toEqual(["instance.platforms.manage", "instance.users.manage", "instance.settings.manage", "instance.workspaces.create", "instance.overview.view"]);
     expect(WORKSPACE_PERMISSIONS).toEqual([
       "workspace.manage",
       "workspace.delete",

@@ -9,6 +9,7 @@ import {
   CalendarDays,
   Check,
   ChevronsUpDown,
+  Gauge,
   Image,
   KeyRound,
   LayoutDashboard,
@@ -58,6 +59,7 @@ const NAV: NavItem[] = [
 ];
 
 const ADMIN_NAV: NavItem[] = [
+  { to: "/admin", label: "Overview", icon: Gauge, end: true, instance: "instance.overview.view" },
   { to: "/admin/users", label: "Users", icon: UsersRound, instance: "instance.users.manage" },
   { to: "/admin/roles", label: "Roles", icon: Shield, instance: "instance.users.manage" },
   { to: "/admin/settings", label: "Instance settings", icon: SlidersHorizontal, instance: "instance.settings.manage" },

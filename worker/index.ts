@@ -9,7 +9,9 @@ import { now } from "./lib/util";
 import { CRON_METRICS_LIMITS, collectMetrics, expireMetricsSchedules } from "./lib/metrics";
 import { sweepMedia } from "./lib/media-lifecycle";
 import { updateCheckCron } from "./lib/updates";
+import { cronRunStatement, metricsEventsStatement, pruneUsageStatement, type MetricsEvent } from "./lib/usage";
 import { accountRoutes } from "./routes/accounts";
+import { adminRoutes } from "./routes/admin";
 import { analyticsRoutes } from "./routes/analytics";
 import { authRoutes } from "./routes/auth";
 import { demoLogin, demoPage } from "./routes/demo";
@@ -48,6 +50,7 @@ api.route("/", analyticsRoutes);
 api.route("/", settingsRoutes);
 api.route("/", uploadLinkRoutes);
 api.route("/", updateRoutes);
+api.route("/", adminRoutes);
 api.notFound((c) => c.json({ error: "Not found" }, 404));
 
 const app = new Hono<AppEnv>();
@@ -104,21 +107,30 @@ export const METRICS_CRON = "7,22,37,52 * * * *";
  * at most 50 D1 queries and 50 external subrequests on the Free plan (test/workers/budget.test.ts counts them).
  */
 export async function frequentJobs(env: Env): Promise<void> {
+  const started = now();
   await Promise.allSettled([
     sweepScheduledPosts(env),
     recoverStuckPosts(env),
     refreshExpiringAccounts(env),
     demoCron(env),
   ]);
+  await recordCronRun(env, "frequent", started);
 }
 
 /** Analytics collection, on its own trigger so it doesn't share the publishing tick's D1 and subrequest budget. */
 export async function metricsJobs(env: Env): Promise<void> {
-  await collectMetrics(env, CRON_METRICS_LIMITS);
+  const started = now();
+  const events: MetricsEvent[] = [];
+  await collectMetrics(env, { ...CRON_METRICS_LIMITS, events }).catch((err) => console.error("metrics cron failed", err));
+  // The tick's usage events and its last-run marker: one batch (the tick is close to the 50-query budget).
+  await env.DB.batch([...(events.length ? [metricsEventsStatement(env.DB, events)] : []), cronRunStatement(env.DB, "metrics", started, now())]).catch((err) =>
+    console.error("metrics usage not recorded", err),
+  );
 }
 
 /** Once a day: cleanups, the metrics schedule scan, the update check and the media lifecycle sweep. */
 export async function dailyJobs(env: Env): Promise<void> {
+  const started = now();
   await Promise.allSettled([
     // New Postflare release? At most one GitHub request a day (UPDATE_CHECK="false" turns it off).
     updateCheckCron(env),
@@ -129,7 +141,17 @@ export async function dailyJobs(env: Env): Promise<void> {
     env.DB.prepare("DELETE FROM upload_links WHERE expires_at < ?").bind(now() - 7 * 24 * 60 * 60 * 1000).run(),
     env.DB.prepare("DELETE FROM settings WHERE (key LIKE 'login_fail:%' OR key LIKE 'demo_login:%') AND json_extract(value, '$.until') < ?").bind(now()).run(),
     env.DB.prepare("DELETE FROM invitations WHERE accepted_at IS NULL AND expires_at < ?").bind(now() - 30 * 24 * 60 * 60 * 1000).run(),
+    // Usage events older than USAGE_RETENTION_DAYS (bounded per run).
+    pruneUsageStatement(env.DB, now()).run(),
   ]);
+  await recordCronRun(env, "daily", started);
+}
+
+/** `cron_last_run:<name>` in settings (Admin → Overview): one upsert per run, never fails the job. */
+async function recordCronRun(env: Env, name: string, started: number) {
+  await cronRunStatement(env.DB, name, started, now())
+    .run()
+    .catch((err) => console.error("cron last run not recorded", err));
 }
 
 export default {

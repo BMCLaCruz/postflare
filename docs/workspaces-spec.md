@@ -18,6 +18,7 @@ Instance scope:
 | `instance.users.manage` | list users, invite, change instance role, disable/delete users, see and manage every workspace |
 | `instance.settings.manage` | public URL, timezone default |
 | `instance.workspaces.create` | create new workspaces (becomes Owner) |
+| `instance.overview.view` | Admin → Overview: usage, publishing health, Free plan quotas across all workspaces (migrations/0007 grants it to the built-in Admin) |
 
 Workspace scope:
 | key | meaning |

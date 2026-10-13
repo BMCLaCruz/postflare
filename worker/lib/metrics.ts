@@ -18,6 +18,7 @@ import { getProvider, providers } from "../providers/registry";
 import type { Provider, ProviderContext } from "../providers/types";
 import { freshAccount, providerContext, type AccountRow } from "./accounts";
 import { demoAccountMetrics, demoPostMetrics } from "./demo-metrics";
+import { metricsEventStatement, metricsEventsStatement, utcDay, type MetricsEvent } from "./usage";
 import { errorMessage, now, parseJson } from "./util";
 
 const HOUR = 60 * 60 * 1000;
@@ -57,7 +58,7 @@ export function nextCheckpoint(publishedAt: number, after: number): number | nul
 /** Backoff after `fails` consecutive failures: 1h, 2h, 4h... capped at 24h. */
 export const backoff = (fails: number) => Math.min(HOUR * 2 ** Math.max(0, fails - 1), DAY);
 
-export const utcDay = (t: number) => new Date(t).toISOString().slice(0, 10);
+export { utcDay };
 
 /** Start of the next UTC day plus a stable per-account offset (spreads daily account collections over 4 hours). */
 export function nextAccountRun(accountId: string, t: number): number {
@@ -219,7 +220,24 @@ interface CollectResult {
  * Collect metrics for posts of ONE account (real or demo). Uses at most `budget.left` fetches; posts not reached stay
  * due. Returns how many posts were collected.
  */
-async function collectAccountPosts(env: Env, account: AccountRow & { is_demo?: number }, posts: DuePost[], budget: Budget, cache: CtxCache): Promise<CollectResult> {
+async function collectAccountPosts(
+  env: Env,
+  account: AccountRow & { is_demo?: number },
+  posts: DuePost[],
+  budget: Budget,
+  cache: CtxCache,
+  /** Collects the usage events (written later in one statement); without it they join each chunk's batch. */
+  events?: MetricsEvent[],
+): Promise<CollectResult> {
+  /** usage_events row of one collector chunk: into `events`, or a statement for the chunk's batch. */
+  const chunkEvent = (outcome: "ok" | "failed", quantity: number, fetches: number, t: number, message?: string): D1PreparedStatement[] => {
+    const e: MetricsEvent = { workspaceId: account.workspace_id, accountId: account.id, provider: account.provider, outcome, quantity, fetches, message, t };
+    if (events) {
+      events.push(e);
+      return [];
+    }
+    return [metricsEventStatement(env.DB, e)];
+  };
   const db = env.DB;
   const t = now();
   const provider = getProvider(account.provider);
@@ -247,7 +265,7 @@ async function collectAccountPosts(env: Env, account: AccountRow & { is_demo?: n
     } catch (err) {
       budget.left -= ctx.used;
       await setAccountStatus(env, account.id, "error", `Token refresh failed: ${errorMessage(err)}`);
-      await db.batch(chunk.map((p) => failPostStatement(db, p, t)));
+      await db.batch([...chunk.map((p) => failPostStatement(db, p, t)), ...chunkEvent("failed", chunk.length, ctx.used, t, `Token refresh failed: ${errorMessage(err)}`)]);
       out.failed += chunk.length;
       return out;
     }
@@ -262,19 +280,21 @@ async function collectAccountPosts(env: Env, account: AccountRow & { is_demo?: n
       if (await handleBlocking(env, account.id, err)) return out;
       // Rate limits, outages, invalid requests: back off this chunk.
       await setAccountStatus(env, account.id, "error", errorMessage(err));
-      await db.batch(chunk.map((p) => failPostStatement(db, p, t)));
+      await db.batch([...chunk.map((p) => failPostStatement(db, p, t)), ...chunkEvent("failed", chunk.length, ctx.used, t, errorMessage(err))]);
       out.failed += chunk.length;
       if (err instanceof ProviderError && err.kind === "rate_limit") return out;
       continue;
     }
     budget.left -= ctx.used;
     const statements: D1PreparedStatement[] = [];
+    let chunkCollected = 0;
     for (const p of chunk) {
       if (!(p.external_id in result)) continue; // not fetched (budget): stays due
       const values = result[p.external_id];
       if (values) {
         statements.push(...savePostStatements(db, p, values, t));
         out.collected++;
+        chunkCollected++;
       } else {
         statements.push(failPostStatement(db, p, t));
         out.failed++;
@@ -282,6 +302,8 @@ async function collectAccountPosts(env: Env, account: AccountRow & { is_demo?: n
     }
     // Same batch: the account's analytics status is ok again once something was collected.
     if (out.collected) statements.push(accountStatusStatement(db, account.id, "ok", null));
+    // Usage: one event per chunk (posts collected, fetches spent).
+    if (statements.length || ctx.used) statements.push(...chunkEvent(chunkCollected ? "ok" : "failed", chunkCollected || chunk.length, ctx.used, t));
     if (statements.length) await db.batch(statements);
   }
   return out;
@@ -367,7 +389,14 @@ const accountProviders = () => providers.filter((p) => p.accountMetrics && p.met
  */
 export async function collectMetrics(
   env: Env,
-  opts: { budget?: number; workspaceId?: string; posts?: number; accounts?: number } = {},
+  opts: {
+    budget?: number;
+    workspaceId?: string;
+    posts?: number;
+    accounts?: number;
+    /** Sink for the usage events (the caller writes them); without it they are written at the end, one statement. */
+    events?: MetricsEvent[];
+  } = {},
 ) {
   const db = env.DB;
   const t = now();
@@ -376,6 +405,7 @@ export async function collectMetrics(
   const ws = opts.workspaceId ? "AND a.workspace_id = ?" : "";
   const wsBind = opts.workspaceId ? [opts.workspaceId] : [];
   const stats = { accounts: 0, posts: 0, failed: 0, budgetLeft: 0 };
+  const events: MetricsEvent[] = opts.events ?? [];
 
   // 1. Account metrics, once a day. At most half the budget so posts always progress.
   const withAccountMetrics = accountProviders();
@@ -423,11 +453,12 @@ export async function collectMetrics(
     if (!demo && budget.left <= 0) continue;
     const account = accountsById.get(accountId);
     if (!account) continue;
-    const r = await collectAccountPosts(env, { ...account, is_demo: posts[0].is_demo }, posts, budget, cache);
+    const r = await collectAccountPosts(env, { ...account, is_demo: posts[0].is_demo }, posts, budget, cache, events);
     stats.posts += r.collected;
     stats.failed += r.failed;
   }
   stats.budgetLeft = budget.left;
+  if (!opts.events && events.length) await metricsEventsStatement(db, events).run();
   return stats;
 }
 

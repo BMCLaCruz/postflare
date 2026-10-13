@@ -29,7 +29,8 @@ const LIGHT_RANGES: Array<[number, number]> = [
 const URL_LENGTH = 23;
 const BARE_TLDS =
   "com|net|org|io|co|app|dev|ai|me|ly|gg|tv|xyz|info|biz|edu|gov|us|uk|de|fr|es|it|nl|ca|au|in|jp|ru|br|eu|tr|link|site|online|store|blog|news|page|so|sh";
-const URL_RE = new RegExp(
+/** URLs and bare domains (X auto-links them). Also used by lib/usage.ts (`has_url`). */
+export const URL_RE = new RegExp(
   `(?<![@\\w.])(?:https?:\\/\\/[^\\s]+|(?:[a-z0-9-]+\\.)+(?:${BARE_TLDS})\\b(?:\\/[^\\s]*)?)`,
   "gi",
 );

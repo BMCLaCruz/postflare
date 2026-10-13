@@ -44,7 +44,11 @@ export const MEDIA_RETENTION_SETTING = "media_retention_days";
 export const DEFAULT_MEDIA_RETENTION_DAYS = 30;
 
 export async function mediaRetentionDays(db: D1Database): Promise<number> {
-  const v = await getSetting(db, MEDIA_RETENTION_SETTING);
-  const n = v === null ? NaN : Number(v);
+  return parseMediaRetention(await getSetting(db, MEDIA_RETENTION_SETTING));
+}
+
+/** The stored "Media retention (days)" value → days (default when unset or invalid). */
+export function parseMediaRetention(v: string | null | undefined): number {
+  const n = v === null || v === undefined ? NaN : Number(v);
   return Number.isInteger(n) && n >= 0 ? n : DEFAULT_MEDIA_RETENTION_DAYS;
 }

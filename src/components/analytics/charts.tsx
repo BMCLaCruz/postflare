@@ -207,6 +207,110 @@ export function DailyChart({ daily, exposureLabel }: { daily: AnalyticsDay[]; ex
 }
 
 // ---------------------------------------------------------------------------------------------------------------
+// Panel columns: one stacked panel per measure (each its own y-scale, never a dual axis), shared x axis, one
+// crosshair wash and one tooltip. Generic version of DailyChart for any per-day counts (Admin → Overview).
+
+export interface ColumnPanel<K extends string> {
+  key: K;
+  label: string;
+  /** Series color, or a status token for state measures (failures): the label carries the meaning too. */
+  color: string;
+  height: number;
+  /** Tooltip unit, singular / plural. */
+  unit: [string, string];
+}
+
+export function PanelColumns<K extends string>({ rows, panels, label }: { rows: Array<{ day: string } & Record<K, number>>; panels: ColumnPanel<K>[]; label: string }) {
+  const [ref, width] = useWidth<HTMLDivElement>();
+  const nav = useIndexNav(rows.length);
+  const n = rows.length;
+  const plotW = Math.max(0, width - GUTTER - PAD_R);
+  const band = n ? plotW / n : 0;
+  const barW = Math.max(1, Math.min(24, band - 2));
+  const xOf = (i: number) => GUTTER + i * band + (band - barW) / 2;
+  const HEAD = 30;
+  const GAP = 14;
+  let y = 0;
+  const layout = panels.map((p) => {
+    const top = y + HEAD;
+    y = top + p.height + GAP;
+    const ticks = niceTicks(Math.max(1, ...rows.map((r) => r[p.key])), p.height < 60 ? 1 : 3).filter(Number.isInteger); // counts
+    return { ...p, top, base: top + p.height, ticks };
+  });
+  const axisTop = y - GAP + 6;
+  const height = axisTop + 16;
+  const labelEvery = Math.max(1, Math.ceil(n / Math.max(2, Math.floor(plotW / 72))));
+  const xLabels = rows.map((d, i) => ({ i, d })).filter(({ i }) => (n - 1 - i) % labelEvery === 0);
+  const hover = nav.index !== null ? rows[nav.index] : null;
+  const onMove = (e: React.PointerEvent<SVGRectElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    nav.setIndex(Math.max(0, Math.min(n - 1, Math.floor((e.clientX - rect.left) / band))));
+  };
+  const summary = `${label}. ${panels.map((p) => `${fullNumber(rows.reduce((a, r) => a + r[p.key], 0))} ${p.label.toLowerCase()}`).join(", ")} over ${n} days. Use the arrow keys to read each day.`;
+
+  return (
+    <div ref={ref} className="relative w-full select-none">
+      {width > 0 && n > 0 && (
+        <svg
+          width={width}
+          height={height}
+          role="img"
+          aria-label={summary}
+          tabIndex={0}
+          onKeyDown={nav.onKeyDown}
+          onFocus={nav.onFocus}
+          onBlur={nav.onBlur}
+          className="block overflow-visible rounded-md focus:outline-none focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-brand-500"
+        >
+          {nav.index !== null && <rect x={GUTTER + nav.index * band} y={HEAD - 4} width={band} height={axisTop - HEAD} className="fill-zinc-900/[0.04] dark:fill-white/[0.05]" />}
+          {layout.map((p) => {
+            const max = p.ticks[p.ticks.length - 1] || 1;
+            const yOf = (v: number) => p.base - (v / max) * p.height;
+            return (
+              <g key={p.key}>
+                <g transform={`translate(0, ${p.top - HEAD + 12})`}>
+                  <rect x={0} y={-6} width={10} height={8} rx={2} fill={p.color} />
+                  <text x={18} y={1} className="fill-zinc-700 text-[12px] font-medium dark:fill-zinc-300">
+                    {p.label}
+                  </text>
+                </g>
+                {p.ticks.map((t) => (
+                  <g key={t}>
+                    <line x1={GUTTER} x2={width - PAD_R} y1={yOf(t)} y2={yOf(t)} stroke={t === 0 ? "var(--viz-axis)" : "var(--viz-grid)"} strokeWidth={1} shapeRendering="crispEdges" />
+                    <text x={GUTTER - 8} y={yOf(t) + 4} textAnchor="end" className="tabular-nums text-[11px]" fill="var(--viz-ink-muted)">
+                      {compactNumber(t)}
+                    </text>
+                  </g>
+                ))}
+                {rows.map((d, i) => {
+                  const v = d[p.key];
+                  if (!v) return null;
+                  return <path key={d.day} d={columnPath(xOf(i), yOf(v), barW, p.base)} fill={p.color} opacity={nav.index === null || nav.index === i ? 1 : 0.55} />;
+                })}
+              </g>
+            );
+          })}
+          {xLabels.map(({ i, d }) => (
+            <text key={d.day} x={GUTTER + i * band + band / 2} y={axisTop + 10} textAnchor={i === n - 1 && band < 40 ? "end" : "middle"} className="text-[11px]" fill="var(--viz-ink-muted)">
+              {formatDayKey(d.day)}
+            </text>
+          ))}
+          <rect x={GUTTER} y={0} width={plotW} height={axisTop} fill="transparent" onPointerMove={onMove} onPointerLeave={() => nav.setIndex(null)} />
+        </svg>
+      )}
+      {hover && nav.index !== null && (
+        <Tooltip x={GUTTER + nav.index * band + band / 2} width={width}>
+          <p className="mb-1 font-medium text-zinc-700 dark:text-zinc-200">{formatDayKey(hover.day, { weekday: "short", month: "short", day: "numeric", year: "numeric" })}</p>
+          {panels.map((p) => (
+            <TooltipRow key={p.key} color={p.color} bar value={fullNumber(hover[p.key])} label={hover[p.key] === 1 ? p.unit[0] : p.unit[1]} />
+          ))}
+        </Tooltip>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------------------------------------------
 // Line chart (followers per account, a post's metrics over time): 2px line, 10% wash, end dot with a surface ring,
 // nearest-point crosshair.
 

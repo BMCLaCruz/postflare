@@ -2,7 +2,8 @@ import type { InstancePermission, PermissionInfo, PermissionKey, WorkspacePermis
 
 /**
  * The permission catalog: every permission the app checks, with the text shown in the UI and in 403 errors.
- * Roles (table `roles`) are named bundles of these keys. Built-in roles are seeded by migrations/0003.
+ * Roles (table `roles`) are named bundles of these keys. Built-in roles are seeded by migrations/0003
+ * (`instance.overview.view` is added to the instance Admin by migrations/0007).
  */
 export const PERMISSIONS: ReadonlyArray<PermissionInfo & { action: string }> = [
   {
@@ -32,6 +33,13 @@ export const PERMISSIONS: ReadonlyArray<PermissionInfo & { action: string }> = [
     label: "Create workspaces",
     description: "Create new workspaces (the creator becomes their Owner).",
     action: "create workspaces",
+  },
+  {
+    key: "instance.overview.view",
+    scope: "instance",
+    label: "View instance overview",
+    description: "Admin overview: usage, publishing health and Free plan quotas across every workspace.",
+    action: "view the instance overview",
   },
   { key: "workspace.manage", scope: "workspace", label: "Manage workspace", description: "Rename the workspace.", action: "manage this workspace" },
   {
@@ -104,7 +112,7 @@ export const ROLE = {
   viewer: "role_ws_viewer",
 } as const;
 
-/** Mirrors the seed rows of migrations/0003 (a test checks they match). */
+/** Mirrors the seed rows of migrations/0003 plus 0007 (a test checks they match). */
 export const BUILTIN_ROLES: Record<string, { scope: "instance" | "workspace"; name: string; permissions: PermissionKey[] }> = {
   [ROLE.instanceAdmin]: { scope: "instance", name: "Admin", permissions: [...INSTANCE_PERMISSIONS] },
   [ROLE.instanceMember]: { scope: "instance", name: "Member", permissions: ["instance.workspaces.create"] },

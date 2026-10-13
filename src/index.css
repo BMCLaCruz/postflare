@@ -64,6 +64,10 @@
   --viz-surface: #ffffff;
   --viz-delta-up: #006300;
   --viz-delta-down: #d03b3b;
+  /* Status palette (mode-invariant; always shown with an icon + label, never color alone). */
+  --viz-status-good: #0ca30c;
+  --viz-status-warning: #fab219;
+  --viz-status-critical: #d03b3b;
 }
 @media (prefers-color-scheme: dark) {
   :root {

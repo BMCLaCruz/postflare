@@ -5,6 +5,7 @@ import { verifySignature } from "../lib/crypto";
 import { mediaDto, safeFilename, type MediaRow } from "../lib/media";
 import { mediaUsage, postsBlockingMediaDelete } from "../lib/media-lifecycle";
 import { baseUrl, mediaRetentionDays } from "../lib/settings";
+import { mediaEventStatement, utcDay } from "../lib/usage";
 import { newId, now } from "../lib/util";
 
 export const mediaRoutes = new Hono<AppEnv>();
@@ -57,12 +58,32 @@ export async function insertMedia(
   /** "upload_link" for files sent through an upload link (the media sweep removes them when never used). */
   source: "upload_link" | null = null,
 ) {
-  await env.DB.prepare(
-    `INSERT INTO media (id, r2_key, filename, mime, size, kind, width, height, duration, alt, status, upload_id, created_at, workspace_id, created_by, source)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  )
-    .bind(id, key, m.filename, m.mime, m.size, kindOf(m.mime), m.width ?? null, m.height ?? null, m.duration ?? null, m.alt ?? null, status, uploadId, now(), owner.workspaceId, owner.userId, source)
-    .run();
+  const db = env.DB;
+  const t = now();
+  const insert = db
+    .prepare(
+      `INSERT INTO media (id, r2_key, filename, mime, size, kind, width, height, duration, alt, status, upload_id, created_at, workspace_id, created_by, source)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(id, key, m.filename, m.mime, m.size, kindOf(m.mime), m.width ?? null, m.height ?? null, m.duration ?? null, m.alt ?? null, status, uploadId, t, owner.workspaceId, owner.userId, source);
+  if (status !== "ready") return void (await insert.run());
+  // A finished upload: its usage event joins the same batch (multipart uploads record theirs on completion).
+  await db.batch([insert, mediaEventStatement(db, { workspaceId: owner.workspaceId, kind: "media_upload", bytes: m.size, mime: m.mime, t })]);
+}
+
+/** Mark a multipart upload complete (stored size from R2) and record its usage event, in one batch. */
+export async function completeMultipartRow(env: Env, workspaceId: string, id: string, size: number) {
+  const db = env.DB;
+  const t = now();
+  await db.batch([
+    db.prepare("UPDATE media SET status = 'ready', upload_id = NULL, size = ? WHERE id = ? AND workspace_id = ?").bind(size, id, workspaceId),
+    db
+      .prepare(
+        `INSERT INTO usage_events (workspace_id, kind, outcome, post_type, has_url, media_count, media_bytes, quantity, images_tx, is_demo, created_at, day)
+         SELECT workspace_id, 'media_upload', 'ok', kind, 0, 1, size, 1, 0, 0, ?, ? FROM media WHERE id = ? AND workspace_id = ?`,
+      )
+      .bind(t, utcDay(t), id, workspaceId),
+  ]);
 }
 
 /** DTO of a media item of the workspace, or null when it is not there. */
@@ -183,9 +204,7 @@ mediaRoutes.post("/media/multipart/:id/complete", requirePermission("media.write
   if (!upload) return c.json({ error: "Upload not found" }, 404);
   const { parts } = await c.req.json<{ parts: R2UploadedPart[] }>();
   const obj = await upload.complete(parts.sort((a, b) => a.partNumber - b.partNumber));
-  await c.env.DB.prepare("UPDATE media SET status = 'ready', upload_id = NULL, size = ? WHERE id = ? AND workspace_id = ?")
-    .bind(obj.size, id, wsId(c))
-    .run();
+  await completeMultipartRow(c.env, wsId(c), id, obj.size);
   return c.json(await dto(c, wsId(c), id));
 });
 
@@ -197,9 +216,9 @@ mediaRoutes.patch("/media/:id", requirePermission("media.write"), noDemo, async 
 });
 
 mediaRoutes.delete("/media/:id", requirePermission("media.write"), noDemo, async (c) => {
-  const row = await c.env.DB.prepare("SELECT r2_key, upload_id, status FROM media WHERE id = ? AND workspace_id = ?")
+  const row = await c.env.DB.prepare("SELECT r2_key, upload_id, status, size, mime FROM media WHERE id = ? AND workspace_id = ?")
     .bind(c.req.param("id"), wsId(c))
-    .first<{ r2_key: string; upload_id: string | null; status: string }>();
+    .first<{ r2_key: string; upload_id: string | null; status: string; size: number; mime: string }>();
   if (!row) return c.json({ error: "Not found" }, 404);
   // Deleting it would make these posts fail when they publish.
   const postIds = await postsBlockingMediaDelete(c.env.DB, wsId(c), c.req.param("id"));
@@ -214,7 +233,13 @@ mediaRoutes.delete("/media/:id", requirePermission("media.write"), noDemo, async
   } else {
     await c.env.MEDIA.delete(row.r2_key);
   }
-  await c.env.DB.prepare("DELETE FROM media WHERE id = ? AND workspace_id = ?").bind(c.req.param("id"), wsId(c)).run();
+  const db = c.env.DB;
+  const del = db.prepare("DELETE FROM media WHERE id = ? AND workspace_id = ?").bind(c.req.param("id"), wsId(c));
+  if (row.status === "ready") {
+    await db.batch([del, mediaEventStatement(db, { workspaceId: wsId(c), kind: "media_delete", bytes: row.size, mime: row.mime, t: now() })]);
+  } else {
+    await del.run();
+  }
   return c.json({ ok: true });
 });
 

@@ -1,5 +1,6 @@
 import type {
   AccountDTO,
+  AdminOverviewDTO,
   AnalyticsPostDTO,
   AnalyticsRefreshDTO,
   AnalyticsSummaryDTO,
@@ -210,6 +211,9 @@ export const api = {
     save: (body: { publicUrl?: string; timezone?: string; experimentalIntegrations?: boolean; mediaRetentionDays?: number }) => request<{ ok: true }>("PUT", "/settings", body),
   },
   version: () => get<VersionDTO>("/version"),
+  admin: {
+    overview: (days: number) => get<AdminOverviewDTO>(`/admin/overview?days=${days}`),
+  },
   updates: {
     get: () => get<UpdateStatusDTO>("/updates"),
     check: () => request<UpdateStatusDTO>("POST", "/updates/check"),

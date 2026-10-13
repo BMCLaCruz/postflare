@@ -12,6 +12,7 @@ import { SessionProvider, useSession } from "./lib/session";
 import type { AuthStatus } from "./lib/types";
 import { AccountsPage } from "./pages/AccountsPage";
 import { AnalyticsPage } from "./pages/AnalyticsPage";
+import { OverviewPage } from "./pages/admin/OverviewPage";
 import { RolesPage } from "./pages/admin/RolesPage";
 import { UsersPage } from "./pages/admin/UsersPage";
 import { AuthPage } from "./pages/AuthPage";
@@ -133,6 +134,7 @@ function WorkspaceScope() {
               <Route path="media" element={<Gate permission="media.read">{<MediaPage />}</Gate>} />
               <Route path="workspace" element={<Gate>{<WorkspaceSettingsPage />}</Gate>} />
               <Route path="profile" element={<ProfilePage />} />
+              <Route path="admin" element={<InstanceGate permission="instance.overview.view">{<OverviewPage />}</InstanceGate>} />
               <Route path="admin/users" element={<InstanceGate permission="instance.users.manage">{<UsersPage />}</InstanceGate>} />
               <Route path="admin/roles" element={<InstanceGate permission="instance.users.manage">{<RolesPage />}</InstanceGate>} />
               <Route path="admin/settings" element={<InstanceGate permission="instance.settings.manage">{<InstanceSettingsPage />}</InstanceGate>} />

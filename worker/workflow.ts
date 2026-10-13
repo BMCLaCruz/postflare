@@ -4,8 +4,9 @@ import { isDemoPost, publishDemoPosts } from "./lib/demo";
 import { loadMediaItems } from "./lib/media";
 import { nextCheckpoint } from "./lib/metrics";
 import { ensureSchema } from "./lib/migrate";
-import { getPostRow, logPost, type PostRow } from "./lib/posts";
+import { getPostRow, logPost, logStatement, type PostRow } from "./lib/posts";
 import { baseUrl } from "./lib/settings";
+import { addUsage, hasUrl, newMeter, publishEventStatement, replyEventStatement, type AttemptUsage, type PublishMeter } from "./lib/usage";
 import { errorMessage, now, parseJson } from "./lib/util";
 import { ProviderError } from "./providers/errors";
 import { getProvider } from "./providers/registry";
@@ -26,7 +27,10 @@ type Done = { externalId: string; url: string | null; data: Record<string, unkno
  * - check: the platform may have the post (ambiguous failure of the create call, or a failure after it): needs_check;
  * - stale: the post was edited, resolved or deleted meanwhile: this instance stops without touching it.
  */
-export type Outcome<T> = { ok: true; value: T } | { ok: false; action: "retry" | "fail" | "check" | "stale"; message: string };
+export type Outcome<T> = ({ ok: true; value: T } | { ok: false; action: "retry" | "fail" | "check" | "stale"; message: string }) & {
+  /** What the call used (usage_events); absent in results cached by older versions. */
+  usage?: AttemptUsage;
+};
 
 const MAX_STATUS_CHECKS = 120;
 /** Safe retries of a commit step (pre-send failures, rate limits): 30 s, 60 s, 120 s apart. */
@@ -54,8 +58,12 @@ export const needsCheckMessage = (platform: string, detail?: string) =>
   `We couldn't confirm whether ${platform} accepted the post. Check your profile, then mark it as published or retry.${detail ? ` (${detail})` : ""}`;
 
 export class PublishWorkflow extends WorkflowEntrypoint<Env, PublishParams> {
-  async run(event: WorkflowEvent<PublishParams>, step: WorkflowStep) {
+  async run(event: WorkflowEvent<PublishParams>, rawStep: WorkflowStep) {
     const { postId, revision } = event.payload;
+    // Usage of this instance (usage_events): steps run so far (replayed ones included, so the count is the instance's
+    // total whenever it is read) and the provider fetches of its commit steps.
+    const meter = newMeter();
+    const step = countSteps(rawStep, meter);
     await ensureSchema(this.env.DB);
     // Step names below ("load", "wait for schedule", "claim", "sandbox check", "publish", "processing N",
     // "check status N", "mark published", "load thread", "reply N") are those of the previous version: instances that
@@ -94,7 +102,7 @@ export class PublishWorkflow extends WorkflowEntrypoint<Env, PublishParams> {
     }
 
     // Publish, then poll while the platform processes. Every provider call is a commit step (never auto-retried).
-    let outcome = await this.commitStep<PublishResult>(step, "publish", "15 minutes", revision, postId, "publishing", false, (ctx) =>
+    let outcome = await this.commitStep<PublishResult>(step, meter, "publish", "15 minutes", revision, postId, "publishing", false, (ctx) =>
       ctx.provider.publish(ctx.pctx, ctx.account, ctx.post),
     );
     for (let i = 0; outcome.ok && outcome.value.status === "pending"; i++) {
@@ -104,7 +112,7 @@ export class PublishWorkflow extends WorkflowEntrypoint<Env, PublishParams> {
         break;
       }
       await step.sleep(`processing ${i + 1}`, `${Math.min(Math.max(pending.retryAfterSeconds ?? 10, 5), 600)} seconds`);
-      outcome = await this.commitStep<PublishResult>(step, `check status ${i + 1}`, "5 minutes", revision, postId, "publishing", true, (ctx) => {
+      outcome = await this.commitStep<PublishResult>(step, meter, `check status ${i + 1}`, "5 minutes", revision, postId, "publishing", true, (ctx) => {
         if (!ctx.provider.checkStatus) throw new ProviderError("Provider returned pending without checkStatus", "invalid");
         return ctx.provider.checkStatus(ctx.pctx, ctx.account, pending.state);
       });
@@ -115,12 +123,17 @@ export class PublishWorkflow extends WorkflowEntrypoint<Env, PublishParams> {
       if (failure.action === "stale") return { skipped: true };
       const check = failure.action === "check";
       await step.do(check ? "mark needs check" : "mark failed", async () => {
-        const res = await this.env.DB.prepare(
-          "UPDATE posts SET status = ?, error = ?, updated_at = ? WHERE id = ? AND revision = ? AND status = 'publishing'",
-        )
-          .bind(check ? "needs_check" : "failed", failure.message.slice(0, 2000), now(), postId, revision)
-          .run();
-        if (res.meta.changes) await logPost(this.env, postId, check ? "warn" : "error", check ? failure.message : `Publishing failed: ${failure.message}`);
+        const db = this.env.DB;
+        const status = check ? "needs_check" : "failed";
+        const t = now();
+        // One batch: the guarded update, then its log and usage event, both only if this very update happened.
+        await db.batch([
+          db
+            .prepare("UPDATE posts SET status = ?, error = ?, updated_at = ? WHERE id = ? AND revision = ? AND status = 'publishing'")
+            .bind(status, failure.message.slice(0, 2000), t, postId, revision),
+          guardedLog(db, postId, revision, status, t, check ? "warn" : "error", check ? failure.message : `Publishing failed: ${failure.message}`),
+          publishEventStatement(db, { postId, revision, status, t, meter, message: failure.message }),
+        ]);
       });
       return check ? { needsCheck: true } : { failed: true };
     }
@@ -128,16 +141,22 @@ export class PublishWorkflow extends WorkflowEntrypoint<Env, PublishParams> {
     const root: Done = { externalId: result.externalId, url: result.url ?? null, data: result.data ?? {} };
 
     const marked = await step.do("mark published", async () => {
-      // Guarded: an instance whose post was resolved, edited or retried meanwhile must not overwrite it.
-      const res = await this.env.DB.prepare(
-        // Analytics start an hour after publishing (lib/metrics.ts); `external_data` is passed to postMetrics.
-        "UPDATE posts SET status = 'published', external_id = ?, external_url = ?, external_data = ?, published_at = ?, updated_at = ?, metrics_next_at = ?, metrics_fails = 0 WHERE id = ? AND revision = ? AND status = 'publishing'",
-      )
-        .bind(root.externalId, root.url, Object.keys(root.data).length ? JSON.stringify(root.data) : null, now(), now(), nextCheckpoint(now(), now()), postId, revision)
-        .run();
-      if (!res.meta.changes) return false;
-      await logPost(this.env, postId, "info", `Published${root.url ? `: ${root.url}` : ` (id ${root.externalId})`}`);
-      return true;
+      const db = this.env.DB;
+      const t = now();
+      // Guarded: an instance whose post was resolved, edited or retried meanwhile must not overwrite it. The log and
+      // the usage event join the same batch, guarded on this update (one round trip).
+      const [res] = await db.batch([
+        db
+          .prepare(
+            // Analytics start an hour after publishing (lib/metrics.ts); `external_data` is passed to postMetrics.
+            "UPDATE posts SET status = 'published', external_id = ?, external_url = ?, external_data = ?, published_at = ?, updated_at = ?, metrics_next_at = ?, metrics_fails = 0 WHERE id = ? AND revision = ? AND status = 'publishing'",
+          )
+          .bind(root.externalId, root.url, Object.keys(root.data).length ? JSON.stringify(root.data) : null, t, t, nextCheckpoint(t, t), postId, revision),
+        guardedLog(db, postId, revision, "published", t, "info", `Published${root.url ? `: ${root.url}` : ` (id ${root.externalId})`}`),
+        // +1: the "load thread" step that always follows (follow-ups record their own steps).
+        publishEventStatement(db, { postId, revision, status: "published", t, meter: { ...meter, steps: meter.steps + 1 } }),
+      ]);
+      return res.meta.changes > 0;
     });
     // Older instances returned nothing from this step (undefined): they marked it unconditionally.
     if (marked === false) return { skipped: true };
@@ -148,7 +167,7 @@ export class PublishWorkflow extends WorkflowEntrypoint<Env, PublishParams> {
     });
     let parent = root;
     for (let i = 0; i < thread.length; i++) {
-      const reply = await this.commitStep<Done>(step, `reply ${i + 1}`, "10 minutes", revision, postId, "published", true, async (ctx) => {
+      const reply = await this.commitStep<Done>(step, meter, `reply ${i + 1}`, "10 minutes", revision, postId, "published", true, async (ctx) => {
         if (!ctx.provider.reply) throw new ProviderError(`${ctx.provider.name} does not support follow-ups`, "invalid");
         const item: PublishPost = {
           id: `${postId}-r${i + 1}`,
@@ -164,6 +183,18 @@ export class PublishWorkflow extends WorkflowEntrypoint<Env, PublishParams> {
           { rootId: root.externalId, parentId: parent.externalId, rootData: root.data, parentData: parent.data },
           item,
         );
+        // Usage event: best effort (never turns a published follow-up into a failure).
+        await replyEventStatement(this.env.DB, {
+          postId,
+          outcome: "published",
+          media: thread[i].media,
+          hasUrl: hasUrl(thread[i].content),
+          fetches: ctx.usage.fetches,
+          imagesTx: ctx.usage.imagesTx,
+          t: now(),
+        })
+          .run()
+          .catch(() => {});
         return { externalId: r.externalId, url: r.url ?? null, data: r.data ?? {} };
       });
       if (reply.ok) {
@@ -175,8 +206,22 @@ export class PublishWorkflow extends WorkflowEntrypoint<Env, PublishParams> {
       const failure = reply;
       await step.do(`reply ${i + 1} failed`, async () => {
         const message = failure.action === "check" ? `Follow-up ${i + 1}: ${failure.message}` : `Follow-up ${i + 1} failed: ${failure.message}`;
-        await this.env.DB.prepare("UPDATE posts SET error = ?, updated_at = ? WHERE id = ? AND revision = ?").bind(message.slice(0, 2000), now(), postId, revision).run();
-        await logPost(this.env, postId, "warn", message);
+        const db = this.env.DB;
+        const t = now();
+        await db.batch([
+          db.prepare("UPDATE posts SET error = ?, updated_at = ? WHERE id = ? AND revision = ?").bind(message.slice(0, 2000), t, postId, revision),
+          logStatement(db, postId, "warn", message),
+          replyEventStatement(db, {
+            postId,
+            outcome: failure.action === "check" ? "needs_check" : "failed",
+            media: thread[i].media,
+            hasUrl: hasUrl(thread[i].content),
+            fetches: failure.usage?.fetches ?? null,
+            imagesTx: failure.usage?.imagesTx ?? 0,
+            message,
+            t,
+          }),
+        ]);
       });
       break;
     }
@@ -190,6 +235,7 @@ export class PublishWorkflow extends WorkflowEntrypoint<Env, PublishParams> {
    */
   private async commitStep<T>(
     step: WorkflowStep,
+    meter: PublishMeter,
     name: string,
     timeout: WorkflowStepConfig["timeout"],
     revision: number,
@@ -206,6 +252,7 @@ export class PublishWorkflow extends WorkflowEntrypoint<Env, PublishParams> {
         const raw = await step.do(stepName, { retries: NEVER_RETRY, timeout }, (() =>
           this.attempt(postId, revision, stepName, expect, allowLegacyLock, fn)) as () => Promise<any>);
         out = normalize<T>(raw);
+        addUsage(meter, out.usage);
       } catch (err) {
         // Timeout or an engine failure inside the step: the call may have reached the platform.
         out = { ok: false, action: "check", message: needsCheckMessage("the platform", errorMessage(err)) };
@@ -228,9 +275,24 @@ export class PublishWorkflow extends WorkflowEntrypoint<Env, PublishParams> {
     allowLegacyLock: boolean,
     fn: AttemptFn<T>,
   ): Promise<Outcome<T>> {
+    const commit: CommitState = { sent: false, accepted: false };
+    const usage: AttemptUsage = { fetches: 0, imagesTx: 0, hasUrl: null };
+    const out = await this.attemptInner(postId, revision, stepName, expect, allowLegacyLock, fn, commit, usage);
+    return { ...out, usage };
+  }
+
+  private async attemptInner<T>(
+    postId: string,
+    revision: number,
+    stepName: string,
+    expect: PostRow["status"],
+    allowLegacyLock: boolean,
+    fn: AttemptFn<T>,
+    commit: CommitState,
+    usage: AttemptUsage,
+  ): Promise<Outcome<T>> {
     const env = this.env;
     const db = env.DB;
-    const commit: CommitState = { sent: false, accepted: false };
     let platform = "the platform";
     let accountId: string | null = null;
     try {
@@ -272,6 +334,21 @@ export class PublishWorkflow extends WorkflowEntrypoint<Env, PublishParams> {
       const pctx = await providerContext(env, provider, {
         log: (level, message) => void logPost(env, postId, level, message).catch(() => {}),
       });
+      // Count provider fetches (token refresh included) and Images transformations for usage_events.
+      const baseFetch = pctx.fetch;
+      pctx.fetch = (input, init) => {
+        usage.fetches++;
+        return baseFetch(input, init);
+      };
+      const baseMedia = pctx.media;
+      pctx.media = {
+        ...baseMedia,
+        image: (item, opts) => {
+          usage.imagesTx++;
+          return baseMedia.image(item, opts);
+        },
+      };
+      if (expect === "publishing") usage.hasUrl = hasUrl(row.content);
       const account = await freshAccount(env, provider, pctx, accountRow);
       const post: PublishPost = {
         id: row.id,
@@ -282,7 +359,7 @@ export class PublishWorkflow extends WorkflowEntrypoint<Env, PublishParams> {
         createdAt: row.created_at,
       };
       pctx.commit = commit;
-      return { ok: true, value: await fn({ provider, pctx, account, post, row }) };
+      return { ok: true, value: await fn({ provider, pctx, account, post, row, usage }) };
     } catch (err) {
       const out = classify(err, commit, platform);
       const message = errorMessage(err);
@@ -301,7 +378,30 @@ type AttemptFn<T> = (c: {
   account: Awaited<ReturnType<typeof freshAccount>>;
   post: PublishPost;
   row: PostRow;
+  usage: AttemptUsage;
 }) => Promise<T>;
+
+/** INSERT of a post log that only happens when the post is at `revision` in `status` with `updated_at = t`. */
+function guardedLog(db: D1Database, postId: string, revision: number, status: PostRow["status"], t: number, level: "info" | "warn" | "error", message: string) {
+  return db
+    .prepare(
+      "INSERT INTO post_logs (post_id, level, message, created_at) SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM posts WHERE id = ? AND revision = ? AND status = ? AND updated_at = ?)",
+    )
+    .bind(postId, level, message.slice(0, 2000), t, postId, revision, status, t);
+}
+
+/** `step` that counts its `do` calls into `meter.steps` (sleeps are not counted: not billed as steps). */
+function countSteps(step: WorkflowStep, meter: PublishMeter): WorkflowStep {
+  return {
+    do: ((...args: unknown[]) => {
+      meter.steps++;
+      return (step.do as (...a: unknown[]) => unknown)(...args);
+    }) as WorkflowStep["do"],
+    sleep: (...args: Parameters<WorkflowStep["sleep"]>) => step.sleep(...args),
+    sleepUntil: (...args: Parameters<WorkflowStep["sleepUntil"]>) => step.sleepUntil(...args),
+    waitForEvent: ((...args: unknown[]) => (step as any).waitForEvent(...args)) as WorkflowStep["waitForEvent"],
+  } as WorkflowStep;
+}
 
 /** Failure of a commit step → what to do next (see Outcome). */
 export function classify(err: unknown, commit: CommitState, platform: string): Outcome<never> & { ok: false } {

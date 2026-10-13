@@ -11,6 +11,7 @@
 
 import { providers } from "../providers/registry";
 import { mediaRetentionDays } from "./settings";
+import { mediaSweepEventStatement } from "./usage";
 import { now } from "./util";
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -101,12 +102,16 @@ export async function sweepMedia(env: Env, opts: { batch?: number } = {}): Promi
 
 /** Delete up to `limit` media rows matching `where` (alias m) in one guarded statement, then their R2 objects. */
 async function deleteWhere(env: Env, where: string, binds: unknown[], limit: number): Promise<number> {
-  const { results } = await env.DB.prepare(
-    // The rule is evaluated by the DELETE itself: a file attached to a post since the run started is kept.
-    `DELETE FROM media WHERE id IN (SELECT m.id FROM media m WHERE ${where} ORDER BY m.created_at LIMIT ?) RETURNING r2_key`,
-  )
-    .bind(...binds, limit)
-    .all<{ r2_key: string }>();
+  const db = env.DB;
+  const ids = `SELECT m.id FROM media m WHERE ${where} ORDER BY m.created_at, m.id LIMIT ?`;
+  // One batch (one transaction): the usage events of the files about to go (per workspace), then the DELETE. Both
+  // evaluate the same rule on the same snapshot. The rule is evaluated by the DELETE itself: a file attached to a post
+  // since the run started is kept.
+  const [, deleted] = await db.batch<{ r2_key: string }>([
+    mediaSweepEventStatement(db, ids, [...binds, limit], now()),
+    db.prepare(`DELETE FROM media WHERE id IN (${ids}) RETURNING r2_key`).bind(...binds, limit),
+  ]);
+  const results = deleted.results;
   if (results.length) {
     // One R2 call for up to 1000 keys. If it fails the rows are gone and the objects stay (storage, not a broken post).
     await env.MEDIA.delete(results.map((r) => r.r2_key)).catch((err) => console.error("media sweep: R2 delete failed", err));

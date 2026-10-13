@@ -4,6 +4,7 @@ import worker, { DAILY_CRON, FREQUENT_CRON, METRICS_CRON } from "../../worker/in
 import { REFRESHES_PER_TICK, refreshExpiringAccounts } from "../../worker/lib/accounts";
 import { encryptJson, hashPassword } from "../../worker/lib/crypto";
 import { sweepMedia } from "../../worker/lib/media-lifecycle";
+import { publishDemoPosts } from "../../worker/lib/demo";
 import { recoverStuckPosts } from "../../worker/lib/posts";
 import { ProviderError } from "../../worker/providers/errors";
 import { request, requestJson } from "../../worker/providers/http";
@@ -629,5 +630,220 @@ describe("media lifecycle", () => {
     const theirs = (await call(other, "/api/media/usage")).json;
     expect(theirs.instance).toBeNull();
     expect(theirs.workspace).toEqual({ bytes: 0, count: 0 });
+  });
+});
+
+describe("usage_events (metering)", () => {
+  const events = async (postId: string) =>
+    (await DB.prepare("SELECT * FROM usage_events WHERE post_id = ? ORDER BY id").bind(postId).all<any>()).results;
+
+  it("records a publish success with its fields, in the mark batch (one D1 round trip fewer than before)", async () => {
+    const t = Date.now();
+    await run(
+      "INSERT INTO media (id, r2_key, filename, mime, size, kind, status, created_at, workspace_id) VALUES ('med_ue_img', 'med_ue_img/a.png', 'a.png', 'image/png', 1234, 'image', 'ready', ?, 'ws_p')",
+      t,
+    );
+    await env.MEDIA.put("med_ue_img/a.png", "x");
+    await post("p_ue_ok", "ws_p", "acc_hook", { media: ["med_ue_img"] });
+    await run("UPDATE posts SET content = 'New post: postflare.io' WHERE id = 'p_ue_ok'");
+    mockNetwork();
+    vi.spyOn(hook, "publish").mockImplementation(async (ctx) => {
+      await request(ctx, UPLOAD_URL, { method: "POST" });
+      const r = await requestJson(ctx, COMMIT_URL, { method: "POST", json: {}, commit: true });
+      return { status: "published", externalId: r.id, url: r.url };
+    });
+    const { result, names } = await runWorkflow("p_ue_ok", 0);
+    expect(result).toMatchObject({ published: true });
+    const [e] = await events("p_ue_ok");
+    expect(e).toMatchObject({
+      workspace_id: "ws_p",
+      account_id: "acc_hook",
+      provider: "webhook",
+      kind: "publish",
+      outcome: "published",
+      post_type: "image",
+      has_url: 1,
+      media_count: 1,
+      media_bytes: 1234,
+      workflow_steps: names.filter((n) => !n.startsWith("sleep:")).length,
+      platform_api_calls: 2,
+      images_tx: 0,
+      is_demo: 0,
+      message: null,
+      revision: 0,
+    });
+    expect(e.day).toBe(new Date(e.created_at).toISOString().slice(0, 10));
+    expect(e.workflow_steps).toBe(6);
+    expect(await events("p_ue_ok")).toHaveLength(1);
+    // D1 calls of a whole text-post publish (all steps): 13 before usage metering (mark published = UPDATE + log
+    // INSERT), now 12: the mark step is one batch (UPDATE + guarded log + guarded usage event).
+    vi.restoreAllMocks();
+    vi.spyOn(hook, "publish").mockResolvedValue({ status: "published", externalId: "ok" });
+    await post("p_ue_count", "ws_p", "acc_hook");
+    count.reset();
+    expect((await runWorkflow("p_ue_count", 0)).result).toMatchObject({ published: true });
+    expect(count.calls, count.sql.join("\n")).toBe(12);
+    expect(count.batches).toBe(1);
+    expect(count.batchStatements).toBe(3);
+    // The log of the batch is there too.
+    const logs = await DB.prepare("SELECT message FROM post_logs WHERE post_id = 'p_ue_ok'").all<{ message: string }>();
+    expect(logs.results.some((l) => l.message.startsWith("Published: https://example.com/p/1"))).toBe(true);
+
+    // A replay of "mark published" (result lost) records nothing more.
+    vi.restoreAllMocks();
+    const replay = await runWorkflow("p_ue_ok", 0, { ...CLAIMED, publish: { ok: true, value: { status: "published", externalId: "ext_1" } } });
+    expect(replay.result).toEqual({ skipped: true });
+    expect(await events("p_ue_ok")).toHaveLength(1);
+  });
+
+  it("records failed and needs_check outcomes with the error, without extra round trips", async () => {
+    await post("p_ue_fail", "ws_p", "acc_hook");
+    vi.spyOn(hook, "publish").mockRejectedValue(new ProviderError("Text too long", "invalid"));
+    count.reset();
+    expect((await runWorkflow("p_ue_fail", 0)).result).toEqual({ failed: true });
+    expect(count.calls, count.sql.join("\n")).toBeLessThanOrEqual(12);
+    expect(await events("p_ue_fail")).toEqual([
+      expect.objectContaining({ kind: "publish", outcome: "failed", post_type: "text", has_url: 0, media_count: 0, media_bytes: 0, message: "Text too long", platform_api_calls: 0 }),
+    ]);
+    const logs = await DB.prepare("SELECT message FROM post_logs WHERE post_id = 'p_ue_fail'").all<{ message: string }>();
+    expect(logs.results.map((l) => l.message)).toContain("Publishing failed: Text too long");
+    vi.restoreAllMocks();
+
+    await post("p_ue_check", "ws_p", "acc_hook");
+    mockNetwork((url) => url === COMMIT_URL);
+    vi.spyOn(hook, "publish").mockImplementation(async (ctx) => {
+      await requestJson(ctx, COMMIT_URL, { method: "POST", json: {}, commit: true });
+      return { status: "published", externalId: "never" };
+    });
+    expect((await runWorkflow("p_ue_check", 0)).result).toEqual({ needsCheck: true });
+    const [e] = await events("p_ue_check");
+    expect(e).toMatchObject({ outcome: "needs_check", platform_api_calls: 1 });
+    expect(e.message).toMatch(/couldn't confirm/);
+  });
+
+  it("records follow-ups", async () => {
+    await post("p_ue_thread", "ws_p", "acc_hook", { thread: [{ content: "more at https://example.com", media: [] }] });
+    vi.spyOn(hook, "publish").mockResolvedValue({ status: "published", externalId: "root" });
+    (hook as any).reply = vi.fn(async () => ({ externalId: "r1" }));
+    try {
+      expect((await runWorkflow("p_ue_thread", 0)).result).toMatchObject({ published: true });
+    } finally {
+      delete (hook as any).reply;
+    }
+    const list = await events("p_ue_thread");
+    expect(list.map((e) => [e.kind, e.outcome, e.has_url])).toEqual([
+      ["publish", "published", 0],
+      ["reply", "published", 1],
+    ]);
+  });
+
+  it("records media uploads and deletes", async () => {
+    const up = await call(owner, "/api/media", { raw: "abcdef", headers: { "content-type": "image/png", "x-filename": "u.png", "content-length": "6" } });
+    expect(up.status, up.text).toBe(200);
+    const del = await call(owner, `/api/media/${up.json.id}`, { method: "DELETE" });
+    expect(del.status, del.text).toBe(200);
+    const { results } = await DB.prepare("SELECT kind, outcome, media_count, media_bytes, post_type FROM usage_events WHERE workspace_id = 'ws_p' AND kind LIKE 'media_%' AND message IS NULL ORDER BY id DESC LIMIT 2").all<any>();
+    expect(results).toEqual([
+      { kind: "media_delete", outcome: "ok", media_count: 1, media_bytes: 6, post_type: "image" },
+      { kind: "media_upload", outcome: "ok", media_count: 1, media_bytes: 6, post_type: "image" },
+    ]);
+  });
+});
+
+describe("usage_events: demo, metrics, crons", () => {
+  it("demo publishes are recorded but flagged", async () => {
+    await account("acc_ue_demo", "ws_pdemo", "webhook");
+    await post("p_ue_demo", "ws_pdemo", "acc_ue_demo");
+    expect(await publishDemoPosts(E, ["p_ue_demo"])).toBe(1);
+    const e = await one<any>("SELECT * FROM usage_events WHERE post_id = 'p_ue_demo'");
+    expect(e).toMatchObject({ kind: "publish", outcome: "published", is_demo: 1, provider: "webhook", workspace_id: "ws_pdemo" });
+    // Already published: a second run records nothing.
+    expect(await publishDemoPosts(E, ["p_ue_demo"])).toBe(0);
+    expect((await one<any>("SELECT COUNT(*) AS n FROM usage_events WHERE post_id = 'p_ue_demo'")).n).toBe(1);
+  });
+
+  it("the metrics cron records one event per chunk, with the cron's last run, in one batch", async () => {
+    const yt = getProvider("youtube") as Provider;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(new Request(input as any, init).url);
+      if (url.pathname === "/youtube/v3/videos") return Response.json({ items: url.searchParams.get("id")!.split(",").map((id) => ({ id, statistics: { viewCount: "3" } })) });
+      return Response.json({});
+    });
+    void yt;
+    const t = Date.now();
+    await account("acc_ue_yt", "ws_q", "youtube", { credentials: { accessToken: "AT", refreshToken: "RT" }, expiresAt: t + DAY });
+    await run("UPDATE accounts SET metrics_next_at = ? WHERE id = 'acc_ue_yt'", t + DAY);
+    for (const id of ["p_ue_m1", "p_ue_m2"]) {
+      await post(id, "ws_q", "acc_ue_yt", { status: "published", publishedAt: t - 2 * HOUR });
+      await run("UPDATE posts SET external_id = ?, metrics_next_at = ? WHERE id = ?", `vid_${id}`, t - HOUR, id);
+    }
+    const ctx = createExecutionContext();
+    await worker.scheduled!(createScheduledController({ cron: METRICS_CRON, scheduledTime: t }), E, ctx);
+    await waitOnExecutionContext(ctx);
+    const e = await one<any>("SELECT * FROM usage_events WHERE kind = 'metrics_refresh' AND account_id = 'acc_ue_yt'");
+    expect(e).toMatchObject({ provider: "youtube", outcome: "ok", quantity: 2, platform_api_calls: 1, workspace_id: "ws_q", is_demo: 0 });
+    const last = JSON.parse((await one<any>("SELECT value FROM settings WHERE key = 'cron_last_run:metrics'")).value);
+    expect(last.at).toBeGreaterThanOrEqual(t);
+    await run("DELETE FROM posts WHERE id LIKE 'p_ue_m%'");
+    await run("DELETE FROM accounts WHERE id = 'acc_ue_yt'");
+  });
+
+  it("the daily cron prunes old events (bounded) and records its run; the sweep recorded its deletions", async () => {
+    const old = Date.now() - 401 * DAY;
+    await run(
+      "INSERT INTO usage_events (workspace_id, kind, outcome, created_at, day) VALUES ('ws_p', 'media_upload', 'ok', ?, ?)",
+      old,
+      new Date(old).toISOString().slice(0, 10),
+    );
+    const ctx = createExecutionContext();
+    await worker.scheduled!(createScheduledController({ cron: DAILY_CRON, scheduledTime: Date.now() }), E, ctx);
+    await waitOnExecutionContext(ctx);
+    expect((await one<any>("SELECT COUNT(*) AS n FROM usage_events WHERE created_at = ?", old)).n).toBe(0);
+    expect(await one("SELECT value FROM settings WHERE key = 'cron_last_run:daily'")).not.toBeNull();
+    // The media lifecycle tests above swept 3 files of ws_p (2 expired + 1 unused upload-link file).
+    const swept = await one<any>("SELECT SUM(quantity) AS n, SUM(media_bytes) AS bytes FROM usage_events WHERE kind = 'media_delete' AND message = 'lifecycle sweep' AND workspace_id = 'ws_p'");
+    expect(swept).toEqual({ n: 3, bytes: 300 });
+  });
+});
+
+describe("GET /api/admin/overview", () => {
+  it("needs instance.overview.view", async () => {
+    expect((await call(viewer, "/api/admin/overview")).status).toBe(403);
+    expect((await call(other, "/api/admin/overview")).status).toBe(403);
+  });
+
+  it("aggregates the instance in one batch of fewer than 15 queries", async () => {
+    await call(owner, "/api/admin/overview"); // warm
+    count.reset();
+    const res = await call(owner, "/api/admin/overview?days=7");
+    expect(res.status, res.text).toBe(200);
+    expect(count.queries + count.batchStatements, count.sql.join("\n")).toBeLessThan(15);
+    const o = res.json;
+    expect(o.range.days).toBe(7);
+    expect(o.posts.daily).toHaveLength(7);
+    expect(o.counts.workspaces).toBe(2);
+    expect(o.counts.demoWorkspaces).toBe(1);
+    expect(o.counts.users.active).toBeGreaterThanOrEqual(3);
+    expect(o.posts.publishedToday).toBeGreaterThan(0);
+    // Demo publishes stay out of the totals.
+    expect(o.demo.publishedToday).toBe(1);
+    const hook = o.posts.byProvider.find((p: any) => p.provider === "webhook");
+    expect(hook.attempts.published).toBeGreaterThanOrEqual(2);
+    expect(hook.attempts.failed + hook.attempts.needsCheck).toBeGreaterThanOrEqual(2);
+    expect(hook.successRate).toBeGreaterThan(0);
+    expect(hook.successRate).toBeLessThan(1);
+    expect(o.health.lastErrors.length).toBeGreaterThan(0);
+    expect(o.health.lastErrors[0]).toMatchObject({ workspaceId: "ws_p", workspaceName: "P" });
+    expect(o.quotas.map((q: any) => q.key)).toEqual(["workflow_steps", "d1_rows_written", "r2_storage", "images_transformations"]);
+    const steps = o.quotas[0];
+    expect(steps.used).toBeGreaterThan(0);
+    expect(steps.limit).toBe(3000);
+    expect(o.system.crons.map((c: any) => c.name)).toEqual(["frequent", "metrics", "daily"]);
+    expect(o.system.crons.find((c: any) => c.name === "daily").lastRunAt).toBeGreaterThan(0);
+    expect(o.system.mediaRetentionDays).toBe(30);
+    expect(o.workspaces.find((w: any) => w.id === "ws_pdemo").isDemo).toBe(true);
+    expect(o.workspaces.find((w: any) => w.id === "ws_p")).toMatchObject({ name: "P", members: 2 });
+    // Out-of-range days are clamped.
+    expect((await call(owner, "/api/admin/overview?days=5000")).json.range.days).toBe(90);
   });
 });

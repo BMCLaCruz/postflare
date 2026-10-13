@@ -273,7 +273,8 @@ export type InstancePermission =
   | "instance.platforms.manage"
   | "instance.users.manage"
   | "instance.settings.manage"
-  | "instance.workspaces.create";
+  | "instance.workspaces.create"
+  | "instance.overview.view";
 
 export type WorkspacePermission =
   | "workspace.manage"
@@ -616,4 +617,118 @@ export interface UpdateStatusDTO {
   enabled: boolean;
   /** GitHub repository checked (owner/name, UPDATE_REPO). */
   repo: string;
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Admin → Overview (GET /api/admin/overview?days=30, permission instance.overview.view). Days are UTC.
+
+export type QuotaLevel = "ok" | "warning" | "critical";
+
+export interface AdminQuotaDTO {
+  key: "workflow_steps" | "d1_rows_written" | "r2_storage" | "images_transformations";
+  label: string;
+  /** Measured or estimated usage (see `estimate`). */
+  used: number;
+  /** Projection to the end of the period (e.g. steps incl. posts still scheduled today), when meaningful. */
+  projected: number | null;
+  limit: number;
+  unit: "count" | "bytes";
+  /** "day" (UTC), "month" (UTC calendar month) or "total" (storage). */
+  period: "day" | "month" | "total";
+  /** True when the figure is derived from counts × typical costs rather than measured. */
+  estimate: boolean;
+  /** ok < 70 % ≤ warning < 90 % ≤ critical (of the larger of used / projected). */
+  level: QuotaLevel;
+  note: string;
+}
+
+export interface AdminProviderStatsDTO {
+  provider: string;
+  /** Posts published in the range (posts table). */
+  published: number;
+  /** Posts currently failed or needing a check (posts table, opened in the range). */
+  failed: number;
+  /** Publish attempts in the range (usage_events): outcomes. */
+  attempts: { published: number; failed: number; needsCheck: number };
+  /** published / all attempts (usage_events), null without attempts. */
+  successRate: number | null;
+  /** Attempts whose text had a URL (X bills these ~13x). */
+  withUrl: number;
+}
+
+export interface AdminWorkspaceRowDTO {
+  id: string;
+  name: string;
+  isDemo: boolean;
+  members: number;
+  accounts: number;
+  apiKeys: number;
+  /** Published in the range. */
+  published: number;
+  publishedAllTime: number;
+  scheduled: number;
+  failed: number;
+  needsCheck: number;
+  storageBytes: number;
+  createdAt: number;
+  /** Latest post change (null without posts). */
+  lastActivity: number | null;
+}
+
+export interface AdminCronDTO {
+  name: "frequent" | "metrics" | "daily";
+  schedule: string;
+  lastRunAt: number | null;
+  durationMs: number | null;
+  /** No run for more than twice the interval. */
+  stale: boolean;
+}
+
+export interface AdminOverviewDTO {
+  generatedAt: number;
+  range: { days: number; from: number; to: number };
+  counts: {
+    /** Excluding demo workspaces. */
+    workspaces: number;
+    demoWorkspaces: number;
+    users: { active: number; disabled: number; demo: number };
+    apiKeys: number;
+    accounts: { total: number; byStatus: { active: number; reconnect: number; disabled: number }; byProvider: Array<{ provider: string; active: number; reconnect: number; disabled: number }> };
+  };
+  /** Non-demo workspaces. */
+  posts: {
+    publishedAllTime: number;
+    publishedToday: number;
+    published7d: number;
+    publishedRange: number;
+    /** Still scheduled for today (UTC), overdue ones included. */
+    scheduledToday: number;
+    scheduledNext24h: number;
+    failed: number;
+    needsCheck: number;
+    drafts: number;
+    publishing: number;
+    /** One entry per day of the range: published (posts) and failed attempts (usage_events: failed + needs_check). */
+    daily: Array<{ day: string; published: number; failed: number }>;
+    byProvider: AdminProviderStatsDTO[];
+    topWorkspaces: Array<{ id: string; name: string; published: number }>;
+  };
+  /** The demo workspace(s), apart from the totals above. */
+  demo: { enabled: boolean; publishedRange: number; publishedToday: number; scheduled: number };
+  health: {
+    lastErrors: Array<{ provider: string | null; workspaceId: string | null; workspaceName: string | null; postId: string | null; kind: string; outcome: string; message: string | null; at: number }>;
+  };
+  quotas: AdminQuotaDTO[];
+  system: {
+    update: UpdateStatusDTO;
+    crons: AdminCronDTO[];
+    demoMode: boolean;
+    mediaRetentionDays: number;
+    experimentalIntegrations: boolean;
+    /** Usage metering keeps this many days. */
+    usageRetentionDays: number;
+    /** First day with usage_events (metering started), null when empty. */
+    meteringSince: string | null;
+  };
+  workspaces: AdminWorkspaceRowDTO[];
 }
