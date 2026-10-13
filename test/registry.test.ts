@@ -7,11 +7,11 @@ describe("provider registry", () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
-  it("defaults to beta, with tiktok/webhook verified and skool experimental", () => {
+  it("defaults to beta, with tiktok/webhook/x verified and skool experimental", () => {
     const by = (status: string) => providers.filter((p) => providerInfo(p).status === status).map((p) => p.id).sort();
-    expect(by("verified")).toEqual(["tiktok", "webhook"]);
+    expect(by("verified")).toEqual(["tiktok", "webhook", "x"]);
     expect(by("experimental")).toEqual(["skool"]);
-    expect(by("beta").length).toBe(providers.length - 3);
+    expect(by("beta").length).toBe(providers.length - 4);
   });
 
   for (const p of providers) {

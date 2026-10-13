@@ -165,7 +165,7 @@ describe("experimental integrations", () => {
     const providers = (await call(owner, "/api/providers")).json as Array<{ id: string; status: string; enabled: boolean }>;
     expect(providers.find((p) => p.id === "skool")).toMatchObject({ status: "experimental", enabled: false });
     expect(providers.find((p) => p.id === "tiktok")).toMatchObject({ status: "verified", enabled: true });
-    expect(providers.find((p) => p.id === "x")).toMatchObject({ status: "beta", enabled: true });
+    expect(providers.find((p) => p.id === "bluesky")).toMatchObject({ status: "beta", enabled: true });
 
     const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
       Response.json({ id: "u1", first_name: "Sam", last_name: "S", name: "sam-s", metadata: {} }),

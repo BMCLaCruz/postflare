@@ -26,7 +26,7 @@ workspace with sample data that never publishes anything, reset daily).
 
 ## Features
 
-- **36 integrations, 2 verified and the rest in beta** (see [Platform status](#platform-status)): X, LinkedIn (profile +
+- **36 integrations, 3 verified and the rest in beta** (see [Platform status](#platform-status)): X, LinkedIn (profile +
   pages), Facebook Pages, Instagram (Facebook login and Instagram login), Threads, YouTube, TikTok, TikTok for Business,
   Pinterest, Reddit, Bluesky, Mastodon, Tumblr, VK, Nostr, Farcaster, Lemmy, Dribbble, Google Business Profile,
   Telegram, Discord, Slack, Twitch, Kick, DEV, Hashnode, Medium, WordPress, Listmonk, MeWe, Whop, Moltbook, a generic
@@ -70,7 +70,7 @@ some have been confirmed end to end with a real account so far. Each platform sh
 | Webhook | Verified | Generic outgoing webhook (Zapier, Make, n8n, your backend) |
 | Instagram (Instagram login) | Beta | Connection verified; publishing being verified |
 | Instagram (Facebook login) | Beta | Needs a Facebook Page linked to the Instagram account |
-| X (Twitter) | Beta | Reading metrics needs a paid X API plan or credits |
+| X (Twitter) | Verified | Publishing verified; posting and reading metrics need X API write access or credits |
 | LinkedIn | Beta | |
 | LinkedIn Page | Beta | |
 | Facebook Page | Beta | |

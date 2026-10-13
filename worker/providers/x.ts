@@ -327,6 +327,8 @@ function accountFromUser(u: any, tok: Awaited<ReturnType<typeof oauthToken>>, pr
 }
 
 export const x: Provider = {
+  status: "verified",
+  statusNote: "Publishing verified (OAuth 2.0); posting needs X API write access/credits",
   id: "x",
   name: "X (Twitter)",
   color: "000000",
