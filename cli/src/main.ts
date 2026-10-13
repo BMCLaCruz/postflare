@@ -4,6 +4,7 @@ import { analytics, analyticsRefresh, analyticsTop } from "./commands/analytics.
 import { login, logout, whoami, workspaces } from "./commands/auth.js";
 import { mediaAlias, mediaImport, mediaList, mediaRm, mediaUpload } from "./commands/media.js";
 import { post, posts, postsCancel, postsEdit, postsRetry, postsRm, postsShow } from "./commands/posts.js";
+import { skillInstall } from "./commands/skill.js";
 import { uploadLink } from "./commands/uploadlink.js";
 import { version } from "./commands/version.js";
 import { pendingWarning } from "./compat.js";
@@ -36,11 +37,12 @@ export const COMMANDS: Command[] = [
   analyticsTop,
   analyticsRefresh,
   uploadLink,
+  skillInstall,
   version,
 ];
 
 const GROUPS: Array<[string, string[]]> = [
-  ["Setup", ["login", "logout", "whoami", "workspaces", "version"]],
+  ["Setup", ["login", "logout", "whoami", "workspaces", "version", "skill install"]],
   ["Accounts & platforms", ["accounts", "accounts options", "platforms"]],
   ["Media", ["media upload", "media list", "media import", "media rm", "upload-link"]],
   ["Posts", ["post", "posts", "posts show", "posts edit", "posts cancel", "posts retry", "posts rm"]],

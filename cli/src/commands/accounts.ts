@@ -100,6 +100,7 @@ export const platforms: Command = {
       if (ctx.json) return printJson(p);
       const cap = p.capabilities;
       println(`${c.bold(p.name)} ${c.gray(`(${p.id}, ${p.category})`)}${p.configured === false ? c.yellow("  developer app not configured") : ""}`);
+      if (p.status) println(`  Status:    ${p.status}${p.statusNote ? ` (${p.statusNote})` : ""}`);
       println(`  Text:      ${cap.text}, max ${cap.maxLength.toLocaleString("en-US")} characters`);
       println(`  Media:     ${mediaSummary(p)}${cap.media.mixed ? ", images and videos can be mixed" : ""}`);
       println(`  Follow-up: ${cap.thread ? `${cap.threadLabel ?? "yes"} (--thread)` : "no"}`);

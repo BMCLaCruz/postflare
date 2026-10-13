@@ -1,7 +1,7 @@
 # postflare (CLI)
 
 Command line client for Postflare, the self-hosted social media scheduler on Cloudflare: schedule
-posts to 36 platforms, upload media, and read analytics from your terminal or from an AI agent (Claude Code...).
+posts to 36 platforms (see the Platform status table in the main README), upload media, and read analytics from your terminal or from an AI agent (Claude Code...).
 
 - Node.js 20+, no runtime dependencies.
 - Human-friendly tables by default, `--json` on every command for scripts and agents.
@@ -52,6 +52,7 @@ profile (handy in CI). `postflare logout [--profile x | --all]`.
 | `analytics [--range 7d\|30d\|90d \| --from --to] [-a] [--platform]` | KPIs vs the previous period, per platform/account, top posts |
 | `analytics top [--sort views\|engagements\|engagementRate\|publishedAt] [--limit]` | Best posts |
 | `analytics refresh --post <id> \| --account <selector>` | Collect metrics now |
+| `skill install [--dir ~/.claude/skills]` | Install/update the bundled Claude Code skill (`<dir>/postflare/SKILL.md`) |
 
 `postflare <command> --help` shows every option with examples.
 
@@ -103,7 +104,7 @@ Servers without that endpoint are assumed compatible.
 ## Development
 
 ```bash
-npm run cli:build       # tsc → cli/dist
+npm run cli:build       # embeds skills/postflare/SKILL.md (scripts/embed-skill.mjs), then tsc → cli/dist
 npm run cli:typecheck   # src + tests
 npx vitest run --project cli
 ```

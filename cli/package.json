@@ -36,7 +36,7 @@
     "cloudflare"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "node ../scripts/embed-skill.mjs && tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.test.json",
     "prepublishOnly": "npm run build"
   }

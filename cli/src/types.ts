@@ -37,6 +37,11 @@ export interface ProviderInfo {
   composerNotice?: string;
   docsUrl?: string;
   configured?: boolean;
+  /** Server >= the platform-status release; older servers omit it. */
+  status?: "verified" | "beta" | "experimental";
+  statusNote?: string;
+  /** false: an experimental platform that is turned off on the instance (new connections refused). */
+  enabled?: boolean;
   analytics?: { post: boolean; account: boolean; metrics: string[] };
 }
 
