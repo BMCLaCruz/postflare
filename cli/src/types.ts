@@ -175,3 +175,10 @@ export interface MeDTO {
 
 /** views, else impressions, else reach (what engagement rate is measured against). */
 export const exposure = (m: MetricValues | null | undefined): number | null => (m ? m.views ?? m.impressions ?? m.reach ?? null : null);
+
+/** GET /api/version (public). Servers without it answer 404: their version is unknown. */
+export interface VersionDTO {
+  version: string;
+  commit: string;
+  apiVersion: number;
+}

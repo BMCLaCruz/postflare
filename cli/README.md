@@ -37,6 +37,7 @@ profile (handy in CI). `postflare logout [--profile x | --all]`.
 | Command | |
 |---|---|
 | `whoami`, `workspaces` | User, workspace and permissions of the key |
+| `version` | CLI version and the server's version/commit (`--version` prints the CLI version only) |
 | `accounts [--platform id]` | Connected accounts, status, followers, analytics state |
 | `accounts options <account> <key>` | Choices of a dynamic setting (Pinterest boards, subreddits, TikTok privacy...) |
 | `platforms [id] [--connected]` | Limits and per-post settings of each platform (`platforms tiktok` lists every field and option) |
@@ -91,6 +92,13 @@ id=$(postflare media upload clip.mp4 --json | jq -r '.[0].id')
 postflare post -a tiktok -m "$id" --set privacy_level=SELF_ONLY --now --json | jq -r '.[].id'
 postflare analytics --range 7d --json | jq '.summary.totals'
 ```
+
+## Versions and compatibility
+
+The CLI is versioned and released separately from the server (tags `cli-v*`, changes in [CHANGELOG.md](CHANGELOG.md)).
+Servers report their REST API version at `GET /api/version`; when it is older or newer than this CLI supports, the CLI
+prints one warning on stderr suggesting which side to update (`POSTFLARE_NO_VERSION_CHECK=1` turns the check off).
+Servers without that endpoint are assumed compatible.
 
 ## Development
 

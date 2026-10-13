@@ -1,4 +1,5 @@
 import { Api, type FetchLike } from "./api.js";
+import { serverVersion } from "./compat.js";
 import type { CommandDef, Parsed } from "./args.js";
 import { resolveAuth, type ResolvedAuth } from "./config.js";
 import type { AccountDTO, ProviderInfo } from "./types.js";
@@ -44,7 +45,17 @@ export class Ctx {
   }
 
   get api(): Api {
-    return (this._api ??= new Api(this.auth.url, this.auth.key, this.deps.fetch));
+    if (!this._api) {
+      this._api = new Api(this.auth.url, this.auth.key, this.deps.fetch);
+      // Server compatibility check, in parallel with the command (main.ts prints its warning at the end).
+      if (!this.env.POSTFLARE_NO_VERSION_CHECK) void serverVersion(this._api);
+    }
+    return this._api;
+  }
+
+  /** The API client if the command used one (for the compatibility warning). */
+  get usedApi(): Api | undefined {
+    return this._api;
   }
 
   accounts(): Promise<AccountDTO[]> {

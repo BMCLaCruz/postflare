@@ -5,6 +5,8 @@ import { login, logout, whoami, workspaces } from "./commands/auth.js";
 import { mediaAlias, mediaImport, mediaList, mediaRm, mediaUpload } from "./commands/media.js";
 import { post, posts, postsCancel, postsEdit, postsRetry, postsRm, postsShow } from "./commands/posts.js";
 import { uploadLink } from "./commands/uploadlink.js";
+import { version } from "./commands/version.js";
+import { pendingWarning } from "./compat.js";
 import { Ctx, type Command, type Deps } from "./context.js";
 import { ApiError, CliError, UsageError } from "./errors.js";
 import { c, eprintln, println, setColor, truncate } from "./format.js";
@@ -34,10 +36,11 @@ export const COMMANDS: Command[] = [
   analyticsTop,
   analyticsRefresh,
   uploadLink,
+  version,
 ];
 
 const GROUPS: Array<[string, string[]]> = [
-  ["Setup", ["login", "logout", "whoami", "workspaces"]],
+  ["Setup", ["login", "logout", "whoami", "workspaces", "version"]],
   ["Accounts & platforms", ["accounts", "accounts options", "platforms"]],
   ["Media", ["media upload", "media list", "media import", "media rm", "upload-link"]],
   ["Posts", ["post", "posts", "posts show", "posts edit", "posts cancel", "posts retry", "posts rm"]],
@@ -81,7 +84,7 @@ export function mainHelp(): string {
 /** Run the CLI; returns the exit code. */
 export async function run(argv: string[], deps: Deps = {}): Promise<number> {
   if (argv.includes("--no-color")) setColor(false);
-  if (argv[0] === "--version" || argv[0] === "-v" || argv[0] === "version") {
+  if (argv[0] === "--version" || argv[0] === "-v") {
     println(VERSION);
     return 0;
   }
@@ -104,6 +107,18 @@ export async function run(argv: string[], deps: Deps = {}): Promise<number> {
     return 2;
   }
   const cmd = COMMANDS.find((c) => c.name === name)!;
+  const state: { ctx?: Ctx } = {};
+  const code = await execute(cmd, rest, deps, state);
+  // Warn once (stderr) when the server's API is outside what this CLI supports; most useful when a command failed.
+  const api = state.ctx?.usedApi;
+  if (api && !state.ctx!.env.POSTFLARE_NO_VERSION_CHECK && cmd.name !== "version") {
+    const warning = await pendingWarning(api, VERSION);
+    if (warning) eprintln(`${c.yellow("warning:")} ${warning}`);
+  }
+  return code;
+}
+
+async function execute(cmd: Command, rest: string[], deps: Deps, state: { ctx?: Ctx }): Promise<number> {
   try {
     const parsed = parseCommand(cmd, rest);
     if (parsed.values["no-color"]) setColor(false);
@@ -112,7 +127,8 @@ export async function run(argv: string[], deps: Deps = {}): Promise<number> {
       return 0;
     }
     process.exitCode = undefined;
-    await cmd.run(new Ctx(parsed, deps), parsed);
+    state.ctx = new Ctx(parsed, deps);
+    await cmd.run(state.ctx, parsed);
     return typeof process.exitCode === "number" ? process.exitCode : 0;
   } catch (err) {
     if (err instanceof UsageError) {
