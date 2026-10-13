@@ -194,3 +194,23 @@ describe("nostr publish", () => {
     await expect(nostr.publish(testContext(fetch), testAccount({ credentials: {} }), post())).rejects.toMatchObject({ kind: "auth" });
   });
 });
+
+describe("nostr deterministic events", () => {
+  const scheduled = Date.UTC(2026, 9, 1, 12, 0, 0);
+
+  it("signs the same event id for the same post across publish calls", async () => {
+    const p = post({ scheduledAt: scheduled, createdAt: scheduled - 86_400_000 });
+    const one = relayFetch({ "https://r1.example": acceptAll });
+    const two = relayFetch({ "https://r1.example": acceptAll });
+    const a = await nostr.publish(testContext(one.fetch), account(), p);
+    const b = await nostr.publish(testContext(two.fetch), account(), p);
+    expect(a.status === "published" && b.status === "published" && a.externalId === b.externalId).toBe(true);
+    expect(one.sent[0].msg[1].created_at).toBe(scheduled / 1000);
+  });
+
+  it("orders replies after the root and accepts a relay's duplicate answer", async () => {
+    expect(noteTemplate(post({ id: "p1-r2", scheduledAt: scheduled })).created_at).toBe(scheduled / 1000 + 2);
+    const { fetch } = relayFetch({ "https://r1.example": (msg, reply) => reply(["OK", msg[1].id, false, "duplicate: already have this event"]) });
+    await expect(nostr.publish(testContext(fetch), account(), post({ scheduledAt: scheduled }))).resolves.toMatchObject({ status: "published" });
+  });
+});

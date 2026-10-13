@@ -30,6 +30,8 @@ export interface AppSettings {
   encryptionKeyFromSecret?: boolean;
   /** "Enable experimental integrations" (providers on unofficial APIs). */
   experimentalIntegrations?: boolean;
+  /** Days before unused media is removed by the daily cleanup; 0 = keep forever. */
+  mediaRetentionDays?: number;
 }
 
 export interface PlatformConfig {

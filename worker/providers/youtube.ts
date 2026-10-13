@@ -145,7 +145,14 @@ export function videoResource(post: PublishPost) {
   };
 }
 
-/** Send one PUT to the resumable session. Returns the next offset, or the created video. */
+/**
+ * Send one PUT to the resumable session. Returns the next offset, or the created video.
+ *
+ * Not a `commit: true` request: one resumable session creates at most one video, so a PUT whose answer was lost is
+ * retried safely: the next call probes the same session, which answers 308 (bytes still missing) or 200/201 with
+ * the video it already created. Only a new session (a new `publish`) could duplicate the video, and checkStatus
+ * never opens one. (docs/provider-brief.md "Commit semantics")
+ */
 async function putSession(
   ctx: ProviderContext,
   token: string,
@@ -173,6 +180,8 @@ async function putSession(
     return { offset: m ? Number(m[1]) + 1 : 0 };
   }
   if (res.status === 200 || res.status === 201) {
+    // The session created the video: from here on a failure must never lead to a new upload.
+    if (ctx.commit) ctx.commit.sent = ctx.commit.accepted = true;
     const video = await res.json<{ id: string }>();
     return { videoId: video.id };
   }
@@ -372,6 +381,7 @@ export const youtube: Provider = {
       profileUrl: c.snippet?.customUrl ? `https://www.youtube.com/${c.snippet.customUrl}` : `https://www.youtube.com/channel/${c.id}`,
       credentials: tok.credentials,
       expiresAt: tok.expiresAt,
+      refreshExpiresAt: tok.refreshExpiresAt,
       meta: { channelId: c.id, country: c.snippet?.country ?? null },
     }));
   },
@@ -427,6 +437,7 @@ export const youtube: Provider = {
       token: String(account.credentials.accessToken),
       query: { part: "snippet" },
       json: { snippet: { videoId: target.rootId, topLevelComment: { snippet: { textOriginal: post.content } } } },
+      commit: true,
     });
     return { externalId: res.id, url: `https://www.youtube.com/watch?v=${target.rootId}&lc=${res.id}` };
   },

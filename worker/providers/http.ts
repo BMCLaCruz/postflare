@@ -1,5 +1,7 @@
-import { ProviderError, kindForStatus, type ProviderErrorKind } from "./errors";
+import { ProviderError, commitKindForStatus, kindForStatus, type ProviderErrorKind } from "./errors";
 import type { ProviderContext } from "./types";
+
+type HttpContext = Pick<ProviderContext, "fetch"> & Partial<Pick<ProviderContext, "commit">>;
 
 export interface RequestOptions extends Omit<RequestInit, "body"> {
   /** JSON body (sets content-type). */
@@ -13,6 +15,13 @@ export interface RequestOptions extends Omit<RequestInit, "body"> {
   query?: Record<string, string | number | boolean | undefined | null>;
   /** Map an error response to a kind (e.g. 400 with "invalid_token" -> auth). */
   classify?: (status: number, body: any) => ProviderErrorKind | undefined;
+  /**
+   * This request creates the post (or otherwise makes it public): the irreversible call of a publish. A network
+   * error, timeout or 5xx then becomes ProviderError("ambiguous") instead of "transient": the request may have
+   * reached the platform, so it is never retried automatically (the post goes to `needs_check`). Leave it off for
+   * calls the platform deduplicates (idempotency key, deterministic id): those may be retried.
+   */
+  commit?: boolean;
 }
 
 export function withQuery(url: string, query?: RequestOptions["query"]): string {
@@ -23,8 +32,8 @@ export function withQuery(url: string, query?: RequestOptions["query"]): string 
 }
 
 /** fetch + error mapping. Returns the raw Response on 2xx. */
-export async function request(ctx: Pick<ProviderContext, "fetch">, url: string, opts: RequestOptions = {}): Promise<Response> {
-  const { json, form, token, query, classify, headers: h, body, ...init } = opts;
+export async function request(ctx: HttpContext, url: string, opts: RequestOptions = {}): Promise<Response> {
+  const { json, form, token, query, classify, commit, headers: h, body, ...init } = opts;
   const headers = new Headers(h);
   let finalBody: BodyInit | null | undefined = body;
   if (json !== undefined) {
@@ -39,11 +48,14 @@ export async function request(ctx: Pick<ProviderContext, "fetch">, url: string, 
   if (token) headers.set("authorization", `Bearer ${token}`);
   if (!headers.has("user-agent")) headers.set("user-agent", "postflare/1.0");
 
+  if (commit && ctx.commit) ctx.commit.sent = true;
   let res: Response;
   try {
     res = await ctx.fetch(withQuery(url, query), { ...init, headers, body: finalBody });
   } catch (err) {
-    throw new ProviderError(`Network error calling ${new URL(url).host}: ${(err as Error).message}`, "transient");
+    const host = new URL(url).host;
+    if (commit) throw new ProviderError(`Network error calling ${host} while creating the post: ${(err as Error).message}`, "ambiguous");
+    throw new ProviderError(`Network error calling ${host}: ${(err as Error).message}`, "transient");
   }
   if (!res.ok) {
     const text = await res.text().catch(() => "");
@@ -51,13 +63,52 @@ export async function request(ctx: Pick<ProviderContext, "fetch">, url: string, 
     try {
       parsed = JSON.parse(text);
     } catch {}
-    const kind = classify?.(res.status, parsed) ?? kindForStatus(res.status);
+    const fallback = commit ? commitKindForStatus(res.status) : kindForStatus(res.status);
+    let kind = classify?.(res.status, parsed) ?? fallback;
+    // A classifier may call a 5xx "transient"; on a commit request that is still ambiguous.
+    if (commit && kind === "transient") kind = "ambiguous";
     throw new ProviderError(`${new URL(url).host} ${res.status}: ${describe(parsed) || res.statusText}`, kind, res.status, parsed);
   }
+  if (commit && ctx.commit) ctx.commit.accepted = true;
   return res;
 }
 
-export async function requestJson<T = any>(ctx: Pick<ProviderContext, "fetch">, url: string, opts: RequestOptions = {}): Promise<T> {
+/**
+ * Run a commit that does not go through `request` (websockets, a provider's own fetch loop...). Marks the commit as
+ * sent before `fn`, accepted after it, and turns unknown or transient failures into ProviderError("ambiguous").
+ * ProviderErrors of other kinds (a definite refusal: invalid, auth, rate_limit) pass through unchanged.
+ */
+export async function commitCall<T>(ctx: HttpContext, fn: () => Promise<T>): Promise<T> {
+  if (ctx.commit) ctx.commit.sent = true;
+  let out: T;
+  try {
+    out = await fn();
+  } catch (err) {
+    if (err instanceof ProviderError && err.kind !== "transient") throw err;
+    throw new ProviderError(`Could not confirm the post was created: ${(err as Error)?.message ?? String(err)}`, "ambiguous");
+  }
+  if (ctx.commit) ctx.commit.accepted = true;
+  return out;
+}
+
+/**
+ * A commit whose API reports refusals in a 2xx body (Graph `error`, Slack `ok: false`, Reddit `json.errors`, GraphQL
+ * `errors`...): `send` makes the `commit: true` request, `check` throws on such a body. A refusal created nothing, so
+ * the `accepted` mark `request` set is undone (it keeps the value it had before, e.g. from an earlier commit).
+ */
+export async function checkedCommit<T>(ctx: HttpContext, send: () => Promise<T>, check: (out: T) => void): Promise<T> {
+  const before = ctx.commit?.accepted ?? false;
+  const out = await send();
+  try {
+    check(out);
+  } catch (err) {
+    if (ctx.commit) ctx.commit.accepted = before;
+    throw err;
+  }
+  return out;
+}
+
+export async function requestJson<T = any>(ctx: HttpContext, url: string, opts: RequestOptions = {}): Promise<T> {
   const res = await request(ctx, url, opts);
   const text = await res.text();
   if (!text) return undefined as T;

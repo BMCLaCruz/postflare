@@ -93,6 +93,21 @@ export function DashboardPage() {
         </div>
       )}
 
+      {canRead && !!o?.counts.needs_check && (
+        <div className="mb-6 flex flex-wrap items-center gap-3 rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-900 ring-1 ring-amber-200 dark:bg-amber-950/40 dark:text-amber-200 dark:ring-amber-900">
+          <AlertTriangle className="size-5 shrink-0 text-amber-500" />
+          <span className="flex-1">
+            <strong className="font-semibold">
+              {o.counts.needs_check} {o.counts.needs_check === 1 ? "post needs" : "posts need"} a check.
+            </strong>{" "}
+            We couldn't confirm whether the platform accepted {o.counts.needs_check === 1 ? "it" : "them"}. Check the profile, then mark as published or retry.
+          </span>
+          <Link to="/posts?status=needs_check" className="inline-flex items-center gap-1 font-medium text-amber-800 hover:underline dark:text-amber-300">
+            Review <ArrowRight className="size-4" />
+          </Link>
+        </div>
+      )}
+
       {showChecklist && (
         <Card className="mb-6 overflow-hidden">
           <div className="border-b border-zinc-100 bg-gradient-to-r from-brand-50 to-rose-50 px-5 py-4 dark:border-zinc-800 dark:from-brand-950/40 dark:to-rose-950/30">
@@ -225,6 +240,10 @@ export function DashboardPage() {
                     p.status === "failed" ? (
                       <span className="truncate text-red-600 dark:text-red-400" title={p.error ?? undefined}>
                         Failed{p.error ? `: ${truncate(p.error, 70)}` : ""}
+                      </span>
+                    ) : p.status === "needs_check" ? (
+                      <span className="truncate text-amber-700 dark:text-amber-400" title={p.error ?? undefined}>
+                        Needs check: open it to mark as published or retry
                       </span>
                     ) : (
                       <span className="text-emerald-600 dark:text-emerald-400">Published {relativeTime(p.publishedAt ?? p.updatedAt)}</span>

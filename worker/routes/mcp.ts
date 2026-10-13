@@ -181,7 +181,9 @@ export function mcpRoutes(api: { fetch: (req: Request, env: Env, ctx: ExecutionC
         }),
     },
     list_posts: {
-      description: "List posts, optionally filtered by ISO date range, status (comma separated) or account.",
+      description:
+        "List posts, optionally filtered by ISO date range, status (comma separated: draft, scheduled, publishing, published, failed, cancelled, needs_check) or account. " +
+        "needs_check = the platform may or may not have accepted the post (ambiguous failure): never retried automatically, see resolve_post.",
       inputSchema: {
         type: "object",
         properties: { from: { type: "string" }, to: { type: "string" }, status: { type: "string" }, accountId: { type: "string" } },
@@ -226,6 +228,18 @@ export function mcpRoutes(api: { fetch: (req: Request, env: Env, ctx: ExecutionC
       description: "Retry a failed post now.",
       inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
       run: (c, a) => call(c, "POST", `/posts/${seg(a.id)}/retry`),
+    },
+    resolve_post: {
+      description:
+        "Resolve a needs_check post (we could not confirm whether the platform accepted it). Ask the user to check the profile first. " +
+        "`published: true` marks it published (optionally with the live post `url`); `published: false` publishes it again now, " +
+        "which duplicates the post if the platform did accept the first attempt.",
+      inputSchema: {
+        type: "object",
+        properties: { id: { type: "string" }, published: { type: "boolean" }, url: { type: "string" } },
+        required: ["id", "published"],
+      },
+      run: (c, a) => call(c, "POST", `/posts/${seg(a.id)}/resolve`, { published: a.published === true, url: a.url ?? null }),
     },
     get_analytics_summary: {
       description:

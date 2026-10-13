@@ -1,5 +1,5 @@
 import { ProviderError } from "./errors";
-import { requestJson, type RequestOptions } from "./http";
+import { checkedCommit, requestJson, type RequestOptions } from "./http";
 import type { AccountRecord, Provider, ProviderContext } from "./types";
 
 // Always the www host: the bare domain redirects and drops the Authorization header.
@@ -7,9 +7,14 @@ const API = "https://www.moltbook.com/api/v1";
 
 /** Moltbook answers `{ success: false, error, hint }`, sometimes with a 2xx status. */
 async function molt<T = any>(ctx: ProviderContext, path: string, opts: RequestOptions = {}): Promise<T> {
-  const res = await requestJson(ctx, `${API}${path}`, opts);
-  if (res && res.success === false) throw new ProviderError(`Moltbook: ${res.error || "request failed"}${res.hint ? ` (${res.hint})` : ""}`, "invalid", 200, res);
-  return res as T;
+  // A 2xx `success: false` on a commit created nothing (checkedCommit keeps it a plain refusal).
+  return checkedCommit(
+    ctx,
+    () => requestJson<any>(ctx, `${API}${path}`, opts),
+    (res) => {
+      if (res && res.success === false) throw new ProviderError(`Moltbook: ${res.error || "request failed"}${res.hint ? ` (${res.hint})` : ""}`, "invalid", 200, res);
+    },
+  ) as Promise<T>;
 }
 
 const token = (account: AccountRecord) => String(account.credentials.accessToken);
@@ -92,6 +97,7 @@ export const moltbook: Provider = {
       method: "POST",
       token: token(account),
       json: { submolt: String(s.submolt || "general").replace(/^m\//, ""), title, ...(s.url ? { url: String(s.url) } : { content: post.content }) },
+      commit: true,
     });
     const id = String(res.post.id);
     return { status: "published", externalId: id, url: `https://www.moltbook.com/post/${id}` };
@@ -102,6 +108,7 @@ export const moltbook: Provider = {
       method: "POST",
       token: token(account),
       json: { content: post.content, ...(target.parentId !== target.rootId ? { parent_id: target.parentId } : {}) },
+      commit: true,
     });
     return { externalId: String(res.comment.id), url: `https://www.moltbook.com/post/${target.rootId}` };
   },

@@ -1,5 +1,6 @@
 import type { MediaDTO } from "../../shared/types";
 import type { MediaAccess, MediaItem } from "../providers/types";
+import { ProviderError } from "../providers/errors";
 import { fixedLength } from "../providers/multipart";
 import { sign } from "./crypto";
 
@@ -56,8 +57,9 @@ export async function loadMediaItems(env: Env, base: string, ids: string[]): Pro
   const items: MediaItem[] = [];
   for (const id of ids) {
     const row = byId.get(id);
-    if (!row) throw new Error(`Media ${id} not found`);
-    if (row.status !== "ready") throw new Error(`Media ${row.filename} has not finished uploading`);
+    // Definite, pre-send failures: the post fails (not retried, nothing reached the platform).
+    if (!row) throw new ProviderError(`Media ${id} not found (it was deleted)`, "invalid");
+    if (row.status !== "ready") throw new ProviderError(`Media ${row.filename} has not finished uploading`, "invalid");
     items.push({
       id: row.id,
       kind: row.kind,
@@ -69,6 +71,7 @@ export async function loadMediaItems(env: Env, base: string, ids: string[]): Pro
       duration: row.duration,
       alt: row.alt,
       url: await publicMediaUrl(env, base, row),
+      r2Key: row.r2_key,
     });
   }
   return items;
@@ -76,13 +79,14 @@ export async function loadMediaItems(env: Env, base: string, ids: string[]): Pro
 
 export function mediaAccess(env: Env): MediaAccess {
   const keyFor = async (item: MediaItem) => {
+    if (item.r2Key) return item.r2Key;
     const row = await env.DB.prepare("SELECT r2_key FROM media WHERE id = ?").bind(item.id).first<{ r2_key: string }>();
     if (!row) throw new Error(`Media ${item.id} not found`);
     return row.r2_key;
   };
   const get = async (item: MediaItem, range?: R2Range) => {
     const obj = await env.MEDIA.get(await keyFor(item), range ? { range } : undefined);
-    if (!obj) throw new Error(`Media file ${item.filename} is missing from storage`);
+    if (!obj) throw new ProviderError(`Media file ${item.filename} is missing from storage`, "invalid");
     return obj;
   };
   return {

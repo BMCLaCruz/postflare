@@ -1,6 +1,6 @@
 import type { FieldOption } from "../../shared/types";
 import { missingScope, ProviderError } from "./errors";
-import { clientFields, expiresAt, oauthToken, requestJson, requireApp, type RequestOptions } from "./http";
+import { checkedCommit, clientFields, expiresAt, oauthToken, requestJson, requireApp, type RequestOptions } from "./http";
 import { postFormStreaming, xmlTag } from "./s3-form-upload";
 import type { AccountRecord, MediaItem, MetricValues, PostMetricsResult, Provider, ProviderContext, PublishResult } from "./types";
 
@@ -295,8 +295,12 @@ export const reddit: Provider = {
       Object.assign(form, { kind: "self", text: post.content });
     }
 
-    const res = await rd(ctx, account, "/api/submit", { method: "POST", form });
-    checkErrors(res, "post");
+    // The submit is the commit; Reddit reports refusals (rate limit, rules) as 200 + json.errors.
+    const res = await checkedCommit(
+      ctx,
+      () => rd(ctx, account, "/api/submit", { method: "POST", form, commit: true }),
+      (r) => checkErrors(r, "post"),
+    );
     const data = res?.json?.data ?? {};
     if (data.name || data.id) {
       const name = data.name ?? `t3_${data.id}`;
@@ -326,11 +330,11 @@ export const reddit: Provider = {
   async reply(ctx, account, target, post) {
     if (!target.rootId.startsWith("t3_")) throw new ProviderError("Reddit: the post id is unknown, cannot comment", "invalid");
     if (post.media.length) ctx.log("warn", "Reddit comments are text-only; media was skipped");
-    const res = await rd(ctx, account, "/api/comment", {
-      method: "POST",
-      form: { api_type: "json", thing_id: target.rootId, text: post.content },
-    });
-    checkErrors(res, "comment");
+    const res = await checkedCommit(
+      ctx,
+      () => rd(ctx, account, "/api/comment", { method: "POST", form: { api_type: "json", thing_id: target.rootId, text: post.content }, commit: true }),
+      (r) => checkErrors(r, "comment"),
+    );
     const c = res?.json?.data?.things?.[0]?.data ?? {};
     return { externalId: c.name ?? `t1_${c.id}`, url: c.permalink ? `https://www.reddit.com${c.permalink}` : null };
   },

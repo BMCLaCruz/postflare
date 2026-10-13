@@ -79,7 +79,9 @@ export function tiktokReason(text: string): { message: string; kind: ProviderErr
 export function tiktokError(prefix: string, body: unknown, fallbackKind: ProviderErrorKind = "invalid", status?: number) {
   const text = typeof body === "string" ? body : JSON.stringify(body ?? {});
   const r = tiktokReason(text);
-  return new ProviderError(`${prefix}: ${r?.message ?? text.slice(0, 300)}`, r?.kind ?? fallbackKind, status, body);
+  // A failed commit stays ambiguous unless TikTok names a definite refusal (a "server error" code is not one).
+  const kind = r && !(fallbackKind === "ambiguous" && r.kind === "transient") ? r.kind : fallbackKind;
+  return new ProviderError(`${prefix}: ${r?.message ?? text.slice(0, 300)}`, kind, status, body);
 }
 
 /** `classify` for http helpers: TikTok error codes override the status mapping. */

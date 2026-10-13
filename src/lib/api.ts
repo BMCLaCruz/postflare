@@ -25,11 +25,13 @@ import type {
   WorkspaceDTO,
   FieldOption,
   MediaDTO,
+  MediaUsageDTO,
   Overview,
   PlatformConfig,
   PostDTO,
   PostWithLogs,
   Provider,
+  ResolvePostInput,
   ThreadItem,
 } from "./types";
 
@@ -179,6 +181,7 @@ export const api = {
   },
   media: {
     list: (limit = 60, before?: number) => get<MediaDTO[]>(`/media${qs({ limit, before })}`),
+    usage: () => get<MediaUsageDTO>("/media/usage"),
     setAlt: (id: string, alt: string | null) => request<MediaDTO>("PATCH", `/media/${id}`, { alt }),
     remove: (id: string) => request<{ ok: true }>("DELETE", `/media/${id}`),
     fromUrl: (url: string) => request<MediaDTO>("POST", "/media/from-url", { url }),
@@ -190,6 +193,8 @@ export const api = {
     create: (input: CreatePostsInput) => request<PostDTO[]>("POST", "/posts", input),
     update: (id: string, patch: PostPatch) => request<PostDTO>("PATCH", `/posts/${id}`, patch),
     retry: (id: string) => request<PostDTO>("POST", `/posts/${id}/retry`),
+    /** needs_check only: mark it published (optionally with the live URL) or publish it again. */
+    resolve: (id: string, input: ResolvePostInput) => request<PostDTO>("POST", `/posts/${id}/resolve`, input),
     cancel: (id: string) => request<PostDTO>("POST", `/posts/${id}/cancel`),
     remove: (id: string) => request<{ ok: true }>("DELETE", `/posts/${id}`),
   },
@@ -202,7 +207,7 @@ export const api = {
   },
   settings: {
     get: () => get<AppSettings>("/settings"),
-    save: (body: { publicUrl?: string; timezone?: string; experimentalIntegrations?: boolean }) => request<{ ok: true }>("PUT", "/settings", body),
+    save: (body: { publicUrl?: string; timezone?: string; experimentalIntegrations?: boolean; mediaRetentionDays?: number }) => request<{ ok: true }>("PUT", "/settings", body),
   },
   version: () => get<VersionDTO>("/version"),
   updates: {

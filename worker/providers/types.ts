@@ -19,6 +19,11 @@ export interface ConnectedAccount {
   credentials: Credentials;
   /** Access token expiry, ms epoch. null/undefined = does not expire or unknown. */
   expiresAt?: number | null;
+  /**
+   * Expiry of the credential `refresh` uses (refresh token, or the long-lived token itself for Instagram/Threads),
+   * ms epoch, when the platform says. The cron refreshes the account within 7 days of it so it never lapses.
+   */
+  refreshExpiresAt?: number | null;
   /** Non-secret data the provider needs later (page id, instance url, owner urn...). */
   meta?: Record<string, unknown>;
 }
@@ -37,6 +42,8 @@ export interface AccountRecord {
 export interface CredentialsUpdate {
   credentials: Credentials;
   expiresAt?: number | null;
+  /** See ConnectedAccount.refreshExpiresAt. undefined = unchanged. */
+  refreshExpiresAt?: number | null;
   meta?: Record<string, unknown>;
 }
 
@@ -53,11 +60,17 @@ export interface MediaItem {
   alt: string | null;
   /** Public, unauthenticated URL the platform can fetch the file from (supports Range requests). */
   url: string;
+  /** Storage key (internal: lets `ctx.media` read the file without a D1 lookup per chunk). */
+  r2Key?: string;
 }
 
 export interface PublishPost {
   /** Our post id; useful as an idempotency key. */
   id: string;
+  /** When the post was scheduled (ms epoch). Stable across automatic retries of one publish; a user Retry changes it. */
+  scheduledAt?: number;
+  /** When the post was created (ms epoch). Never changes, even across user retries. */
+  createdAt?: number;
   content: string;
   media: MediaItem[];
   settings: Record<string, any>;
@@ -101,6 +114,18 @@ export interface MediaAccess {
   ): Promise<Blob>;
 }
 
+/**
+ * Tracks the commit request of one publish / checkStatus / reply call (docs/provider-brief.md "Commit semantics").
+ * Set by http.ts (`request(..., { commit: true })`, `commitCall`); read by the workflow to decide whether a failure
+ * may be retried or must go to `needs_check`.
+ */
+export interface CommitState {
+  /** A commit request was started: from here on, a failure may have created the post. */
+  sent: boolean;
+  /** A commit request succeeded: the post exists on the platform. */
+  accepted: boolean;
+}
+
 export interface ProviderContext {
   env: Env;
   /** Use this instead of the global fetch so tests can intercept requests. */
@@ -112,6 +137,8 @@ export interface ProviderContext {
   baseUrl: string;
   media: MediaAccess;
   log(level: "info" | "warn" | "error", message: string): void;
+  /** Present in publishing workflow steps. Mutated in place by http.ts; never replace the object. */
+  commit?: CommitState;
 }
 
 /** A published post whose metrics are requested (`postMetrics`). */
@@ -148,6 +175,12 @@ export interface Provider extends Omit<ProviderInfo, "auth" | "analytics" | "sta
   auth: ProviderInfo["auth"];
   /** Defaults to "beta" (see ProviderStatus). */
   status?: ProviderInfo["status"];
+  /**
+   * Published posts keep linking to our `/m/` media URLs (images in markdown/HTML, embeds, URLs in the payload)
+   * instead of the platform storing its own copy. Media of such posts is never removed by the retention sweep
+   * (lib/media-lifecycle.ts).
+   */
+  hotlinksMedia?: boolean;
   /** The platform only accepts redirect URLs ending in "/" (TikTok for Business). */
   redirectTrailingSlash?: boolean;
   /** Build the authorization URL (oauth2). `codeChallenge` is S256 PKCE of `codeVerifier`. */

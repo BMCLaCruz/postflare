@@ -76,7 +76,7 @@ export interface MediaDTO {
   createdAt: number;
 }
 
-export type PostStatus = "draft" | "scheduled" | "publishing" | "published" | "failed" | "cancelled";
+export type PostStatus = "draft" | "scheduled" | "publishing" | "published" | "failed" | "cancelled" | "needs_check";
 
 export interface ThreadItem {
   content: string;
@@ -101,6 +101,14 @@ export interface PostDTO {
   updatedAt: number;
   publishedAt: number | null;
   logs?: Array<{ id: number; level: string; message: string; createdAt: number }>;
+}
+
+/** Body of POST /api/posts/:id/resolve (only for `needs_check` posts). */
+export interface ResolvePostInput {
+  /** true: it is live, mark it published (optionally with its URL). false: it is not live, publish it again now. */
+  published: boolean;
+  /** Link to the live post (published: true only). */
+  url?: string | null;
 }
 
 export interface CreatePostsInput {

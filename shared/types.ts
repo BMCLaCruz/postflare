@@ -92,7 +92,12 @@ export interface ProviderInfo {
   statusNote?: string;
 }
 
-export type PostStatus = "draft" | "scheduled" | "publishing" | "published" | "failed" | "cancelled";
+/**
+ * `needs_check`: the request that creates the post failed in a way that does not tell whether the platform accepted
+ * it (network error, timeout, 5xx after sending). It is never retried automatically; the user checks the profile and
+ * resolves it (POST /api/posts/:id/resolve: mark as published, or retry anyway).
+ */
+export type PostStatus = "draft" | "scheduled" | "publishing" | "published" | "failed" | "cancelled" | "needs_check";
 
 export interface ThreadItem {
   content: string;
@@ -220,6 +225,25 @@ export interface PostDTO {
   createdAt: number;
   updatedAt: number;
   publishedAt: number | null;
+}
+
+/** Body of POST /api/posts/:id/resolve (only for `needs_check` posts). */
+export interface ResolvePostInput {
+  /** true: it is live, mark it published (optionally with its URL). false: it is not live, publish it again now. */
+  published: boolean;
+  /** Link to the live post (published: true only). */
+  url?: string | null;
+}
+
+/** GET /api/media/usage: bytes of stored media (ready and in-progress uploads). */
+export interface MediaUsageDTO {
+  workspace: { bytes: number; count: number };
+  /** Whole instance, all workspaces: instance admins only. */
+  instance: { bytes: number; count: number } | null;
+  /** R2 Free plan storage (10 GB), for reference. */
+  freeTierBytes: number;
+  /** Instance setting: media older than this is removed when no longer needed; 0 = keep forever. */
+  retentionDays: number;
 }
 
 export interface PostLogDTO {

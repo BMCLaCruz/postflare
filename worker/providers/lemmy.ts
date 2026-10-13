@@ -191,7 +191,7 @@ export const lemmy: Provider = {
       body.url = /^https?:\/\//.test(link) ? link : `https://${link}`;
       if (imageUrl) body.custom_thumbnail = imageUrl;
     } else if (imageUrl) body.url = imageUrl;
-    const res = await call(ctx, account, "/api/v3/post", { method: "POST", json: body });
+    const res = await call(ctx, account, "/api/v3/post", { method: "POST", json: body, commit: true });
     const id = String(res.post_view.post.id);
     return { status: "published", externalId: id, url: `${instance(account)}/post/${id}` };
   },
@@ -200,7 +200,7 @@ export const lemmy: Provider = {
     let content = post.content ?? "";
     const img = post.media.find((m) => m.kind === "image");
     if (img) content = `${content}\n\n![${img.alt ?? ""}](${await uploadImage(ctx, account, img)})`.trim();
-    const res = await call(ctx, account, "/api/v3/comment", { method: "POST", json: { post_id: Number(target.rootId), content } });
+    const res = await call(ctx, account, "/api/v3/comment", { method: "POST", json: { post_id: Number(target.rootId), content }, commit: true });
     const id = String(res.comment_view.comment.id);
     return { externalId: id, url: `${instance(account)}/comment/${id}` };
   },

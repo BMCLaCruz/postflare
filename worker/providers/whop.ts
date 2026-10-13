@@ -100,6 +100,7 @@ async function createForumPost(ctx: ProviderContext, tok: string, d: Draft, pare
       ...(parentId ? { parent_id: parentId } : {}),
       ...(d.fileIds.length ? { attachments: d.fileIds.map((id) => ({ id })) } : {}),
     },
+    commit: true,
   });
   if (!res?.id) throw new ProviderError("Whop did not return the forum post", "transient");
   return String(res.id);

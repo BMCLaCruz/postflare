@@ -37,6 +37,12 @@ export const MAX_POST_FAILS = 6;
 /** Due posts / accounts looked at per tick. */
 const POSTS_PER_TICK = 200;
 const ACCOUNTS_PER_TICK = 10;
+/**
+ * Limits for the scheduled run (its own cron trigger). Small enough that one invocation stays under D1's 50 queries on
+ * the Free plan even if every statement inside a batch counts: ~10 posts x 3 + 3 accounts x 2 + a few lookups.
+ * 10 posts every 15 minutes is ~960 collections a day, enough for ~70 published posts a day.
+ */
+export const CRON_METRICS_LIMITS = { posts: 10, accounts: 3 } as const;
 /** Blocked accounts (reconnect_required / not_supported) are re-checked this often. */
 const BLOCKED_RECHECK = 7 * DAY;
 /** Snapshots closer than this to the previous one replace it (manual refreshes do not pile up). */
@@ -183,12 +189,16 @@ function failPostStatement(db: D1Database, post: Pick<DuePost, "id" | "metrics_f
     .bind(fails, fails >= MAX_POST_FAILS ? null : t + backoff(fails), post.id);
 }
 
+function accountStatusStatement(db: D1Database, accountId: string, status: MetricsStatus, message: string | null, nextAt?: number | null) {
+  return db
+    .prepare(
+      `UPDATE accounts SET metrics_status = ?, metrics_message = ?, metrics_checked_at = ?${nextAt !== undefined ? ", metrics_next_at = ?" : ""} WHERE id = ?`,
+    )
+    .bind(status, message?.slice(0, 500) ?? null, now(), ...(nextAt !== undefined ? [nextAt] : []), accountId);
+}
+
 async function setAccountStatus(env: Env, accountId: string, status: MetricsStatus, message: string | null, nextAt?: number | null) {
-  await env.DB.prepare(
-    `UPDATE accounts SET metrics_status = ?, metrics_message = ?, metrics_checked_at = ?${nextAt !== undefined ? ", metrics_next_at = ?" : ""} WHERE id = ?`,
-  )
-    .bind(status, message?.slice(0, 500) ?? null, now(), ...(nextAt !== undefined ? [nextAt] : []), accountId)
-    .run();
+  await accountStatusStatement(env.DB, accountId, status, message, nextAt).run();
 }
 
 /** Contexts per provider for one tick (app config is read once). */
@@ -270,8 +280,9 @@ async function collectAccountPosts(env: Env, account: AccountRow & { is_demo?: n
         out.failed++;
       }
     }
+    // Same batch: the account's analytics status is ok again once something was collected.
+    if (out.collected) statements.push(accountStatusStatement(db, account.id, "ok", null));
     if (statements.length) await db.batch(statements);
-    if (out.collected) await setAccountStatus(env, account.id, "ok", null);
   }
   return out;
 }
@@ -354,7 +365,10 @@ const accountProviders = () => providers.filter((p) => p.accountMetrics && p.met
  * Cron: collect due account and post metrics within `budget` fetches. Demo workspaces get generated numbers.
  * Returns counts for logging/tests.
  */
-export async function collectMetrics(env: Env, opts: { budget?: number; workspaceId?: string } = {}) {
+export async function collectMetrics(
+  env: Env,
+  opts: { budget?: number; workspaceId?: string; posts?: number; accounts?: number } = {},
+) {
   const db = env.DB;
   const t = now();
   const budget: Budget = { left: opts.budget ?? TICK_FETCH_BUDGET };
@@ -363,16 +377,13 @@ export async function collectMetrics(env: Env, opts: { budget?: number; workspac
   const wsBind = opts.workspaceId ? [opts.workspaceId] : [];
   const stats = { accounts: 0, posts: 0, failed: 0, budgetLeft: 0 };
 
-  // Stop planning posts that are past the collection window (e.g. their account was disabled for months).
-  await db.prepare("UPDATE posts SET metrics_next_at = NULL WHERE metrics_next_at IS NOT NULL AND published_at < ?").bind(t - MAX_AGE - DAY).run();
-
   // 1. Account metrics, once a day. At most half the budget so posts always progress.
   const withAccountMetrics = accountProviders();
   const { results: accounts } = await db
     .prepare(
       `SELECT a.*, COALESCE(w.is_demo, 0) AS is_demo FROM accounts a LEFT JOIN workspaces w ON w.id = a.workspace_id
        WHERE a.provider IN (${withAccountMetrics.map(() => "?").join(",") || "NULL"}) AND COALESCE(a.metrics_next_at, 0) <= ? AND a.status = 'active' ${ws}
-       ORDER BY COALESCE(a.metrics_next_at, 0) LIMIT ${ACCOUNTS_PER_TICK}`,
+       ORDER BY COALESCE(a.metrics_next_at, 0) LIMIT ${opts.accounts ?? ACCOUNTS_PER_TICK}`,
     )
     .bind(...withAccountMetrics, t, ...wsBind)
     .all<AccountRow & { is_demo: number }>();
@@ -389,10 +400,11 @@ export async function collectMetrics(env: Env, opts: { budget?: number; workspac
     .prepare(
       `SELECT ${DUE_POST_COLUMNS} FROM posts p JOIN accounts a ON a.id = p.account_id LEFT JOIN workspaces w ON w.id = p.workspace_id
        WHERE p.metrics_next_at IS NOT NULL AND p.metrics_next_at <= ? AND p.status = 'published' AND p.external_id IS NOT NULL
-         AND ${ACCOUNT_COLLECTABLE("?")} ${ws}
-       ORDER BY p.metrics_next_at LIMIT ${POSTS_PER_TICK}`,
+         AND p.published_at >= ? AND ${ACCOUNT_COLLECTABLE("?")} ${ws}
+       ORDER BY p.metrics_next_at LIMIT ${opts.posts ?? POSTS_PER_TICK}`,
     )
-    .bind(t, t, ...wsBind)
+    // Posts past the collection window are skipped here; the daily `expireMetricsSchedules` stops planning them.
+    .bind(t, t - MAX_AGE - DAY, t, ...wsBind)
     .all<DuePost>();
   const byAccount = new Map<string, DuePost[]>();
   for (const p of due) {
@@ -400,10 +412,16 @@ export async function collectMetrics(env: Env, opts: { budget?: number; workspac
     if (list) list.push(p);
     else byAccount.set(p.account_id, [p]);
   }
+  // The accounts of all due posts in one query (D1 allows 50 queries per invocation on the Free plan).
+  const ids = [...byAccount.keys()];
+  const { results: dueAccounts } = ids.length
+    ? await db.prepare(`SELECT * FROM accounts WHERE id IN (${ids.map(() => "?").join(",")})`).bind(...ids).all<AccountRow>()
+    : { results: [] as AccountRow[] };
+  const accountsById = new Map(dueAccounts.map((a) => [a.id, a]));
   for (const [accountId, posts] of byAccount) {
     const demo = posts[0].is_demo === 1;
     if (!demo && budget.left <= 0) continue;
-    const account = await db.prepare("SELECT * FROM accounts WHERE id = ?").bind(accountId).first<AccountRow>();
+    const account = accountsById.get(accountId);
     if (!account) continue;
     const r = await collectAccountPosts(env, { ...account, is_demo: posts[0].is_demo }, posts, budget, cache);
     stats.posts += r.collected;
@@ -411,6 +429,17 @@ export async function collectMetrics(env: Env, opts: { budget?: number; workspac
   }
   stats.budgetLeft = budget.left;
   return stats;
+}
+
+/**
+ * Daily cron: stop planning posts that are past the collection window (e.g. their account was disabled for months).
+ * It reads every planned post, so it runs once a day instead of on every tick.
+ */
+export async function expireMetricsSchedules(env: Env): Promise<number> {
+  const res = await env.DB.prepare("UPDATE posts SET metrics_next_at = NULL WHERE metrics_next_at IS NOT NULL AND published_at < ?")
+    .bind(now() - MAX_AGE - DAY)
+    .run();
+  return res.meta.changes ?? 0;
 }
 
 /** Manual refresh of one post (POST /api/analytics/refresh). Resets its failure count. */

@@ -56,6 +56,8 @@ function toAccount(user: Me, token: string, expiresIn?: number): ConnectedAccoun
     profileUrl: user.username ? `https://www.instagram.com/${user.username}/` : null,
     credentials: { accessToken: token },
     expiresAt: expiresAt(expiresIn ?? 60 * 24 * 3600),
+    // The long-lived token refreshes itself (ig_refresh_token): it must be refreshed before it expires.
+    refreshExpiresAt: expiresAt(expiresIn ?? 60 * 24 * 3600),
     meta: { accountType: user.account_type ?? null },
   };
 }
@@ -124,7 +126,8 @@ export const instagramStandalone: Provider = {
     const res = await graph<{ access_token: string; expires_in?: number }>(ctx, "https://graph.instagram.com/refresh_access_token", {
       query: { grant_type: "ig_refresh_token", access_token: account.credentials.accessToken as string },
     });
-    return { credentials: { ...account.credentials, accessToken: res.access_token }, expiresAt: expiresAt(res.expires_in ?? 60 * 24 * 3600) };
+    const exp = expiresAt(res.expires_in ?? 60 * 24 * 3600);
+    return { credentials: { ...account.credentials, accessToken: res.access_token }, expiresAt: exp, refreshExpiresAt: exp };
   },
 
   publish: (ctx, account, post) => instagramCreate(ctx, IG_GRAPH, igAccount(account), post),

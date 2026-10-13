@@ -95,6 +95,8 @@ export async function liExchangeCode(ctx: ProviderContext, code: string) {
   return {
     credentials: { accessToken: tok.access_token, refreshToken: tok.refresh_token },
     expiresAt: expiresAt(tok.expires_in),
+    // Programmatic refresh tokens live 365 days and are not extended by refreshing.
+    refreshExpiresAt: tok.refresh_token ? expiresAt(tok.refresh_token_expires_in) : null,
   };
 }
 
@@ -117,6 +119,7 @@ export async function liRefresh(ctx: ProviderContext, account: AccountRecord): P
   return {
     credentials: { ...account.credentials, accessToken: tok.access_token, refreshToken: tok.refresh_token ?? refreshToken },
     expiresAt: expiresAt(tok.expires_in),
+    ...(tok.refresh_token_expires_in ? { refreshExpiresAt: expiresAt(tok.refresh_token_expires_in) } : {}),
   };
 }
 
@@ -242,7 +245,7 @@ async function createPost(ctx: ProviderContext, tok: string, d: PostDraft): Prom
   } else if (d.media.length > 1) {
     body.content = { multiImage: { images: d.media.map((m) => ({ id: m.urn, ...(m.alt ? { altText: m.alt.slice(0, 4086) } : {}) })) } };
   }
-  const res = await li(ctx, `${REST}/posts`, tok, { method: "POST", json: body });
+  const res = await li(ctx, `${REST}/posts`, tok, { method: "POST", json: body, commit: true });
   const urn = res.headers.get("x-restli-id") ?? res.headers.get("x-linkedin-id");
   if (!urn) throw new ProviderError("LinkedIn did not return the post id", "transient");
   return { status: "published", externalId: urn, url: `https://www.linkedin.com/feed/update/${urn}/` };
@@ -346,6 +349,7 @@ export async function liComment(ctx: ProviderContext, account: AccountRecord, ac
   const res = await li(ctx, `${REST}/socialActions/${encodeURIComponent(rootId)}/comments`, tokenOf(account), {
     method: "POST",
     json: { actor, object: rootId, message: { text: post.content } },
+    commit: true,
   });
   const text = await res.text();
   const body = text ? JSON.parse(text) : {};

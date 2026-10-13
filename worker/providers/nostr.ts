@@ -220,7 +220,18 @@ function mediaTag(m: MediaItem): string[] {
   return tag;
 }
 
-export function noteTemplate(post: PublishPost): { kind: number; content: string; tags: string[][] } {
+/**
+ * Event timestamp derived from the post, so a retried publish signs the same event id and relays drop the copy
+ * (that is why relay sends are not commits, docs/provider-brief.md "Commit semantics"). Replies (`${postId}-r${n}`)
+ * add their index to keep the thread in order.
+ */
+export function noteCreatedAt(post: Pick<PublishPost, "id" | "scheduledAt" | "createdAt">): number {
+  const base = Math.floor((post.scheduledAt ?? post.createdAt ?? Date.now()) / 1000);
+  const reply = post.id.match(/-r(\d+)$/);
+  return base + (reply ? Number(reply[1]) : 0);
+}
+
+export function noteTemplate(post: PublishPost): { kind: number; content: string; tags: string[][]; created_at: number } {
   const urls = post.media.map((m) => m.url);
   const content = [post.content?.trim(), ...urls].filter(Boolean).join("\n\n");
   const tags: string[][] = post.media.map(mediaTag);
@@ -229,7 +240,7 @@ export function noteTemplate(post: PublishPost): { kind: number; content: string
     if (!tags.some((x) => x[0] === "t" && x[1] === t)) tags.push(["t", t]);
   }
   if (post.settings.contentWarning) tags.push(["content-warning", String(post.settings.contentWarning)]);
-  return { kind: 1, content, tags };
+  return { kind: 1, content, tags, created_at: noteCreatedAt(post) };
 }
 
 /** Each relay is one WebSocket subrequest: cap them to stay within the Free plan budget (see budget.ts). */
@@ -240,7 +251,7 @@ const relaysOf = (account: AccountRecord) => {
   return (Array.isArray(r) && r.length ? (r as string[]) : DEFAULT_RELAYS).slice(0, MAX_RELAYS);
 };
 
-async function sendNote(ctx: ProviderContext, account: AccountRecord, template: { kind: number; content: string; tags: string[][] }) {
+async function sendNote(ctx: ProviderContext, account: AccountRecord, template: { kind: number; content: string; tags: string[][]; created_at?: number }) {
   const sk = account.credentials.privateKey as string;
   if (!sk) throw new ProviderError("Nostr private key missing, reconnect the account", "auth");
   const relays = relaysOf(account);
@@ -252,6 +263,7 @@ async function sendNote(ctx: ProviderContext, account: AccountRecord, template: 
 }
 
 export const nostr: Provider = {
+  hotlinksMedia: true,
   id: "nostr",
   name: "Nostr",
   color: "8E30EB",

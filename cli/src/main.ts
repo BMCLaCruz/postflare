@@ -3,7 +3,7 @@ import { accountOptions, accounts, platforms } from "./commands/accounts.js";
 import { analytics, analyticsRefresh, analyticsTop } from "./commands/analytics.js";
 import { login, logout, whoami, workspaces } from "./commands/auth.js";
 import { mediaAlias, mediaImport, mediaList, mediaRm, mediaUpload } from "./commands/media.js";
-import { post, posts, postsCancel, postsEdit, postsRetry, postsRm, postsShow } from "./commands/posts.js";
+import { post, posts, postsCancel, postsEdit, postsResolve, postsRetry, postsRm, postsShow } from "./commands/posts.js";
 import { skillInstall } from "./commands/skill.js";
 import { uploadLink } from "./commands/uploadlink.js";
 import { version } from "./commands/version.js";
@@ -32,6 +32,7 @@ export const COMMANDS: Command[] = [
   postsEdit,
   postsCancel,
   postsRetry,
+  postsResolve,
   postsRm,
   analytics,
   analyticsTop,
@@ -45,7 +46,7 @@ const GROUPS: Array<[string, string[]]> = [
   ["Setup", ["login", "logout", "whoami", "workspaces", "version", "skill install"]],
   ["Accounts & platforms", ["accounts", "accounts options", "platforms"]],
   ["Media", ["media upload", "media list", "media import", "media rm", "upload-link"]],
-  ["Posts", ["post", "posts", "posts show", "posts edit", "posts cancel", "posts retry", "posts rm"]],
+  ["Posts", ["post", "posts", "posts show", "posts edit", "posts cancel", "posts retry", "posts resolve", "posts rm"]],
   ["Analytics", ["analytics", "analytics top", "analytics refresh"]],
 ];
 

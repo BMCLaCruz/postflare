@@ -6,7 +6,8 @@ Each platform is one file in `worker/providers/<id>.ts` exporting a `Provider` o
 ## Read first
 - `worker/providers/types.ts` — the contract. `worker/providers/http.ts` — `request`, `requestJson`, `oauthToken`, `expiresAt`, `requireApp`, `clientFields`, `sleep`. `worker/providers/errors.ts` — `ProviderError(kind)`.
 - `worker/providers/webhook.ts` — a small finished example.
-- `worker/workflow.ts` — how publish / checkStatus / reply are called (each is a retried workflow step).
+- `worker/workflow.ts` — how publish / checkStatus / reply are called (each is one workflow step; failures are classified, see "Commit semantics").
+- `http.ts` also has `commit: true`, `commitCall` and `checkedCommit` for the request that creates the post (see "Commit semantics").
 - `test/helpers.ts` — `mockFetch`, `testContext`, `testAccount`, `image()`, `video()` for tests.
 - Reference implementation ([Postiz](https://github.com/gitroomhq/postiz-app), AGPL-3.0, NestJS):
   [`libraries/nestjs-libraries/src/integrations/social/<name>.provider.ts`](https://github.com/gitroomhq/postiz-app/tree/main/libraries/nestjs-libraries/src/integrations/social)
@@ -18,9 +19,11 @@ Each platform is one file in `worker/providers/<id>.ts` exporting a `Provider` o
 ## Rules
 - Runtime is Cloudflare Workers (+ nodejs_compat). No Node-only libs (no sharp, googleapis, form-data, twitter-api-v2, axios). Use `ctx.fetch` (never global fetch) via the http helpers so tests can mock it. Web FormData/Blob/crypto.subtle are available. `@noble/curves` and `@noble/hashes` are installed if you need secp256k1/ed25519.
 - Memory is 128MB: never load a whole large video into memory. Use `ctx.media.rangeStream(item, offset, length)` for chunked uploads, `mediaBody(ctx, item)` / `ctx.media.stream(item)` for streaming, or let the platform pull `item.url` (public, supports Range) when the API supports pull-from-URL. `ctx.media.image(item, { maxWidth, format, quality })` resizes/re-encodes images (use for size limits / unsupported formats). See "Free plan budget" below.
-- Map failures to `ProviderError` kinds: expired/revoked token that refresh cannot fix → "auth"; invalid content/settings → "invalid"; 429 → "rate_limit"; 5xx/network → "transient". `request()` already maps by status; pass `classify` for APIs that return 200/400 with error codes (e.g. Meta error code 190 → auth).
+- Map failures to `ProviderError` kinds: expired/revoked token that refresh cannot fix → "auth"; invalid content/settings → "invalid"; 429 → "rate_limit"; 5xx/network before the post is created → "transient"; 5xx/network on the request that creates it → "ambiguous" (see "Commit semantics"). `request()` already maps by status; pass `classify` for APIs that return 200/400 with error codes (e.g. Meta error code 190 → auth).
 - Long processing (video transcoding, Instagram containers, TikTok publish status, YouTube processing if you need it): return `{ status: "pending", state, retryAfterSeconds }` from `publish` and implement `checkStatus(state)` which must never re-post. Never busy-wait more than ~30s inside publish.
 - `publish` returns `externalId` and the public `url` of the post whenever it can be derived.
+- Mark the request that creates the post `commit: true` ("Commit semantics" below). Set `hotlinksMedia: true` when published posts keep pointing at our `/m/` media URLs (markdown/HTML images, embeds, URLs the platform does not copy): the retention sweep then never deletes that media.
+- When the platform says when the refresh credential expires, return `refreshExpiresAt` (ms) from `callback`/`connect` and `refresh` (see "Refresh-token expiry").
 - Threads/comments: set `capabilities.thread = true` + `threadLabel`, implement `reply(ctx, account, {rootId, parentId, rootData, parentData}, post)`. Chain-style platforms reply to `parentId`; comment-style platforms (Facebook, Instagram, LinkedIn, YouTube...) comment on `rootId`. Use `data` to pass extra ids (e.g. Bluesky cid/uri).
 - OAuth2: `authorize` builds the URL with `ctx.redirectUri`, `state`, and PKCE (`codeChallenge`, S256) when the platform supports it. `callback` exchanges the code (use `codeVerifier` when PKCE) and returns one `ConnectedAccount` per postable identity (e.g. every Facebook Page, every LinkedIn organisation, every YouTube channel). Store tokens in `credentials`, non-secret ids in `meta`, `expiresAt` in ms. Implement `refresh` when tokens expire.
 - `appFields` = developer app config (usually `clientFields()`), entered on the Platforms page. Include `docsUrl` (where to create the app) and `setupNotes` — short markdown steps: where to create the app, which products/permissions/scopes to enable, and the redirect URL `{{redirectUri}}` to whitelist. If the platform needs no developer app (credentials auth), `appFields: []`.
@@ -30,6 +33,52 @@ Each platform is one file in `worker/providers/<id>.ts` exporting a `Provider` o
 - Brand `color` (hex without #) and `icon` = simple-icons slug (https://simpleicons.org) when one exists. `name` is the display name (e.g. "LinkedIn Page", "Instagram (Facebook login)").
 - `category`: social | video | community | blog | messaging | newsletter.
 - Comment density: match `worker/` — short doc comments on non-obvious things, no noise.
+
+## Commit semantics (no double posts)
+Publishing is not blindly retried. Every publish / checkStatus / reply call gets `ctx.commit = { sent, accepted }`
+(`CommitState` in types.ts); the workflow reads it after the call to decide what a failure means.
+- **The commit** is the request that creates the post or makes it public: X `POST /2/tweets`, Meta `media_publish` /
+  `threads_publish` (often in `checkStatus`), Facebook feed / video with `published: true` / reel finish / story publish,
+  LinkedIn `POST /rest/posts`, TikTok photo `content/init` and the last video chunk, Telegram `send*`, Discord / Slack
+  message posts, blog post creates (DEV, Hashnode, Medium, WordPress), Pinterest `POST /pins`, Reddit submit, comments
+  and replies... Media upload init/append/finalize, invisible containers / drafts, status polls and lookups are not
+  commits: they keep their normal (retryable) kinds.
+- Mark it: `request(ctx, url, { ..., commit: true })` (also through `requestJson` and provider wrappers that pass
+  `RequestOptions` along). It sets `commit.sent` before the fetch and `commit.accepted` on 2xx. A network error,
+  timeout (408) or 5xx then throws `ProviderError("ambiguous")`: the post may exist, so it is never retried
+  automatically and goes to `needs_check` (the user confirms). 429 stays `rate_limit` and 4xx stay `invalid` / `auth`:
+  definite refusals, nothing was created. A classifier's "transient" on a commit becomes "ambiguous".
+- `commitCall(ctx, fn)` wraps a commit that does not go through `request` (a provider's own fetch, websockets): unknown
+  and transient errors become "ambiguous", definite refusals pass through.
+- `checkedCommit(ctx, send, check)` for APIs that report refusals in a 2xx body (Graph `error`, Slack `ok: false`,
+  Reddit `json.errors`, GraphQL `errors`, Telegram `ok: false`, Twitch/Kick `is_sent: false`): `check` throws on such a
+  body and `accepted` is restored, so the refusal fails normally instead of going to `needs_check`.
+- The workflow: `accepted` + any later error → `needs_check` (the post exists); `sent` + an unknown (non-ProviderError)
+  exception → `needs_check`; nothing sent → normal classification (retry `transient` / `rate_limit`, fail `invalid` /
+  `auth`). Several commits in one call (a Telegram album then the long text, Slack file share): mark each.
+- **Never swallow a commit failure** into `pending` or a retry: catch blocks that turn retryable upload errors into
+  `pending` (X, LinkedIn, YouTube, TikTok...) must only wrap uploads, never the commit ("ambiguous" is not retryable,
+  so `err.retryable` checks already let it through). Do not "retry once with other parameters" after an ambiguous
+  failure (Facebook's text-preset fallback only retries after `invalid`).
+- **Staying retryable** is allowed only when the platform deduplicates the create, and must be documented with a
+  comment at the call: an idempotency key (Mastodon `Idempotency-Key`, VK `guid`, Neynar `idem`, the webhook's
+  `Idempotency-Key` header), a lookup before the create (Listmonk campaign named after the post; a failed lookup must
+  fail the call, not be ignored), a deterministic id (Bluesky rkey from `postTid(post)` + getRecord on any failed
+  create; Nostr `created_at` from the post so the event id is stable and relays answer `duplicate:`), or a resumable
+  session that creates at most one object (YouTube: a lost final PUT is resumed by probing the same session, which
+  answers 200/201 with the created video; on that answer the provider marks `accepted` itself).
+- `PublishPost.createdAt` never changes (use it for ids that must survive user retries); `scheduledAt` is stable
+  across automatic retries of one publish. Reply posts have ids `${postId}-r${n}`.
+- Tests: `test/providers/commit.test.ts` — a network error on the create call → "ambiguous" with `commit.sent`; a
+  failure before it → its normal kind with `commit.sent === false`.
+
+## Refresh-token expiry
+`ConnectedAccount.refreshExpiresAt` / `CredentialsUpdate.refreshExpiresAt` (ms) = when the credential
+`refresh` uses stops working; the cron refreshes the account well before it. Return it when the platform says:
+`refresh_expires_in` (TikTok), `refresh_token_expires_in` (LinkedIn, Pinterest, TikTok Business, Google when the grant
+is time-limited), the refresh JWT's `exp` (Bluesky), or the long-lived token's own expiry when it refreshes itself
+(Instagram login `ig_refresh_token`, Threads `th_refresh_token`). Leave it out of a refresh result when unknown
+(undefined = unchanged).
 
 ## Free plan budget
 Postflare runs on the Workers Free plan. Each workflow step (one `publish`, `checkStatus` or `reply` call) is one invocation with ~10ms CPU (time spent waiting on the network does not count), 50 external subrequests (every `fetch`, including WebSocket relays; R2/D1 bindings are separate) and 128MB memory.

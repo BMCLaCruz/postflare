@@ -38,3 +38,13 @@ export async function connectBlocked(db: D1Database, provider: { name: string; s
   if (provider.status !== "experimental" || (await experimentalEnabled(db))) return null;
   return `${provider.name} is an experimental integration (unofficial API) and is disabled on this instance. An instance admin can turn on "Enable experimental integrations" in Instance settings.`;
 }
+
+/** Instance setting "Media retention (days)": see lib/media-lifecycle.ts. 0 keeps media forever. */
+export const MEDIA_RETENTION_SETTING = "media_retention_days";
+export const DEFAULT_MEDIA_RETENTION_DAYS = 30;
+
+export async function mediaRetentionDays(db: D1Database): Promise<number> {
+  const v = await getSetting(db, MEDIA_RETENTION_SETTING);
+  const n = v === null ? NaN : Number(v);
+  return Number.isInteger(n) && n >= 0 ? n : DEFAULT_MEDIA_RETENTION_DAYS;
+}

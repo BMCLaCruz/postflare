@@ -35,10 +35,19 @@ workspace with sample data that never publishes anything, reset daily).
   subreddits, channels, playlists...), threads / first comments, previews, drafts.
 - Calendar (month/week, drag to reschedule), posts list with publishing logs, retry/cancel.
 - Media library on R2: multipart uploads up to 5GB, alt text, import from URL. Big videos are streamed to platforms in
-  chunks, never loaded into memory.
-- Reliable publishing with **Cloudflare Workflows**: each post sleeps until its time, publishes with retries, polls
-  platform processing (videos, Instagram containers, TikTok) and then posts follow-ups. A cron re-arms anything lost
-  and refreshes tokens before they expire.
+  chunks, never loaded into memory. Storage usage is shown against the R2 Free plan's 10 GB, and a daily job applies
+  the **media retention** (Instance settings, default 30 days, 0 = keep forever): media older than that is deleted
+  once no draft, scheduled, failed or needs-check post uses it. Media of posts published to platforms that keep linking
+  to our copy (DEV, Hashnode, Medium, Listmonk, Nostr, Farcaster, Discord embeds, webhooks) is kept. Unfinished uploads
+  are removed after 2 days, and upload-link files never used in a post after 7 days. Media used by a draft or scheduled
+  post cannot be deleted.
+- Reliable publishing with **Cloudflare Workflows**: each post sleeps until its time, publishes, polls platform
+  processing (videos, Instagram containers, TikTok) and then posts follow-ups. A cron re-arms anything lost and
+  refreshes tokens before they expire. **No double posts**: only failures that certainly created nothing (rate limits,
+  failed uploads) are retried. When the request that creates the post fails in a way that does not tell whether the
+  platform accepted it (network error, timeout, server error), the post goes to **Needs check** instead: check the
+  profile, then **Mark as published** (optionally with its URL) or **Retry anyway** in the post drawer
+  (`POST /api/posts/:id/resolve`, `pf posts resolve`).
 - **Analytics**: views, reach, likes, comments, shares... of published posts and daily follower counts, collected by the
   cron within the Free plan budget (see [Analytics](#analytics)).
 - **Users, workspaces and roles**: several people on one deployment, each workspace with its own accounts, posts and
@@ -159,7 +168,11 @@ deploys that file (through `.wrangler/deploy/config.json`). Check what will be d
 
 **Runs on the Workers Free plan.** Media is piped from R2 to the platforms without passing through JavaScript
 (measured: ~3ms CPU to stream 100MB), every provider call stays under 40 outgoing requests, and long uploads resume
-across Workflow steps. Free plan quotas (requests, D1, R2, Workflows) are plenty for a personal scheduler.
+across Workflow steps. Request handlers and cron runs stay well under the Free plan's 50 D1 queries per invocation
+(writes are batched; tested in `test/workers/publish.test.ts`). Two crons: every 15 minutes (publishing safety nets,
+token refreshes, analytics) and daily at 03:00 UTC (cleanups, media retention, update check). Free plan quotas
+(requests, D1, R2, Workflows) are plenty for a personal scheduler; R2 storage (10 GB) is the first one media-heavy use
+reaches, hence the media retention.
 
 ## Updating
 

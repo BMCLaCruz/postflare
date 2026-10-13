@@ -132,6 +132,7 @@ export const mewe: Provider = {
       headers: appHeaders(ctx),
       json: { text: post.content, ...(uploadedPhotoIds.length ? { uploadedPhotoIds } : {}) },
       classify,
+      commit: true,
     });
     const body = await res.json<any>().catch(() => ({}));
     const id = body?.postItemId ?? body?.id ?? body?.post?.postItemId ?? post.id;

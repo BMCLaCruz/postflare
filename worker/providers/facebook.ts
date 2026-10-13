@@ -135,12 +135,13 @@ async function publishFeed(ctx: ProviderContext, account: AccountRecord, post: P
   const url = `${FB_GRAPH}/${account.externalId}/feed`;
   let res: { id: string };
   try {
-    res = await graph(ctx, url, { method: "POST", token, json: body(!!preset) });
+    res = await graph(ctx, url, { method: "POST", token, json: body(!!preset), commit: true });
   } catch (err) {
     // Presets are undocumented and get retired; a stale one fails the whole post, so retry once without it.
-    if (!preset || !(err instanceof ProviderError) || err.kind === "auth" || err.kind === "rate_limit") throw err;
+    // Only after a definite refusal ("invalid"): an ambiguous failure may have created the post.
+    if (!preset || !(err instanceof ProviderError) || err.kind !== "invalid") throw err;
     ctx.log("warn", `Facebook rejected the background preset, publishing as plain text: ${err.message}`);
-    res = await graph(ctx, url, { method: "POST", token, json: body(false) });
+    res = await graph(ctx, url, { method: "POST", token, json: body(false), commit: true });
   }
   return { status: "published", externalId: res.id, url: await permalink(ctx, token, res.id, `https://www.facebook.com/${res.id}`) };
 }
@@ -299,6 +300,8 @@ export const facebook: Provider = {
         method: "POST",
         token,
         json: { file_url: video.url, description: post.content || undefined, title: post.settings?.title || undefined, published: true },
+        // Creates the (published) video post: the commit.
+        commit: true,
       });
       return pending({ kind: "video", videoId: res.id }, 20);
     }
@@ -325,11 +328,12 @@ export const facebook: Provider = {
       const status = await videoStatus(ctx, token, state.videoId);
       if (!state.finished) {
         if (status.uploading_phase?.status !== "complete") return pending(state, 10);
-        // Finishing the same video twice is idempotent on Facebook's side (one video id = one reel).
+        // One video id = one reel, but whether a failed finish published it is unknown: treated as the commit.
         await graph(ctx, `${FB_GRAPH}/${pageId}/video_reels`, {
           method: "POST",
           token,
           json: { upload_phase: "finish", video_id: state.videoId, video_state: "PUBLISHED", description: state.description || undefined },
+          commit: true,
         });
         return pending({ ...state, finished: true }, 15);
       }
@@ -349,6 +353,7 @@ export const facebook: Provider = {
       method: "POST",
       token,
       json: item.kind === "video" ? { upload_phase: "finish", video_id: item.id } : { photo_id: item.id },
+      commit: true,
     });
     const postId = res.post_id ?? res.id ?? item.id;
     const done = state.done + 1;
@@ -364,6 +369,7 @@ export const facebook: Provider = {
       method: "POST",
       token: pageToken(account),
       json: { message: post.content || undefined, attachment_url: image?.url },
+      commit: true,
     });
     return { externalId: res.id, url: await permalink(ctx, pageToken(account), res.id, null) };
   },

@@ -21,6 +21,7 @@ const FILTERS: Array<{ value: "" | PostStatus; label: string }> = [
   { value: "scheduled", label: "Scheduled" },
   { value: "draft", label: "Drafts" },
   { value: "published", label: "Published" },
+  { value: "needs_check", label: "Needs check" },
   { value: "failed", label: "Failed" },
   { value: "cancelled", label: "Cancelled" },
 ];
@@ -87,6 +88,8 @@ export function PostsPage() {
         <div className="-mx-1 flex gap-1 overflow-x-auto px-1">
           {FILTERS.map((f) => {
             const n = f.value ? (counts[f.value] ?? 0) + (f.value === "scheduled" ? (counts.publishing ?? 0) : 0) : (posts.data?.length ?? 0);
+            // Rare state: only offer the filter when there is something to check.
+            if (f.value === "needs_check" && !n && status !== f.value) return null;
             return (
               <button
                 key={f.value}
@@ -100,7 +103,7 @@ export function PostsPage() {
               >
                 {f.label}
                 {posts.data && (
-                  <span className={cn("text-xs tabular-nums", status === f.value ? "opacity-70" : "text-zinc-400", f.value === "failed" && n > 0 && status !== f.value && "text-red-500")}>
+                  <span className={cn("text-xs tabular-nums", status === f.value ? "opacity-70" : "text-zinc-400", f.value === "failed" && n > 0 && status !== f.value && "text-red-500", f.value === "needs_check" && n > 0 && status !== f.value && "text-amber-600")}>
                     {n}
                   </span>
                 )}
@@ -287,6 +290,7 @@ function TableRow({ post, groupSize }: { post: PostDTO; groupSize: number }) {
               )}
             </div>
             {post.status === "failed" && post.error && <p className="mt-1 truncate text-xs text-red-600 dark:text-red-400">{post.error}</p>}
+            {post.status === "needs_check" && post.error && <p className="mt-1 truncate text-xs text-amber-700 dark:text-amber-400">{post.error}</p>}
           </div>
         </div>
       </td>
@@ -328,6 +332,7 @@ function MobileRow({
           </div>
           <p className="mt-1 line-clamp-2 text-sm text-zinc-700 dark:text-zinc-300">{post.content || <span className="italic text-zinc-400">Media post</span>}</p>
           {post.status === "failed" && post.error && <p className="mt-1 line-clamp-2 text-xs text-red-600 dark:text-red-400">{post.error}</p>}
+          {post.status === "needs_check" && post.error && <p className="mt-1 line-clamp-2 text-xs text-amber-700 dark:text-amber-400">{post.error}</p>}
           <div className="mt-2 flex items-center justify-between">
             <span className="text-xs text-zinc-500">{d.main}</span>
             <RowActions post={post} />

@@ -103,6 +103,25 @@ function tagList(tags: unknown): string | undefined {
   return list.length ? list.join(",") : undefined;
 }
 
+/** Creates the post: text as JSON, or media and post in one multipart request. Either way it is the commit. */
+async function createPost(ctx: ProviderContext, url: string, account: AccountRecord, post: PublishPost, payload: Record<string, unknown>): Promise<any> {
+  if (!post.media.length)
+    return requestJson(ctx, url, { method: "POST", token: account.credentials.accessToken, json: payload, classify, commit: true });
+  const mp = streamingMultipart([
+    { name: "json", value: JSON.stringify(payload), type: "application/json" },
+    ...post.media.map((m, i) => mediaPart(ctx, `media-${i}`, m)),
+  ]);
+  return requestJson(ctx, url, {
+    method: "POST",
+    token: account.credentials.accessToken,
+    headers: mp.headers,
+    body: mp.body,
+    duplex: "half",
+    classify,
+    commit: true,
+  } as any);
+}
+
 export const tumblr: Provider = {
   id: "tumblr",
   name: "Tumblr",
@@ -192,21 +211,14 @@ export const tumblr: Provider = {
 
     const url = `${API}/blog/${encodeURIComponent(blog)}/posts`;
     let res: any;
-    if (!post.media.length) {
-      res = await requestJson(ctx, url, { method: "POST", token: account.credentials.accessToken, json: payload, classify });
-    } else {
-      const mp = streamingMultipart([
-        { name: "json", value: JSON.stringify(payload), type: "application/json" },
-        ...post.media.map((m, i) => mediaPart(ctx, `media-${i}`, m)),
-      ]);
-      res = await requestJson(ctx, url, {
-        method: "POST",
-        token: account.credentials.accessToken,
-        headers: mp.headers,
-        body: mp.body,
-        duplex: "half",
-        classify,
-      } as any);
+    try {
+      res = await createPost(ctx, url, account, post, payload);
+    } catch (err) {
+      // 4xx media errors (8006/8009) are refusals (nothing was created) that may succeed later: retryable, not
+      // ambiguous like a lost or 5xx answer.
+      if (err instanceof ProviderError && err.kind === "ambiguous" && err.status && err.status < 500 && err.status !== 408)
+        throw new ProviderError(err.message, "transient", err.status, err.body);
+      throw err;
     }
     const id = String(res?.response?.id_string ?? res?.response?.id ?? "");
     if (!id) throw new ProviderError("Tumblr did not return a post id", "transient");

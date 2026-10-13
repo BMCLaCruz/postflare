@@ -5,8 +5,14 @@ export type ProviderErrorKind =
   | "invalid"
   /** Rate limited. Retried with backoff. */
   | "rate_limit"
-  /** Network/5xx. Retried with backoff. */
-  | "transient";
+  /** Network/5xx before anything was created on the platform. Retried with backoff. */
+  | "transient"
+  /**
+   * The commit request (the call that creates the post) failed after it may have reached the platform: network
+   * error, timeout or 5xx on a `commit: true` request (http.ts). Never retried automatically: the post goes to
+   * `needs_check` and the user confirms whether it is live.
+   */
+  | "ambiguous";
 
 export class ProviderError extends Error {
   constructor(
@@ -22,6 +28,16 @@ export class ProviderError extends Error {
   get retryable() {
     return this.kind === "transient" || this.kind === "rate_limit";
   }
+}
+
+/**
+ * Error kind of a failed *commit* request (the one that creates the post). 429 is a refusal before anything was
+ * created, so it may be retried; 408/5xx may have created the post anyway.
+ */
+export function commitKindForStatus(status: number): ProviderErrorKind {
+  if (status === 429) return "rate_limit";
+  if (status === 408 || status >= 500) return "ambiguous";
+  return kindForStatus(status);
 }
 
 export function kindForStatus(status: number): ProviderErrorKind {

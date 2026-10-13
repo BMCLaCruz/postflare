@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useLocation } from "react-router";
-import { AlertTriangle, ArrowUpCircle, ExternalLink, FlaskConical, Globe, Info, Lock, RefreshCw, ShieldCheck } from "lucide-react";
+import { AlertTriangle, ArrowUpCircle, ExternalLink, FlaskConical, Globe, HardDrive, Info, Lock, RefreshCw, ShieldCheck } from "lucide-react";
+import { StorageUsage } from "../components/media/StorageUsage";
 import { Button } from "../components/ui/Button";
 import { Field, Input, Select, Switch } from "../components/ui/Form";
 import { Badge, CodeBlock, PageHeader, Skeleton } from "../components/ui/Misc";
@@ -10,7 +11,8 @@ import { api } from "../lib/api";
 import { useApp } from "../lib/app";
 import { browserTimezone, timezones } from "../lib/time";
 import { useUpdateStatus } from "../lib/updates";
-import { invalidate } from "../lib/useFetch";
+import { useSession } from "../lib/session";
+import { invalidate, useFetch } from "../lib/useFetch";
 import { CHANGELOG_URL, COMMIT, REPO_URL, UPDATING_URL, VERSION, releaseUrl } from "@shared/version";
 
 /** Admin → Instance settings: public URL and default timezone (API keys moved to the profile), integrations, version and updates. */
@@ -26,6 +28,7 @@ export function InstanceSettingsPage() {
       <div className="space-y-6">
         <GeneralSection />
         <IntegrationsSection />
+        <StorageSection />
         <AboutSection />
         <UpdatingSection />
       </div>
@@ -300,6 +303,82 @@ function IntegrationsSection() {
                 may conflict with the platform&rsquo;s terms of service, which could put the connected account at risk. Use at your own risk.
               </span>
             </p>
+          </div>
+        )}
+      </Section>
+    </div>
+  );
+}
+
+/** Media retention (daily cleanup of unused media) and how much R2 storage the instance uses. */
+function StorageSection() {
+  const { settings } = useApp();
+  const { can } = useSession();
+  const toast = useToast();
+  const usage = useFetch(can("media.read") ? "media-usage" : null, api.media.usage, ["media", "settings"]);
+  const [days, setDays] = useState("30");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (settings) setDays(String(settings.mediaRetentionDays ?? 30));
+  }, [settings]);
+  const n = Number(days);
+  const invalid = days.trim() === "" || !Number.isInteger(n) || n < 0 || n > 3650;
+
+  async function save(e: FormEvent) {
+    e.preventDefault();
+    if (invalid) return;
+    setBusy(true);
+    try {
+      await api.settings.save({ mediaRetentionDays: n });
+      toast.success("Settings saved");
+      invalidate("settings");
+    } catch (err) {
+      toast.error(err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div id="storage" className="scroll-mt-6">
+      <Section icon={<HardDrive />} title="Storage" description="Uploaded media lives in your R2 bucket. Old files nobody needs anymore are cleaned up once a day.">
+        {!settings ? (
+          <Skeleton className="h-9 w-full max-w-xl" />
+        ) : (
+          <div className="max-w-xl space-y-6">
+            {usage.data && <StorageUsage usage={usage.data} show={usage.data.instance ? "instance" : "workspace"} />}
+            <form onSubmit={save} className="space-y-5">
+              <Field
+                label="Media retention (days)"
+                error={invalid ? "Enter a whole number from 0 to 3650" : undefined}
+                help={
+                  <>
+                    A daily job deletes media older than this that no scheduled, draft, failed or needs-check post uses. Media of
+                    posts published to platforms that link to the copy here instead of storing their own (DEV, Hashnode, Medium, Listmonk, Nostr,
+                    Farcaster, Discord embeds, webhooks) is kept. Unfinished uploads are removed after 2 days, and files sent through upload links
+                    that were never used in a post after 7 days. 0 keeps everything forever.
+                  </>
+                }
+              >
+                {(id) => (
+                  <Input
+                    id={id}
+                    type="number"
+                    inputMode="numeric"
+                    min={0}
+                    max={3650}
+                    step={1}
+                    value={days}
+                    invalid={invalid}
+                    onChange={(e) => setDays(e.target.value)}
+                    className="w-32"
+                  />
+                )}
+              </Field>
+              <Button type="submit" variant="primary" loading={busy} disabled={invalid || n === (settings.mediaRetentionDays ?? 30)}>
+                Save
+              </Button>
+            </form>
           </div>
         )}
       </Section>

@@ -138,6 +138,7 @@ export const skool: Provider = {
           video_ids: "",
         },
       },
+      commit: true,
     });
     const slug = await groupSlug(ctx, account, s.group);
     return {
@@ -161,6 +162,7 @@ export const skool: Provider = {
         parent_id: target.parentId,
         metadata: { title: "", content: post.content, attachments: files, action: 0, video_ids: "" },
       },
+      commit: true,
     });
     const slug = target.rootData?.slug;
     const name = target.rootData?.name;

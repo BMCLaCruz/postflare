@@ -82,7 +82,7 @@ async function sendMessage(
   } else {
     init = { method: "POST", json: payload };
   }
-  const res = await requestJson<{ id: string; channel_id?: string }>(ctx, url, bot(ctx, init));
+  const res = await requestJson<{ id: string; channel_id?: string }>(ctx, url, bot(ctx, { ...init, commit: true }));
   // A forum post returns the new thread; its starter message has the same id as the thread.
   return forum ? { id: res.id, channel_id: res.id } : { id: res.id, channel_id: res.channel_id ?? target.channelId };
 }
@@ -91,6 +91,7 @@ const messageUrl = (guildId: string, channelId: string, messageId?: string) =>
   `https://discord.com/channels/${guildId}/${channelId}${messageId ? `/${messageId}` : ""}`;
 
 export const discord: Provider = {
+  hotlinksMedia: true,
   id: "discord",
   name: "Discord",
   color: "5865F2",

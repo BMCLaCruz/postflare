@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import type { ApiKeyDTO } from "../../shared/types";
 import { createApiKey, forbidDemoUser, isInstanceAdmin, requireInstancePermission, requirePermission, wsId, type AppEnv } from "../lib/auth";
-import { EXPERIMENTAL_SETTING, baseUrl, experimentalEnabled, getSetting, setSetting } from "../lib/settings";
+import { EXPERIMENTAL_SETTING, MEDIA_RETENTION_SETTING, baseUrl, experimentalEnabled, getSetting, mediaRetentionDays, setSetting } from "../lib/settings";
 
 export const settingsRoutes = new Hono<AppEnv>();
 
@@ -12,11 +12,16 @@ settingsRoutes.get("/settings", async (c) => {
     timezone: (await getSetting(c.env.DB, "timezone")) ?? null,
     encryptionKeyFromSecret: !!c.env.SECRET_KEY,
     experimentalIntegrations: await experimentalEnabled(c.env.DB),
+    mediaRetentionDays: await mediaRetentionDays(c.env.DB),
   });
 });
 
 settingsRoutes.put("/settings", requireInstancePermission("instance.settings.manage"), async (c) => {
-  const body = await c.req.json<{ publicUrl?: string; timezone?: string; experimentalIntegrations?: boolean }>();
+  const body = await c.req.json<{ publicUrl?: string; timezone?: string; experimentalIntegrations?: boolean; mediaRetentionDays?: number }>();
+  if (body.mediaRetentionDays !== undefined) {
+    const days = Number(body.mediaRetentionDays);
+    if (!Number.isInteger(days) || days < 0 || days > 3650) return c.json({ error: "Media retention must be a whole number of days between 0 and 3650" }, 400);
+  }
   if (body.publicUrl !== undefined && !c.env.PUBLIC_URL) {
     let url: URL;
     try {
@@ -35,6 +40,7 @@ settingsRoutes.put("/settings", requireInstancePermission("instance.settings.man
     }
     await setSetting(c.env.DB, "timezone", String(body.timezone));
   }
+  if (body.mediaRetentionDays !== undefined) await setSetting(c.env.DB, MEDIA_RETENTION_SETTING, String(Number(body.mediaRetentionDays)));
   if (body.experimentalIntegrations !== undefined) {
     await setSetting(c.env.DB, EXPERIMENTAL_SETTING, body.experimentalIntegrations === true ? "true" : "false");
   }

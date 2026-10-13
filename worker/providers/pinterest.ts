@@ -39,7 +39,7 @@ interface PinDraft {
 }
 
 async function createPin(ctx: ProviderContext, account: AccountRecord, draft: PinDraft): Promise<PublishResult> {
-  const res = await pin<{ id: string }>(ctx, account, "/pins", { method: "POST", json: draft });
+  const res = await pin<{ id: string }>(ctx, account, "/pins", { method: "POST", json: draft, commit: true });
   return { status: "published", externalId: res.id, url: `https://www.pinterest.com/pin/${res.id}/` };
 }
 
@@ -213,6 +213,7 @@ export const pinterest: Provider = {
         profileUrl: `https://www.pinterest.com/${me.username}/`,
         credentials: { accessToken: tok.access_token, refreshToken: tok.refresh_token },
         expiresAt: expiresAt(tok.expires_in),
+        refreshExpiresAt: expiresAt(tok.refresh_token_expires_in),
       },
     ];
   },
@@ -228,6 +229,8 @@ export const pinterest: Provider = {
     return {
       credentials: { ...account.credentials, accessToken: tok.access_token, refreshToken: tok.refresh_token ?? account.credentials.refreshToken },
       expiresAt: expiresAt(tok.expires_in),
+      // Continuous refresh issues a new refresh token (and expiry) on every refresh.
+      ...(tok.refresh_token_expires_in ? { refreshExpiresAt: expiresAt(tok.refresh_token_expires_in) } : {}),
     };
   },
 

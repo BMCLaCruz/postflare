@@ -179,6 +179,8 @@ export const vk: Provider = {
     return { credentials: { accessToken: t.access_token, refreshToken: t.refresh_token, deviceId }, expiresAt: expiresAt(t.expires_in) };
   },
 
+  // wall.post / wall.createComment are not marked `commit: true`: VK drops a second post or comment with the same
+  // `guid`, so a failed call may be retried (docs/provider-brief.md "Commit semantics").
   async publish(ctx, account, post) {
     const owner = ownerId(account);
     const res = await vkApi<{ post_id: number }>(ctx, "wall.post", token(account), {

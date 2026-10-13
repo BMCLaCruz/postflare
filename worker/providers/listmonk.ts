@@ -58,6 +58,7 @@ function slug(s: string) {
 }
 
 export const listmonk: Provider = {
+  hotlinksMedia: true,
   id: "listmonk",
   name: "Listmonk",
   color: "0055D4",
@@ -166,10 +167,12 @@ export const listmonk: Provider = {
     const template = Number(s.template);
 
     const name = `${slug(subject)}-${post.id}`.slice(0, 200);
-    // A retried publish must not create (and send) a second campaign: reuse the one named after this post.
-    const existing = await api(ctx, c, "/campaigns", { query: { query: name, per_page: 20 } })
-      .then((r) => (r.data?.results ?? []).find((x: any) => x.name === name) as { id: number; uuid: string; status: string } | undefined)
-      .catch(() => undefined);
+    // A retried publish must not create (and send) a second campaign: reuse the one named after this post. This
+    // lookup is what makes the create and the send safe to retry, so they are not marked `commit: true`; a failed
+    // lookup must fail the step (it is retried) rather than risk a second campaign.
+    const existing = await api(ctx, c, "/campaigns", { query: { query: name, per_page: 20 } }).then(
+      (r) => (r?.data?.results ?? []).find((x: any) => x.name === name) as { id: number; uuid: string; status: string } | undefined,
+    );
     const campaign =
       existing ??
       ((

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent, type FormEvent } from "react";
 import { Download, ImagePlus, Link2, Loader2, Trash2, Type, Upload, X } from "lucide-react";
 import { AltTextDialog } from "../components/media/AltTextDialog";
+import { StorageUsage } from "../components/media/StorageUsage";
 import { MediaThumb } from "../components/posts/MediaThumb";
 import { Button, IconButton } from "../components/ui/Button";
 import { useConfirm } from "../components/ui/Confirm";
@@ -16,7 +17,7 @@ import { useSession } from "../lib/session";
 import { formatDateTime } from "../lib/time";
 import { ACCEPTED_MEDIA } from "../lib/upload";
 import type { MediaDTO } from "../lib/types";
-import { invalidate } from "../lib/useFetch";
+import { invalidate, useFetch } from "../lib/useFetch";
 import { useUploader } from "../lib/useUploader";
 
 const PAGE = 60;
@@ -34,6 +35,7 @@ export function MediaPage() {
   const [importOpen, setImportOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const depth = useRef(0);
+  const usage = useFetch("media-usage", api.media.usage, ["media"]);
 
   const load = async () => {
     try {
@@ -51,7 +53,10 @@ export function MediaPage() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const uploader = useUploader(
-    (m) => setItems((list) => [m, ...(list ?? [])]),
+    (m) => {
+      setItems((list) => [m, ...(list ?? [])]);
+      void usage.refetch();
+    },
     (msg) => toast.error(msg),
   );
 
@@ -71,7 +76,7 @@ export function MediaPage() {
   }
 
   async function remove(m: MediaDTO) {
-    if (!(await confirm({ title: "Delete this file?", message: "Scheduled posts that use it will fail to publish.", confirmLabel: "Delete", danger: true }))) return;
+    if (!(await confirm({ title: "Delete this file?", message: "This cannot be undone. Files used by drafts or scheduled posts can't be deleted.", confirmLabel: "Delete", danger: true }))) return;
     try {
       await api.media.remove(m.id);
       forgetMedia(m.id);
@@ -138,6 +143,12 @@ export function MediaPage() {
           )
         }
       />
+
+      {usage.data && (
+        <Card className="mb-4 px-4 py-3.5">
+          <StorageUsage usage={usage.data} />
+        </Card>
+      )}
 
       <div className="mb-4 flex items-center justify-between gap-3">
         <Tabs

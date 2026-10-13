@@ -100,6 +100,10 @@ async function idem(postId: string) {
   return bytesToHex(new Uint8Array(d)).slice(0, 16);
 }
 
+/**
+ * Not marked `commit: true`: Neynar deduplicates casts by `idem` (derived from our post id), so a failed call may be
+ * retried without double-posting (docs/provider-brief.md "Commit semantics").
+ */
 async function cast(ctx: ProviderContext, account: AccountRecord, post: PublishPost, extra: Record<string, unknown>) {
   const signer = account.credentials.signerUuid as string;
   if (!signer) throw new ProviderError("Farcaster signer missing, reconnect the account", "auth");
@@ -113,6 +117,7 @@ async function cast(ctx: ProviderContext, account: AccountRecord, post: PublishP
 }
 
 export const farcaster: Provider = {
+  hotlinksMedia: true,
   id: "farcaster",
   name: "Farcaster",
   color: "855DCD",

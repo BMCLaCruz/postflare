@@ -32,6 +32,7 @@ export function mediumTags(input: unknown): string[] {
  * reads, claps, followers) are only on medium.com, and the API is closed to new integrations, so no metrics here.
  */
 export const medium: Provider = {
+  hotlinksMedia: true,
   id: "medium",
   name: "Medium",
   color: "000000",
@@ -130,6 +131,7 @@ export const medium: Provider = {
         ...(s.license ? { license: s.license } : {}),
         ...(s.notifyFollowers === false ? { notifyFollowers: false } : {}),
       },
+      commit: true,
     });
     return { status: "published", externalId: data.id, url: data.url ?? null };
   },

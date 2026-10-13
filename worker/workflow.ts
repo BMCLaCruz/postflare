@@ -1,5 +1,4 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep, type WorkflowStepConfig } from "cloudflare:workers";
-import { NonRetryableError } from "cloudflare:workflows";
 import { freshAccount, getAccountRow, markReconnect, providerContext } from "./lib/accounts";
 import { isDemoPost, publishDemoPosts } from "./lib/demo";
 import { loadMediaItems } from "./lib/media";
@@ -10,7 +9,7 @@ import { baseUrl } from "./lib/settings";
 import { errorMessage, now, parseJson } from "./lib/util";
 import { ProviderError } from "./providers/errors";
 import { getProvider } from "./providers/registry";
-import type { PublishPost, PublishResult } from "./providers/types";
+import type { CommitState, PublishPost, PublishResult } from "./providers/types";
 import type { ThreadItem } from "../shared/types";
 
 export interface PublishParams {
@@ -20,15 +19,47 @@ export interface PublishParams {
 
 type Done = { externalId: string; url: string | null; data: Record<string, unknown> };
 
+/**
+ * Result of a commit step. Commit steps never throw (a thrown step error is not retried either, see `commitStep`):
+ * - retry: nothing reached the platform (or it refused with 429), safe to run again after a pause;
+ * - fail: a definite refusal (invalid post, auth) or retries exhausted;
+ * - check: the platform may have the post (ambiguous failure of the create call, or a failure after it): needs_check;
+ * - stale: the post was edited, resolved or deleted meanwhile: this instance stops without touching it.
+ */
+export type Outcome<T> = { ok: true; value: T } | { ok: false; action: "retry" | "fail" | "check" | "stale"; message: string };
+
 const MAX_STATUS_CHECKS = 120;
+/** Safe retries of a commit step (pre-send failures, rate limits): 30 s, 60 s, 120 s apart. */
+const MAX_RETRIES = 3;
+const NEVER_RETRY = { limit: 0, delay: "1 second" } as const;
+
+/**
+ * `posts.publish_lock` (migrations/0006): `r<revision>:<step name>` of the last commit step that started, or
+ * `r<revision>:free` right after the claim. A commit step may start unless the lock already names that very step:
+ * then a previous run of it was interrupted (crash, engine replay) after possibly reaching the platform.
+ */
+export const lockFree = (revision: number) => `r${revision}:free`;
+const lockFor = (revision: number, step: string) => `r${revision}:${step}`;
+
+/**
+ * Cached results of steps run by the code before commit steps returned `Outcome` (instances that were sleeping or
+ * processing when it was deployed) are plain PublishResult / Done values: a completed call.
+ */
+function normalize<T>(v: unknown): Outcome<T> {
+  if (v && typeof v === "object" && "ok" in v && typeof (v as { ok: unknown }).ok === "boolean") return v as Outcome<T>;
+  return { ok: true, value: v as T };
+}
+
+export const needsCheckMessage = (platform: string, detail?: string) =>
+  `We couldn't confirm whether ${platform} accepted the post. Check your profile, then mark it as published or retry.${detail ? ` (${detail})` : ""}`;
 
 export class PublishWorkflow extends WorkflowEntrypoint<Env, PublishParams> {
   async run(event: WorkflowEvent<PublishParams>, step: WorkflowStep) {
     const { postId, revision } = event.payload;
     await ensureSchema(this.env.DB);
-    // step.do's Serializable<T> typing rejects Record<string, unknown>; our values are plain JSON.
-    const run = <T>(name: string, config: WorkflowStepConfig, fn: () => Promise<T>) =>
-      step.do(name, config, fn as () => Promise<any>) as Promise<T>;
+    // Step names below ("load", "wait for schedule", "claim", "sandbox check", "publish", "processing N",
+    // "check status N", "mark published", "load thread", "reply N") are those of the previous version: instances that
+    // were sleeping or processing at deploy time replay their completed steps by name. Do not rename them.
 
     const scheduledAt = await step.do("load", async () => {
       const row = await getPostRow(this.env, postId);
@@ -41,9 +72,9 @@ export class PublishWorkflow extends WorkflowEntrypoint<Env, PublishParams> {
 
     const claimed = await step.do("claim", async () => {
       const res = await this.env.DB.prepare(
-        "UPDATE posts SET status = 'publishing', attempts = attempts + 1, error = NULL, updated_at = ? WHERE id = ? AND revision = ? AND status = 'scheduled'",
+        "UPDATE posts SET status = 'publishing', attempts = attempts + 1, error = NULL, publish_lock = ?, updated_at = ? WHERE id = ? AND revision = ? AND status = 'scheduled'",
       )
-        .bind(now(), postId, revision)
+        .bind(lockFree(revision), now(), postId, revision)
         .run();
       if (res.meta.changes > 0) return true;
       // Step retried after its UPDATE already committed: only this instance can claim this revision.
@@ -62,48 +93,54 @@ export class PublishWorkflow extends WorkflowEntrypoint<Env, PublishParams> {
       return { published: true, simulated: true };
     }
 
-    let root: Done;
-    try {
-      let result: PublishResult = await run(
-        "publish",
-        { retries: { limit: 3, delay: "30 seconds", backoff: "exponential" }, timeout: "15 minutes" },
-        () => this.attempt(postId, async (ctx) => ctx.provider.publish(ctx.pctx, ctx.account, ctx.post)),
-      );
-      for (let i = 0; result.status === "pending"; i++) {
-        if (i >= MAX_STATUS_CHECKS) throw new Error("The platform did not finish processing the post in time");
-        await step.sleep(`processing ${i + 1}`, `${Math.min(Math.max(result.retryAfterSeconds ?? 10, 5), 600)} seconds`);
-        const state = result.state;
-        result = await run(
-          `check status ${i + 1}`,
-          { retries: { limit: 3, delay: "20 seconds", backoff: "exponential" }, timeout: "5 minutes" },
-          () =>
-            this.attempt(postId, async (ctx) => {
-              if (!ctx.provider.checkStatus) throw new NonRetryableError("Provider returned pending without checkStatus");
-              return ctx.provider.checkStatus(ctx.pctx, ctx.account, state);
-            }),
-        );
+    // Publish, then poll while the platform processes. Every provider call is a commit step (never auto-retried).
+    let outcome = await this.commitStep<PublishResult>(step, "publish", "15 minutes", revision, postId, "publishing", false, (ctx) =>
+      ctx.provider.publish(ctx.pctx, ctx.account, ctx.post),
+    );
+    for (let i = 0; outcome.ok && outcome.value.status === "pending"; i++) {
+      const pending = outcome.value;
+      if (i >= MAX_STATUS_CHECKS) {
+        outcome = { ok: false, action: "fail", message: "The platform did not finish processing the post in time" };
+        break;
       }
-      root = { externalId: result.externalId, url: result.url ?? null, data: result.data ?? {} };
-    } catch (err) {
-      await step.do("mark failed", async () => {
-        const message = errorMessage(err);
-        await this.env.DB.prepare("UPDATE posts SET status = 'failed', error = ?, updated_at = ? WHERE id = ?")
-          .bind(message.slice(0, 2000), now(), postId)
-          .run();
-        await logPost(this.env, postId, "error", `Publishing failed: ${message}`);
+      await step.sleep(`processing ${i + 1}`, `${Math.min(Math.max(pending.retryAfterSeconds ?? 10, 5), 600)} seconds`);
+      outcome = await this.commitStep<PublishResult>(step, `check status ${i + 1}`, "5 minutes", revision, postId, "publishing", true, (ctx) => {
+        if (!ctx.provider.checkStatus) throw new ProviderError("Provider returned pending without checkStatus", "invalid");
+        return ctx.provider.checkStatus(ctx.pctx, ctx.account, pending.state);
       });
-      return { failed: true };
     }
 
-    await step.do("mark published", async () => {
-      await this.env.DB.prepare(
+    if (!outcome.ok) {
+      const failure = outcome;
+      if (failure.action === "stale") return { skipped: true };
+      const check = failure.action === "check";
+      await step.do(check ? "mark needs check" : "mark failed", async () => {
+        const res = await this.env.DB.prepare(
+          "UPDATE posts SET status = ?, error = ?, updated_at = ? WHERE id = ? AND revision = ? AND status = 'publishing'",
+        )
+          .bind(check ? "needs_check" : "failed", failure.message.slice(0, 2000), now(), postId, revision)
+          .run();
+        if (res.meta.changes) await logPost(this.env, postId, check ? "warn" : "error", check ? failure.message : `Publishing failed: ${failure.message}`);
+      });
+      return check ? { needsCheck: true } : { failed: true };
+    }
+    const result = outcome.value as Extract<PublishResult, { status: "published" }>;
+    const root: Done = { externalId: result.externalId, url: result.url ?? null, data: result.data ?? {} };
+
+    const marked = await step.do("mark published", async () => {
+      // Guarded: an instance whose post was resolved, edited or retried meanwhile must not overwrite it.
+      const res = await this.env.DB.prepare(
         // Analytics start an hour after publishing (lib/metrics.ts); `external_data` is passed to postMetrics.
-        "UPDATE posts SET status = 'published', external_id = ?, external_url = ?, external_data = ?, published_at = ?, updated_at = ?, metrics_next_at = ?, metrics_fails = 0 WHERE id = ?",
+        "UPDATE posts SET status = 'published', external_id = ?, external_url = ?, external_data = ?, published_at = ?, updated_at = ?, metrics_next_at = ?, metrics_fails = 0 WHERE id = ? AND revision = ? AND status = 'publishing'",
       )
-        .bind(root.externalId, root.url, Object.keys(root.data).length ? JSON.stringify(root.data) : null, now(), now(), nextCheckpoint(now(), now()), postId)
+        .bind(root.externalId, root.url, Object.keys(root.data).length ? JSON.stringify(root.data) : null, now(), now(), nextCheckpoint(now(), now()), postId, revision)
         .run();
+      if (!res.meta.changes) return false;
       await logPost(this.env, postId, "info", `Published${root.url ? `: ${root.url}` : ` (id ${root.externalId})`}`);
+      return true;
     });
+    // Older instances returned nothing from this step (undefined): they marked it unconditionally.
+    if (marked === false) return { skipped: true };
 
     const thread = await step.do("load thread", async () => {
       const row = await getPostRow(this.env, postId);
@@ -111,84 +148,181 @@ export class PublishWorkflow extends WorkflowEntrypoint<Env, PublishParams> {
     });
     let parent = root;
     for (let i = 0; i < thread.length; i++) {
-      try {
-        parent = await run(
-          `reply ${i + 1}`,
-          { retries: { limit: 2, delay: "30 seconds", backoff: "exponential" }, timeout: "10 minutes" },
-          () =>
-            this.attempt(postId, async (ctx) => {
-              if (!ctx.provider.reply) throw new NonRetryableError(`${ctx.provider.name} does not support follow-ups`);
-              const item: PublishPost = {
-                id: `${postId}-r${i + 1}`,
-                content: thread[i].content,
-                media: await loadMediaItems(this.env, ctx.pctx.baseUrl, thread[i].media),
-                settings: ctx.post.settings,
-              };
-              const r = await ctx.provider.reply(
-                ctx.pctx,
-                ctx.account,
-                { rootId: root.externalId, parentId: parent.externalId, rootData: root.data, parentData: parent.data },
-                item,
-              );
-              return { externalId: r.externalId, url: r.url ?? null, data: r.data ?? {} };
-            }),
+      const reply = await this.commitStep<Done>(step, `reply ${i + 1}`, "10 minutes", revision, postId, "published", true, async (ctx) => {
+        if (!ctx.provider.reply) throw new ProviderError(`${ctx.provider.name} does not support follow-ups`, "invalid");
+        const item: PublishPost = {
+          id: `${postId}-r${i + 1}`,
+          content: thread[i].content,
+          media: await loadMediaItems(this.env, ctx.pctx.baseUrl, thread[i].media),
+          settings: ctx.post.settings,
+          scheduledAt: ctx.post.scheduledAt,
+          createdAt: ctx.post.createdAt,
+        };
+        const r = await ctx.provider.reply(
+          ctx.pctx,
+          ctx.account,
+          { rootId: root.externalId, parentId: parent.externalId, rootData: root.data, parentData: parent.data },
+          item,
         );
-      } catch (err) {
-        await step.do(`reply ${i + 1} failed`, async () => {
-          const message = `Follow-up ${i + 1} failed: ${errorMessage(err)}`;
-          await this.env.DB.prepare("UPDATE posts SET error = ?, updated_at = ? WHERE id = ?").bind(message, now(), postId).run();
-          await logPost(this.env, postId, "warn", message);
-        });
-        break;
+        return { externalId: r.externalId, url: r.url ?? null, data: r.data ?? {} };
+      });
+      if (reply.ok) {
+        parent = reply.value;
+        continue;
       }
+      if (reply.action === "stale") break;
+      // The root stays published; the thread stops here (a later reply would answer the wrong parent).
+      const failure = reply;
+      await step.do(`reply ${i + 1} failed`, async () => {
+        const message = failure.action === "check" ? `Follow-up ${i + 1}: ${failure.message}` : `Follow-up ${i + 1} failed: ${failure.message}`;
+        await this.env.DB.prepare("UPDATE posts SET error = ?, updated_at = ? WHERE id = ? AND revision = ?").bind(message.slice(0, 2000), now(), postId, revision).run();
+        await logPost(this.env, postId, "warn", message);
+      });
+      break;
     }
     return { published: true, externalId: root.externalId };
   }
 
-  /** Load everything a provider call needs, run it, and translate errors into retry semantics. */
-  private async attempt<T extends PublishResult | Done>(
+  /**
+   * One provider call that may create the post. The step is never retried by the engine: a retry after the request
+   * reached the platform would publish twice. `attempt` classifies the failure; only failures that certainly created
+   * nothing are retried, each in its own step (`<name> (retry N)`) after a pause.
+   */
+  private async commitStep<T>(
+    step: WorkflowStep,
+    name: string,
+    timeout: WorkflowStepConfig["timeout"],
+    revision: number,
     postId: string,
-    fn: (c: {
-      provider: NonNullable<ReturnType<typeof getProvider>>;
-      pctx: Awaited<ReturnType<typeof providerContext>>;
-      account: Awaited<ReturnType<typeof freshAccount>>;
-      post: PublishPost;
-      row: PostRow;
-    }) => Promise<T>,
-  ): Promise<T> {
+    expect: PostRow["status"],
+    allowLegacyLock: boolean,
+    fn: AttemptFn<T>,
+  ): Promise<Outcome<T>> {
+    let out: Outcome<T>;
+    for (let attempt = 0; ; attempt++) {
+      const stepName = attempt === 0 ? name : `${name} (retry ${attempt})`;
+      try {
+        // step.do's Serializable<T> typing rejects Record<string, unknown>; our values are plain JSON.
+        const raw = await step.do(stepName, { retries: NEVER_RETRY, timeout }, (() =>
+          this.attempt(postId, revision, stepName, expect, allowLegacyLock, fn)) as () => Promise<any>);
+        out = normalize<T>(raw);
+      } catch (err) {
+        // Timeout or an engine failure inside the step: the call may have reached the platform.
+        out = { ok: false, action: "check", message: needsCheckMessage("the platform", errorMessage(err)) };
+      }
+      if (out.ok || out.action !== "retry") return out;
+      if (attempt >= MAX_RETRIES) return { ok: false, action: "fail", message: out.message };
+      await step.sleep(`${name} (backoff ${attempt + 1})`, `${30 * 2 ** attempt} seconds`);
+    }
+  }
+
+  /**
+   * Load everything a provider call needs, take the post's publish lock, run the call and classify its outcome.
+   * Never throws.
+   */
+  private async attempt<T>(
+    postId: string,
+    revision: number,
+    stepName: string,
+    expect: PostRow["status"],
+    allowLegacyLock: boolean,
+    fn: AttemptFn<T>,
+  ): Promise<Outcome<T>> {
     const env = this.env;
-    const row = await getPostRow(env, postId);
-    if (!row) throw new NonRetryableError("Post was deleted");
-    const accountRow = await getAccountRow(env, row.account_id);
-    if (!accountRow) throw new NonRetryableError("Account was removed");
-    if (await isDemoPost(env.DB, postId)) throw new NonRetryableError("Demo workspace: publishing is simulated, nothing is sent to the platform");
-    if (accountRow.status === "disabled") throw new NonRetryableError("Account is disabled");
-    const provider = getProvider(accountRow.provider);
-    if (!provider) throw new NonRetryableError(`Unknown provider ${accountRow.provider}`);
-    const pctx = await providerContext(env, provider, {
-      log: (level, message) => void logPost(env, postId, level, message).catch(() => {}),
-    });
+    const db = env.DB;
+    const commit: CommitState = { sent: false, accepted: false };
+    let platform = "the platform";
+    let accountId: string | null = null;
     try {
+      const row = await getPostRow(env, postId);
+      // Guard: only the instance of the current revision calls the platform, and only while the post is in the state
+      // this step expects (publishing, or published for follow-ups).
+      if (!row || row.revision !== revision || row.status !== expect) {
+        return { ok: false, action: "stale", message: row ? "The post changed while publishing" : "Post was deleted" };
+      }
+      const accountRow = await getAccountRow(env, row.account_id);
+      if (!accountRow) return { ok: false, action: "fail", message: "Account was removed" };
+      accountId = accountRow.id;
+      if (await isDemoPost(db, postId)) return { ok: false, action: "fail", message: "Demo workspace: publishing is simulated, nothing is sent to the platform" };
+      if (accountRow.status === "disabled") return { ok: false, action: "fail", message: "Account is disabled" };
+      const provider = getProvider(accountRow.provider);
+      if (!provider) return { ok: false, action: "fail", message: `Unknown provider ${accountRow.provider}` };
+      platform = provider.name;
+
+      // Take the lock. Steps run in order and a completed step never runs again, so the only way to find this step's
+      // own name in the lock is a re-run after an interruption: that run may have reached the platform.
+      const lock = await db
+        .prepare(
+          `UPDATE posts SET publish_lock = ? WHERE id = ? AND revision = ? AND status = ?
+             AND ((publish_lock LIKE ? AND publish_lock != ?)${allowLegacyLock ? " OR publish_lock IS NULL" : ""})`,
+        )
+        .bind(lockFor(revision, stepName), postId, revision, expect, `r${revision}:%`, lockFor(revision, stepName))
+        .run();
+      if (!lock.meta.changes) {
+        const current = await getPostRow(env, postId);
+        if (!current || current.revision !== revision || current.status !== expect) return { ok: false, action: "stale", message: "The post changed while publishing" };
+        // Lock NULL: claimed by the previous version of this workflow, which may have been publishing at deploy time.
+        return {
+          ok: false,
+          action: "check",
+          message: needsCheckMessage(platform, current.publish_lock ? "an earlier attempt was interrupted" : "publishing was interrupted by an update"),
+        };
+      }
+
+      const pctx = await providerContext(env, provider, {
+        log: (level, message) => void logPost(env, postId, level, message).catch(() => {}),
+      });
       const account = await freshAccount(env, provider, pctx, accountRow);
       const post: PublishPost = {
         id: row.id,
         content: row.content,
         media: await loadMediaItems(env, await baseUrl(env), parseJson<string[]>(row.media, [])),
         settings: parseJson(row.settings, {}),
+        scheduledAt: row.scheduled_at ?? row.created_at,
+        createdAt: row.created_at,
       };
-      return await fn({ provider, pctx, account, post, row });
+      pctx.commit = commit;
+      return { ok: true, value: await fn({ provider, pctx, account, post, row }) };
     } catch (err) {
-      if (err instanceof NonRetryableError) throw err;
+      const out = classify(err, commit, platform);
       const message = errorMessage(err);
-      await logPost(env, postId, err instanceof ProviderError && err.retryable ? "warn" : "error", message).catch(() => {});
-      if (err instanceof ProviderError) {
-        if (err.kind === "auth") {
-          await markReconnect(env, accountRow.id, message);
-          throw new NonRetryableError(`Account needs to be reconnected: ${message}`);
-        }
-        if (!err.retryable) throw new NonRetryableError(message);
+      await logPost(env, postId, out.action === "retry" ? "warn" : "error", message).catch(() => {});
+      if (err instanceof ProviderError && err.kind === "auth" && out.action === "fail" && accountId) {
+        await markReconnect(env, accountId, message).catch(() => {});
       }
-      throw err;
+      return out;
     }
   }
+}
+
+type AttemptFn<T> = (c: {
+  provider: NonNullable<ReturnType<typeof getProvider>>;
+  pctx: Awaited<ReturnType<typeof providerContext>>;
+  account: Awaited<ReturnType<typeof freshAccount>>;
+  post: PublishPost;
+  row: PostRow;
+}) => Promise<T>;
+
+/** Failure of a commit step → what to do next (see Outcome). */
+export function classify(err: unknown, commit: CommitState, platform: string): Outcome<never> & { ok: false } {
+  const message = errorMessage(err);
+  // The platform accepted the post, something after that failed: it is live (or partly), never publish again.
+  if (commit.accepted) return { ok: false, action: "check", message: needsCheckMessage(platform, message) };
+  if (err instanceof ProviderError) {
+    switch (err.kind) {
+      case "ambiguous":
+        return { ok: false, action: "check", message: needsCheckMessage(platform, message) };
+      case "auth":
+        return { ok: false, action: "fail", message: `Account needs to be reconnected: ${message}` };
+      case "invalid":
+        return { ok: false, action: "fail", message };
+      case "rate_limit":
+        // A refusal: nothing was created.
+        return { ok: false, action: "retry", message };
+      case "transient":
+        return commit.sent ? { ok: false, action: "check", message: needsCheckMessage(platform, message) } : { ok: false, action: "retry", message };
+    }
+  }
+  // Unknown exception (a bug, an unexpected response shape...): harmless before the create call, ambiguous after.
+  return commit.sent ? { ok: false, action: "check", message: needsCheckMessage(platform, message) } : { ok: false, action: "retry", message };
 }

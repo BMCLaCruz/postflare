@@ -4,6 +4,7 @@ import type { Provider } from "./types";
 
 /** Generic outgoing webhook: POSTs the post as JSON to any URL (Zapier, Make, n8n, your own backend...). */
 export const webhook: Provider = {
+  hotlinksMedia: true,
   id: "webhook",
   name: "Webhook",
   color: "6B7280",
@@ -44,7 +45,8 @@ export const webhook: Provider = {
     const res = await request(ctx, account.credentials.url as string, {
       method: "POST",
       headers: {
-        // Retries resend the same post: receivers can dedupe on this key.
+        // Retries resend the same post: receivers can dedupe on this key. That is why this request is not marked
+        // `commit: true` and stays retryable (docs/provider-brief.md "Commit semantics").
         "idempotency-key": post.id,
         ...(account.credentials.secret ? { "x-postflare-secret": String(account.credentials.secret) } : {}),
       },

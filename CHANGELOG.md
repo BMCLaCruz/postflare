@@ -5,6 +5,37 @@ All notable changes to the Postflare server and web app. The `postflare` CLI has
 is maintained by [release-please](https://github.com/googleapis/release-please) from
 [Conventional Commits](https://www.conventionalcommits.org) (see [docs/RELEASING.md](docs/RELEASING.md)).
 
+## Unreleased
+
+### Features
+
+* **Needs check** post status: when the request that creates a post fails ambiguously (network error, timeout, 5xx
+  after sending), the post is no longer retried automatically (that could publish it twice). It goes to `needs_check`
+  with "We couldn't confirm whether <platform> accepted the post"; resolve it in the post drawer (Mark as published,
+  with an optional URL, or Retry anyway), with `POST /api/posts/:id/resolve`, `pf posts resolve` or the MCP
+  `resolve_post` tool. Shown in amber on the calendar, the posts list (filter) and the dashboard.
+* **Media retention** (Instance settings, default 30 days, 0 = forever) applied by a new daily cron, plus removal of
+  unfinished uploads (2 days) and unused upload-link files (7 days). Media of published posts on platforms that hotlink
+  our copy is kept. Storage usage (`GET /api/media/usage`) on the Media page and in Instance settings.
+
+### Bug Fixes
+
+* Publishing: the step that creates the post is never retried by the Workflows engine. Providers mark the create call
+  (`commit: true`); safe failures (rate limits, failed uploads before the create call) are retried in separate steps.
+  A per-post publish lock stops a re-executed step from calling the platform twice, and every status change of the
+  workflow is guarded by the post's revision. Bluesky record keys and Nostr event ids are deterministic, so their
+  retries are deduplicated by the platform.
+* `recoverStuckPosts` no longer fails posts whose workflow status cannot be read; a post whose workflow died while
+  publishing goes to `needs_check`, not `failed`.
+* Token refresh: the cron refreshes only tokens expiring within 45 minutes (plus refresh tokens / long-lived tokens
+  within 7 days of their own expiry), at most 5 accounts per run, instead of every token expiring within a day on every
+  run.
+* D1 queries per invocation (Free plan: 50): the media signing key is cached per isolate (`GET /api/media` was ~64
+  queries), `POST /api/posts` uses one batch and `createBatch` whatever the number of accounts, publishing reads media
+  without a query per chunk, and the metrics clean-up scan and other clean-ups moved to a daily cron
+  (`0 3 * * *`), and analytics collection moved to its own trigger (`7,22,37,52 * * * *`) so each run stays under the Free plan's 50 D1 queries. Add both to your `wrangler.local.jsonc` / Deploy-button `wrangler.jsonc` triggers.
+* Media used by a draft, scheduled, publishing or needs-check post cannot be deleted (409 with the post ids).
+
 ## 0.1.0 (2026-10-13)
 
 First public release.

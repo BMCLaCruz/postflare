@@ -2,7 +2,7 @@
 import type { FieldDef, MetricKey, MetricValues, ProviderCapabilities } from "../../shared/types";
 import { fetchesLeft } from "./budget";
 import { ProviderError, missingScope, type ProviderErrorKind } from "./errors";
-import { requestJson, type RequestOptions } from "./http";
+import { checkedCommit, requestJson, type RequestOptions } from "./http";
 import type { AccountRecord, MediaItem, MetricsItem, PostMetricsResult, ProviderContext, PublishPost, PublishResult } from "./types";
 
 /** Graph API version used by every Meta provider except Threads (which has its own v1.0). */
@@ -40,14 +40,17 @@ export interface GraphOptions extends Omit<RequestOptions, "token" | "classify">
 }
 
 /** requestJson with Meta error classification. Also throws on 200 responses that carry an `error` object. */
-export async function graph<T = any>(ctx: Pick<ProviderContext, "fetch">, url: string, opts: GraphOptions = {}): Promise<T> {
+export async function graph<T = any>(ctx: Pick<ProviderContext, "fetch" | "commit">, url: string, opts: GraphOptions = {}): Promise<T> {
   const { token, query, ...rest } = opts;
-  const out = await requestJson(ctx, url, {
-    ...rest,
-    query: token ? { ...query, access_token: token } : query,
-    classify: classifyGraphError,
-  });
-  if (out && typeof out === "object" && (out as any).error) {
+  const send = () =>
+    requestJson(ctx, url, {
+      ...rest,
+      query: token ? { ...query, access_token: token } : query,
+      classify: classifyGraphError,
+    });
+  // A 200 carrying an error is a refusal: on a commit it created nothing (checkedCommit undoes `accepted`).
+  const out = await checkedCommit(ctx, send, (out) => {
+    if (!out || typeof out !== "object" || !(out as any).error) return;
     const err = (out as any).error;
     throw new ProviderError(
       `${new URL(url).host}: ${err.error_user_msg || err.message || JSON.stringify(err)}`,
@@ -55,7 +58,7 @@ export async function graph<T = any>(ctx: Pick<ProviderContext, "fetch">, url: s
       200,
       out,
     );
-  }
+  });
   return out as T;
 }
 
@@ -248,7 +251,7 @@ export interface IgAccount {
   username?: string | null;
 }
 
-/** Create the media containers. Nothing is visible until media_publish, so this is safe to retry. */
+/** Create the media containers. Nothing is visible until media_publish (the commit), so this is safe to retry. */
 export async function instagramCreate(ctx: ProviderContext, host: string, acc: IgAccount, post: PublishPost): Promise<PublishResult> {
   const errors = instagramValidate(post);
   if (errors.length) throw new ProviderError(errors.join("; "), "invalid");
@@ -329,7 +332,7 @@ export async function instagramCheck(ctx: ProviderContext, acc: IgAccount, raw: 
   const profile = acc.username ? `https://www.instagram.com/${acc.username}/` : "https://www.instagram.com/";
   const pending = (s: IgState, retryAfterSeconds = 10): PublishResult => ({ status: "pending", state: s as unknown as Record<string, unknown>, retryAfterSeconds });
   const publish = (creationId: string) =>
-    graph<{ id: string }>(ctx, `${host}/${acc.igUserId}/media_publish`, { method: "POST", token: acc.token, form: { creation_id: creationId } });
+    graph<{ id: string }>(ctx, `${host}/${acc.igUserId}/media_publish`, { method: "POST", token: acc.token, form: { creation_id: creationId }, commit: true });
 
   if (state.kind === "stories") {
     const published = [...(state.published ?? [])];
@@ -385,7 +388,12 @@ export async function instagramCheck(ctx: ProviderContext, acc: IgAccount, raw: 
 export async function instagramComment(ctx: ProviderContext, host: string, acc: IgAccount, rootId: string, post: PublishPost) {
   if (post.media.length) ctx.log("warn", "Instagram comments cannot contain media; only the text is posted");
   if (!post.content.trim()) throw new ProviderError("Instagram comments need text", "invalid");
-  const { id } = await graph<{ id: string }>(ctx, `${host}/${rootId}/comments`, { method: "POST", token: acc.token, form: { message: post.content } });
+  const { id } = await graph<{ id: string }>(ctx, `${host}/${rootId}/comments`, {
+    method: "POST",
+    token: acc.token,
+    form: { message: post.content },
+    commit: true,
+  });
   const url = await bestEffort(async () => (await graph<{ permalink?: string }>(ctx, `${host}/${rootId}`, { token: acc.token, query: { fields: "permalink" } })).permalink ?? null, null);
   return { externalId: id, url };
 }

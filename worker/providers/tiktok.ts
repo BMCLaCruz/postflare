@@ -1,5 +1,5 @@
 import { MetricsUnavailableError, missingScope, ProviderError } from "./errors";
-import { expiresAt, oauthToken, request, requestJson, requireApp } from "./http";
+import { checkedCommit, commitCall, expiresAt, oauthToken, request, requestJson, requireApp } from "./http";
 import {
   allowInteraction,
   bool,
@@ -80,20 +80,27 @@ interface UploadState {
   next?: number;
 }
 
-/** POST to the Content Posting API; the envelope is `{ data, error: { code: "ok" | ... } }`. */
-async function api<T = any>(ctx: ProviderContext, token: string, path: string, json?: unknown): Promise<T> {
-  const res = await requestJson<{ data?: T; error?: { code?: string; message?: string } }>(ctx, `${API}${path}`, {
-    method: "POST",
-    token,
-    headers: { "content-type": "application/json; charset=UTF-8" },
-    json: json ?? {},
-    classify: tiktokClassify,
-  }).catch((err) => {
-    // Non-2xx responses carry the same envelope: surface the TikTok error code, not just its generic message.
-    const body = err instanceof ProviderError ? (err.body as any) : undefined;
-    throw body?.error?.code ? tiktokError(NAME, body.error, err.kind, err.status) : err;
+/**
+ * POST to the Content Posting API; the envelope is `{ data, error: { code: "ok" | ... } }`. `commit`: this call
+ * creates the post (docs/provider-brief.md "Commit semantics"); a 200 with an error code is still a refusal.
+ */
+async function api<T = any>(ctx: ProviderContext, token: string, path: string, json?: unknown, commit = false): Promise<T> {
+  const send = () =>
+    requestJson<{ data?: T; error?: { code?: string; message?: string } }>(ctx, `${API}${path}`, {
+      method: "POST",
+      token,
+      headers: { "content-type": "application/json; charset=UTF-8" },
+      json: json ?? {},
+      classify: tiktokClassify,
+      commit,
+    }).catch((err) => {
+      // Non-2xx responses carry the same envelope: surface the TikTok error code, not just its generic message.
+      const body = err instanceof ProviderError ? (err.body as any) : undefined;
+      throw body?.error?.code ? tiktokError(NAME, body.error, err.kind, err.status) : err;
+    });
+  const res = await checkedCommit(ctx, send, (res) => {
+    if (res?.error?.code && res.error.code !== "ok") throw tiktokError(NAME, res.error);
   });
-  if (res?.error?.code && res.error.code !== "ok") throw tiktokError(NAME, res.error);
   return res.data as T;
 }
 
@@ -160,7 +167,17 @@ export function postInfo(post: PublishPost, info: CreatorInfo, video: boolean) {
   };
 }
 
+/**
+ * The last chunk is the commit of a video post: once TikTok has every byte it publishes (or sends to the inbox), and
+ * re-sending the chunk after a lost answer cannot be told apart from a refusal, so it is never retried. Earlier chunks
+ * go to the same upload URL and are safe to resend.
+ */
 async function putChunk(ctx: ProviderContext, state: UploadState, index: number) {
+  if (index === state.count! - 1) return commitCall(ctx, () => sendChunk(ctx, state, index));
+  return sendChunk(ctx, state, index);
+}
+
+async function sendChunk(ctx: ProviderContext, state: UploadState, index: number) {
   const video = state.video!;
   const start = index * state.chunkSize!;
   const end = index === state.count! - 1 ? video.size - 1 : start + state.chunkSize! - 1;
@@ -222,7 +239,7 @@ async function fetchStatus(ctx: ProviderContext, token: string, state: UploadSta
   return statusResult(NAME, data.status, data.fail_reason, state.publishId, firstBigId(raw, "publicaly_available_post_id"), state.username, state);
 }
 
-function accountFrom(user: any, tok: { access_token: string; refresh_token?: string; expires_in?: number }): ConnectedAccount {
+function accountFrom(user: any, tok: { access_token: string; refresh_token?: string; expires_in?: number; refresh_expires_in?: number }): ConnectedAccount {
   return {
     externalId: String(user.open_id),
     name: user.display_name || user.username || "TikTok",
@@ -231,6 +248,7 @@ function accountFrom(user: any, tok: { access_token: string; refresh_token?: str
     profileUrl: user.username ? `https://www.tiktok.com/@${user.username}` : null,
     credentials: { accessToken: tok.access_token, refreshToken: tok.refresh_token },
     expiresAt: expiresAt(tok.expires_in),
+    refreshExpiresAt: expiresAt(tok.refresh_expires_in),
     meta: { openId: user.open_id, username: user.username ?? null },
   };
 }
@@ -353,6 +371,7 @@ export const tiktok: Provider = {
     return {
       credentials: { accessToken: tok.access_token, ...(tok.refresh_token ? { refreshToken: tok.refresh_token } : {}) },
       expiresAt: expiresAt(tok.expires_in),
+      ...(tok.refresh_expires_in ? { refreshExpiresAt: expiresAt(tok.refresh_expires_in) } : {}),
     };
   },
 
@@ -372,6 +391,8 @@ export const tiktok: Provider = {
         throw new ProviderError(`TikTok: this account can post videos up to ${info.max_video_post_duration_sec}s`, "invalid");
       }
       const { chunkSize, count } = chunkPlan(video.size);
+      // Not a commit: the publish only happens once the file is uploaded (the last chunk, see putChunk). A lost init
+      // leaves a publish id without bytes, which TikTok drops.
       const source_info = { source: "FILE_UPLOAD", video_size: video.size, chunk_size: chunkSize, total_chunk_count: count };
       const data = inbox
         ? await api<{ publish_id: string; upload_url: string }>(ctx, t, "/post/publish/inbox/video/init/", { source_info })
@@ -400,7 +421,7 @@ export const tiktok: Provider = {
       source_info: { source: "PULL_FROM_URL", photo_cover_index: 0, photo_images: photos.map((p) => p.url) },
       post_mode: inbox ? "MEDIA_UPLOAD" : "DIRECT_POST",
       media_type: "PHOTO",
-    });
+    }, true);
     return { status: "pending", state: { phase: "status", publishId: data.publish_id, username }, retryAfterSeconds: 10 };
   },
 

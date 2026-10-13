@@ -62,6 +62,10 @@ postflare posts --status failed  # then: posts show <id>, fix with posts edit, p
 ```
 `posts edit <id> --at ... --text ... --set ...` reschedules/changes draft, scheduled, failed or cancelled posts.
 `posts cancel <id>` unschedules; `posts rm <id>` deletes from Postflare only (not from the platform).
+`needs_check` status: the publish request failed in a way that does not tell whether the platform accepted the post
+(timeout, network error, 5xx). It is never retried automatically. Ask the user to check the profile (or check it yourself),
+then `posts resolve <id> --published [--url URL]` if it is live, or `posts resolve <id> --retry` if it is not
+(retrying a post that did go through publishes a duplicate). List them with `posts --status needs_check`.
 
 ## Recipes
 

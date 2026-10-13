@@ -143,6 +143,7 @@ const STATUS_COLORS: Record<string, (s: string) => string> = {
   failed: c.red,
   error: c.red,
   reconnect: c.yellow,
+  needs_check: c.yellow,
   reconnect_required: c.yellow,
 };
 

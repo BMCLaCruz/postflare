@@ -52,6 +52,7 @@ async function publishContainer(ctx: ProviderContext, account: AccountRecord, co
     method: "POST",
     token: token(account),
     form: { creation_id: containerId },
+    commit: true,
   });
   const fallback = account.username ? `https://www.threads.net/@${account.username}` : null;
   const url = await bestEffort(
@@ -179,6 +180,8 @@ export const threads: Provider = {
         profileUrl: me.username ? `https://www.threads.net/@${me.username}` : null,
         credentials: { accessToken: long.access_token },
         expiresAt: expiresAt(long.expires_in ?? 60 * 24 * 3600),
+        // The long-lived token refreshes itself (th_refresh_token): it must be refreshed before it expires.
+        refreshExpiresAt: expiresAt(long.expires_in ?? 60 * 24 * 3600),
       },
     ];
   },
@@ -187,7 +190,8 @@ export const threads: Provider = {
     const res = await graph<{ access_token: string; expires_in?: number }>(ctx, "https://graph.threads.net/refresh_access_token", {
       query: { grant_type: "th_refresh_token", access_token: token(account) },
     });
-    return { credentials: { ...account.credentials, accessToken: res.access_token }, expiresAt: expiresAt(res.expires_in ?? 60 * 24 * 3600) };
+    const exp = expiresAt(res.expires_in ?? 60 * 24 * 3600);
+    return { credentials: { ...account.credentials, accessToken: res.access_token }, expiresAt: exp, refreshExpiresAt: exp };
   },
 
   async publish(ctx, account, post) {

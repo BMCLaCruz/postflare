@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { bluesky, detectFacets, graphemeLength, jwtExpiry, makeTid } from "../../worker/providers/bluesky";
+import { bluesky, detectFacets, graphemeLength, jwtExpiry, makeTid, postTid } from "../../worker/providers/bluesky";
 import { ProviderError } from "../../worker/providers/errors";
 import { image, json, mockFetch, noCopy, testAccount, testContext, video } from "../helpers";
 
@@ -343,5 +343,79 @@ describe("bluesky metrics", () => {
     const { fetch, requests } = mockFetch([[`GET ${PDS}/xrpc/app.bsky.actor.getProfile`, () => ({ followersCount: 7, followsCount: 3, postsCount: 20 })]]);
     expect(await bluesky.accountMetrics!(testContext(fetch), account())).toEqual({ followers: 7, following: 3, posts: 20 });
     expect(new URL(requests[0].url).searchParams.get("actor")).toBe("did:plc:me");
+  });
+});
+
+describe("bluesky deterministic record keys", () => {
+  const TID = /^[234567abcdefghij][234567abcdefghijklmnopqrstuvwxyz]{12}$/;
+  const created = Date.UTC(2026, 9, 1, 12, 0, 0);
+  const rkeyOf = async (p: ReturnType<typeof post>, reply = false) => {
+    const { fetch, requests } = mockFetch([[/createRecord/, () => ({ uri: "at://did:plc:me/app.bsky.feed.post/x", cid: "c" })]]);
+    const target = { rootId: "at://root", parentId: "at://root", rootData: { uri: "at://root", cid: "cr" }, parentData: { uri: "at://root", cid: "cr" } };
+    if (reply) await bluesky.reply!(testContext(fetch), account(), target, p);
+    else await bluesky.publish(testContext(fetch), account(), { ...p, settings: { linkCard: false } });
+    return requests.find((r) => r.url.includes("createRecord"))!.json.rkey as string;
+  };
+
+  it("uses the same valid TID for the same post across publish calls", async () => {
+    const p = post({ id: "post_1", createdAt: created, scheduledAt: created + 3_600_000 });
+    const a = await rkeyOf(p);
+    const b = await rkeyOf(p);
+    expect(a).toMatch(TID);
+    expect(b).toBe(a);
+    expect(postTid(p)).toBe(a);
+    // A user retry changes scheduledAt, never createdAt: still the same key.
+    expect(postTid({ ...p, scheduledAt: created + 7_200_000 })).toBe(a);
+  });
+
+  it("gives the root and each reply their own key", async () => {
+    const root = await rkeyOf(post({ id: "post_1", createdAt: created }));
+    const r1 = await rkeyOf(post({ id: "post_1-r1", createdAt: created }), true);
+    const r2 = postTid({ id: "post_1-r2", createdAt: created });
+    expect(new Set([root, r1, r2]).size).toBe(3);
+    for (const k of [root, r1, r2]) expect(k).toMatch(TID);
+  });
+
+  it("returns the existing record when a retried create hits the reference PDS's 500 for a taken key", async () => {
+    const p = post({ id: "post_1", createdAt: created, settings: { linkCard: false } });
+    const rkey = postTid(p);
+    const { fetch, requests } = mockFetch([
+      [/createRecord/, () => json({ error: "InternalServerError", message: "Internal Server Error" }, 500)],
+      [/getRecord/, () => ({ uri: `at://did:plc:me/app.bsky.feed.post/${rkey}`, cid: "c0", value: {} })],
+    ]);
+    const res = await bluesky.publish(testContext(fetch), account(), p);
+    expect(res).toMatchObject({ status: "published", externalId: `at://did:plc:me/app.bsky.feed.post/${rkey}`, data: { cid: "c0" } });
+    expect(new URL(requests.find((r) => r.url.includes("getRecord"))!.url).searchParams.get("rkey")).toBe(rkey);
+  });
+
+  it("finds a record created by a create whose answer was lost; rethrows when there is none", async () => {
+    const p = post({ id: "post_1", createdAt: created, settings: { linkCard: false } });
+    const lost = mockFetch([
+      [
+        /createRecord/,
+        () => {
+          throw new TypeError("connection reset");
+        },
+      ],
+      [/getRecord/, () => ({ uri: "at://did:plc:me/app.bsky.feed.post/k", cid: "c1" })],
+    ]);
+    expect(await bluesky.publish(testContext(lost.fetch), account(), p)).toMatchObject({ status: "published", data: { cid: "c1" } });
+    const none = mockFetch([
+      [
+        /createRecord/,
+        () => {
+          throw new TypeError("connection reset");
+        },
+      ],
+      [/getRecord/, () => json({ error: "RecordNotFound", message: "Could not locate record" }, 400)],
+    ]);
+    // Retry-safe thanks to the deterministic key: transient (retried), not ambiguous.
+    await expect(bluesky.publish(testContext(none.fetch), account(), p)).rejects.toMatchObject({ kind: "transient" });
+  });
+
+  it("reports the refresh JWT expiry", async () => {
+    const { fetch } = mockFetch([[/refreshSession/, () => ({ accessJwt: jwt(EXP), refreshJwt: jwt(EXP + 86400 * 60), did: "did:plc:me" })]]);
+    const up = await bluesky.refresh!(testContext(fetch), account());
+    expect(up.refreshExpiresAt).toBe((EXP + 86400 * 60) * 1000);
   });
 });

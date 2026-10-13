@@ -1,5 +1,5 @@
 import { ProviderError, type ProviderErrorKind } from "./errors";
-import { expiresAt, request, requestJson, requireApp, sleep } from "./http";
+import { checkedCommit, expiresAt, request, requestJson, requireApp, sleep } from "./http";
 import { mediaBody, streamBody } from "./multipart";
 import type { AccountRecord, Provider, ProviderContext, PublishPost, PublishResult } from "./types";
 
@@ -8,23 +8,34 @@ const SCOPES = ["chat:write", "chat:write.public", "channels:read", "groups:read
 const AUTH_ERRORS = ["invalid_auth", "not_authed", "token_revoked", "token_expired", "account_inactive", "missing_scope", "no_permission"];
 const TRANSIENT_ERRORS = ["internal_error", "fatal_error", "service_unavailable", "request_timeout"];
 
+/** Methods that post the message (docs/provider-brief.md "Commit semantics"). */
+const COMMIT_METHODS = ["chat.postMessage", "files.completeUploadExternal"];
+
 /** Calls a Slack Web API method. Slack answers HTTP 200 with `{ ok: false, error }` on failure. */
 async function api<T = any>(ctx: ProviderContext, token: string | undefined, method: string, params: Record<string, unknown>, get = false): Promise<T> {
   const flat: Record<string, string> = {};
   for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== null) flat[k] = typeof v === "string" ? v : JSON.stringify(v);
-  const body = await requestJson<any>(ctx, `${API}/${method}`, get ? { token, query: flat } : { method: "POST", token, form: flat });
-  if (!body?.ok) {
-    const error = String(body?.error ?? "unknown_error");
-    const kind: ProviderErrorKind = AUTH_ERRORS.includes(error)
-      ? "auth"
-      : error === "ratelimited"
-        ? "rate_limit"
-        : TRANSIENT_ERRORS.includes(error)
-          ? "transient"
-          : "invalid";
-    const hint = error === "not_in_channel" ? " (invite the app to this private channel)" : "";
-    throw new ProviderError(`Slack ${method}: ${error}${hint}`, kind, 200, body);
-  }
+  const commit = COMMIT_METHODS.includes(method);
+  // `ok: false` is a refusal (nothing posted), except a server-side error on a commit: that one is ambiguous.
+  const body = await checkedCommit(
+    ctx,
+    () => requestJson<any>(ctx, `${API}/${method}`, get ? { token, query: flat } : { method: "POST", token, form: flat, commit }),
+    (body) => {
+      if (body?.ok) return;
+      const error = String(body?.error ?? "unknown_error");
+      const kind: ProviderErrorKind = AUTH_ERRORS.includes(error)
+        ? "auth"
+        : error === "ratelimited"
+          ? "rate_limit"
+          : TRANSIENT_ERRORS.includes(error)
+            ? commit
+              ? "ambiguous"
+              : "transient"
+            : "invalid";
+      const hint = error === "not_in_channel" ? " (invite the app to this private channel)" : "";
+      throw new ProviderError(`Slack ${method}: ${error}${hint}`, kind, 200, body);
+    },
+  );
   return body as T;
 }
 

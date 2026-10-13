@@ -1,5 +1,5 @@
 import { ProviderError } from "./errors";
-import { clientFields, expiresAt, oauthToken, requestJson, requireApp } from "./http";
+import { checkedCommit, clientFields, expiresAt, oauthToken, requestJson, requireApp } from "./http";
 import type { AccountRecord, Provider, ProviderContext, PublishPost } from "./types";
 
 const HELIX = "https://api.twitch.tv/helix";
@@ -35,22 +35,32 @@ async function send(ctx: ProviderContext, account: AccountRecord, post: PublishP
       method: "POST",
       query: { broadcaster_id: id, moderator_id: id },
       json: { message, color: post.settings.announcementColor || "primary" },
+      commit: true,
     });
     // Announcements return 204 without a message id.
     return { externalId: `announcement:${post.id}`, url, data: { announcement: true } };
   }
 
-  const res = await requestJson<{ data: Array<{ message_id: string; is_sent: boolean; drop_reason?: { code: string; message: string } | null }> }>(
+  // A dropped message (is_sent: false) was not posted: a refusal, not an ambiguous commit.
+  const res = await checkedCommit(
     ctx,
-    `${HELIX}/chat/messages`,
-    {
-      ...helix(ctx, account),
-      method: "POST",
-      json: { broadcaster_id: id, sender_id: id, message, reply_parent_message_id: replyTo },
+    () =>
+      requestJson<{ data: Array<{ message_id: string; is_sent: boolean; drop_reason?: { code: string; message: string } | null }> }>(
+        ctx,
+        `${HELIX}/chat/messages`,
+        {
+          ...helix(ctx, account),
+          method: "POST",
+          json: { broadcaster_id: id, sender_id: id, message, reply_parent_message_id: replyTo },
+          commit: true,
+        },
+      ),
+    (res) => {
+      const sent = res.data?.[0];
+      if (!sent?.is_sent) throw new ProviderError(`Twitch dropped the message: ${sent?.drop_reason?.message ?? "unknown reason"}`, "invalid");
     },
   );
-  const sent = res.data?.[0];
-  if (!sent?.is_sent) throw new ProviderError(`Twitch dropped the message: ${sent?.drop_reason?.message ?? "unknown reason"}`, "invalid");
+  const sent = res.data[0];
   return { externalId: sent.message_id, url, data: {} };
 }
 

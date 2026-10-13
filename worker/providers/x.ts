@@ -234,6 +234,7 @@ async function createTweet(ctx: ProviderContext, account: AccountRecord, body: R
     method: "POST",
     token: token(account),
     json: body,
+    commit: true,
   });
   return res.data.id;
 }

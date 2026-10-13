@@ -1,3 +1,4 @@
+import { sha256 } from "@noble/hashes/sha2.js";
 import { ProviderError } from "./errors";
 import { requestJson, sleep, type RequestOptions } from "./http";
 import { mediaBody } from "./multipart";
@@ -158,9 +159,26 @@ async function buildFacets(ctx: ProviderContext, pds: string, token: string, tex
 const S32 = "234567abcdefghijklmnopqrstuvwxyz";
 /** Timestamp identifier used as record key, so a create can be retried and detected as already existing. */
 export function makeTid(nowMs = Date.now()): string {
-  const clock = BigInt(Math.floor(Math.random() * 1024));
-  let v = (BigInt(nowMs) * 1000n + BigInt(Math.floor(Math.random() * 1000))) << 10n;
-  v |= clock;
+  return encodeTid(nowMs, Math.floor(Math.random() * 1000), Math.floor(Math.random() * 1024));
+}
+
+/**
+ * Deterministic TID (record key) of a post: the same post always gets the same rkey, across automatic and user
+ * retries, so a repeated createRecord cannot create a second post (createRecord is therefore not a `commit: true`
+ * request, see docs/provider-brief.md "Commit semantics"). Timestamp = the post's creation time (fallback: scheduled
+ * time) plus sub-millisecond bits, clock id = 10 bits, both from a hash of the post id (replies have their own ids,
+ * `${postId}-r${n}`, so root and replies differ).
+ */
+export function postTid(post: Pick<PublishPost, "id" | "createdAt" | "scheduledAt">): string {
+  const h = sha256(new TextEncoder().encode(post.id));
+  const micros = ((h[0] << 8) | h[1]) % 1000;
+  const clock = ((h[2] << 8) | h[3]) & 1023;
+  return encodeTid(post.createdAt ?? post.scheduledAt ?? Date.now(), micros, clock);
+}
+
+/** 64-bit TID: 0 | 53 bits of microseconds since the epoch | 10 bits clock id, in base32-sortable (13 chars). */
+function encodeTid(ms: number, micros: number, clock: number): string {
+  let v = ((BigInt(Math.floor(ms)) * 1000n + BigInt(micros)) << 10n) | BigInt(clock);
   let s = "";
   for (let i = 0; i < 13; i++) {
     s = S32[Number(v & 31n)] + s;
@@ -371,7 +389,12 @@ async function baseRecord(ctx: ProviderContext, account: AccountRecord, post: Pu
   return record;
 }
 
-/** Create the record under a pre-chosen rkey; a retry that finds it existing returns the existing record. */
+/**
+ * Create the record under its deterministic rkey (`postTid`). A retry whose first attempt went through finds the
+ * record existing: the reference PDS then fails the create with a 500 InternalServerError (the MST throws "There is
+ * already a value at key"; the message is not exposed), other PDSs with a 400 naming the existing record. So after
+ * any failed create other than auth / rate limit, getRecord on the same rkey decides: found = this post, success.
+ */
 async function createRecord(ctx: ProviderContext, account: AccountRecord, record: Record<string, unknown>, rkey: string) {
   const { pds, token, did } = session(account);
   try {
@@ -383,14 +406,27 @@ async function createRecord(ctx: ProviderContext, account: AccountRecord, record
     });
     return { uri: r.uri, cid: r.cid };
   } catch (err) {
-    if (err instanceof ProviderError && err.kind === "invalid" && /already exists/i.test(`${err.message} ${JSON.stringify(err.body ?? "")}`)) {
-      const r = await requestJson<StrongRef>(ctx, `${pds}/xrpc/com.atproto.repo.getRecord`, {
-        token,
-        query: { repo: did, collection: "app.bsky.feed.post", rkey },
-        classify,
-      });
-      return { uri: r.uri, cid: r.cid };
+    if (!(err instanceof ProviderError) || err.kind === "auth" || err.kind === "rate_limit") throw err;
+    const existing = await getRecord(ctx, pds, token, did, rkey);
+    if (existing) {
+      ctx.log("warn", `Bluesky: record ${rkey} already exists (an earlier attempt created it); using it`);
+      return existing;
     }
+    throw err;
+  }
+}
+
+/** The post record at `rkey`, or null when there is none (400 RecordNotFound / 404). */
+async function getRecord(ctx: ProviderContext, pds: string, token: string, did: string, rkey: string): Promise<StrongRef | null> {
+  try {
+    const r = await requestJson<StrongRef>(ctx, `${pds}/xrpc/com.atproto.repo.getRecord`, {
+      token,
+      query: { repo: did, collection: "app.bsky.feed.post", rkey },
+      classify,
+    });
+    return r?.uri && r?.cid ? { uri: r.uri, cid: r.cid } : null;
+  } catch (err) {
+    if (err instanceof ProviderError && (err.status === 404 || (err.status === 400 && (err.body as any)?.error === "RecordNotFound"))) return null;
     throw err;
   }
 }
@@ -503,6 +539,7 @@ export const bluesky: Provider = {
         profileUrl: `https://bsky.app/profile/${s.handle}`,
         credentials: { accessJwt: s.accessJwt, refreshJwt: s.refreshJwt, identifier, password: values.password.trim() },
         expiresAt: jwtExpiry(s.accessJwt),
+        refreshExpiresAt: jwtExpiry(s.refreshJwt),
         meta: { pds, service },
       },
     ];
@@ -519,6 +556,7 @@ export const bluesky: Provider = {
       return {
         credentials: sessionCredentials(s, account),
         expiresAt: jwtExpiry(s.accessJwt),
+        refreshExpiresAt: jwtExpiry(s.refreshJwt),
         meta: { ...account.meta, pds: pdsFromDidDoc(s.didDoc) ?? pds },
       };
     } catch (err) {
@@ -529,6 +567,7 @@ export const bluesky: Provider = {
       return {
         credentials: sessionCredentials(s, account),
         expiresAt: jwtExpiry(s.accessJwt),
+        refreshExpiresAt: jwtExpiry(s.refreshJwt),
         meta: { ...account.meta, pds: pdsFromDidDoc(s.didDoc) ?? pds },
       };
     }
@@ -536,7 +575,7 @@ export const bluesky: Provider = {
 
   async publish(ctx, account, post) {
     const record = await baseRecord(ctx, account, post);
-    const rkey = makeTid();
+    const rkey = postTid(post);
     const video = post.media.find((m) => m.kind === "video");
     if (video) {
       const jobId = await startVideoUpload(ctx, account, video);
@@ -576,7 +615,7 @@ export const bluesky: Provider = {
     } else {
       await attachEmbed(ctx, account, post, record);
     }
-    const r = published(account, await createRecord(ctx, account, record, makeTid()));
+    const r = published(account, await createRecord(ctx, account, record, postTid(post)));
     return { externalId: r.externalId, url: r.url, data: r.data };
   },
 

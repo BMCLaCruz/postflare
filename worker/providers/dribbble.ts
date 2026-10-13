@@ -103,7 +103,7 @@ export const dribbble: Provider = {
     // The image is streamed from R2 into the multipart body (no copy into memory).
     const mp = streamingMultipart(parts);
     // 202 Accepted; the shot id is the last segment of the Location header.
-    const res = await request(ctx, `${API}/shots`, { token: account.credentials.accessToken, ...streamBody(mp.body, mp.contentType) });
+    const res = await request(ctx, `${API}/shots`, { token: account.credentials.accessToken, ...streamBody(mp.body, mp.contentType), commit: true });
     const id = res.headers.get("location")?.split("/").filter(Boolean).pop();
     if (!id) throw new ProviderError("Dribbble did not return the shot location", "transient");
     return { status: "published", externalId: id, url: `https://dribbble.com/shots/${id}` };

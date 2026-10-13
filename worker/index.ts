@@ -6,7 +6,8 @@ import { demoCron } from "./lib/demo";
 import { ensureSchema } from "./lib/migrate";
 import { recoverStuckPosts, sweepScheduledPosts } from "./lib/posts";
 import { now } from "./lib/util";
-import { collectMetrics } from "./lib/metrics";
+import { CRON_METRICS_LIMITS, collectMetrics, expireMetricsSchedules } from "./lib/metrics";
+import { sweepMedia } from "./lib/media-lifecycle";
 import { updateCheckCron } from "./lib/updates";
 import { accountRoutes } from "./routes/accounts";
 import { analyticsRoutes } from "./routes/analytics";
@@ -92,25 +93,50 @@ app.route("/m", publicMedia);
 app.route("/u", uploadLinkPublic);
 app.route("/mcp", mcpRoutes(app));
 
+/** Cron triggers (wrangler.jsonc `triggers.crons`; mirror changes in wrangler.local.jsonc). */
+export const FREQUENT_CRON = "*/15 * * * *";
+export const DAILY_CRON = "0 3 * * *";
+/** Analytics collection gets its own trigger (and its own 50-query budget), offset from the publishing tick. */
+export const METRICS_CRON = "7,22,37,52 * * * *";
+
+/**
+ * Every 15 minutes: publishing safety nets, token refreshes, analytics, the demo. Kept small: one invocation may run
+ * at most 50 D1 queries and 50 external subrequests on the Free plan (test/workers/budget.test.ts counts them).
+ */
+export async function frequentJobs(env: Env): Promise<void> {
+  await Promise.allSettled([
+    sweepScheduledPosts(env),
+    recoverStuckPosts(env),
+    refreshExpiringAccounts(env),
+    demoCron(env),
+  ]);
+}
+
+/** Analytics collection, on its own trigger so it doesn't share the publishing tick's D1 and subrequest budget. */
+export async function metricsJobs(env: Env): Promise<void> {
+  await collectMetrics(env, CRON_METRICS_LIMITS);
+}
+
+/** Once a day: cleanups, the metrics schedule scan, the update check and the media lifecycle sweep. */
+export async function dailyJobs(env: Env): Promise<void> {
+  await Promise.allSettled([
+    // New Postflare release? At most one GitHub request a day (UPDATE_CHECK="false" turns it off).
+    updateCheckCron(env),
+    expireMetricsSchedules(env),
+    sweepMedia(env),
+    env.DB.prepare("DELETE FROM oauth_states WHERE created_at < ?").bind(now() - 60 * 60 * 1000).run(),
+    env.DB.prepare("DELETE FROM sessions WHERE expires_at < ?").bind(now()).run(),
+    env.DB.prepare("DELETE FROM upload_links WHERE expires_at < ?").bind(now() - 7 * 24 * 60 * 60 * 1000).run(),
+    env.DB.prepare("DELETE FROM settings WHERE (key LIKE 'login_fail:%' OR key LIKE 'demo_login:%') AND json_extract(value, '$.until') < ?").bind(now()).run(),
+    env.DB.prepare("DELETE FROM invitations WHERE accepted_at IS NULL AND expires_at < ?").bind(now() - 30 * 24 * 60 * 60 * 1000).run(),
+  ]);
+}
+
 export default {
   fetch: app.fetch,
-  async scheduled(_event, env, ctx) {
+  async scheduled(event, env, ctx) {
     await ensureSchema(env.DB);
-    ctx.waitUntil(
-      Promise.allSettled([
-        sweepScheduledPosts(env),
-        recoverStuckPosts(env),
-        // Analytics after token refreshes: collection reuses fresh tokens and stays within the tick's fetch budget.
-        refreshExpiringAccounts(env).finally(() => collectMetrics(env)),
-        demoCron(env),
-        // New Postflare release? At most one GitHub request a day (UPDATE_CHECK="false" turns it off).
-        updateCheckCron(env),
-        env.DB.prepare("DELETE FROM oauth_states WHERE created_at < ?").bind(now() - 60 * 60 * 1000).run(),
-        env.DB.prepare("DELETE FROM sessions WHERE expires_at < ?").bind(now()).run(),
-        env.DB.prepare("DELETE FROM upload_links WHERE expires_at < ?").bind(now() - 7 * 24 * 60 * 60 * 1000).run(),
-        env.DB.prepare("DELETE FROM settings WHERE (key LIKE 'login_fail:%' OR key LIKE 'demo_login:%') AND json_extract(value, '$.until') < ?").bind(now()).run(),
-        env.DB.prepare("DELETE FROM invitations WHERE accepted_at IS NULL AND expires_at < ?").bind(now() - 30 * 24 * 60 * 60 * 1000).run(),
-      ]),
-    );
+    // Unknown expressions (an old single-cron config, tests) run the frequent jobs.
+    ctx.waitUntil(event.cron === DAILY_CRON ? dailyJobs(env) : event.cron === METRICS_CRON ? metricsJobs(env) : frequentJobs(env));
   },
 } satisfies ExportedHandler<Env>;

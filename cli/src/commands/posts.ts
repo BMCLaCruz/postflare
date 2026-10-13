@@ -6,7 +6,7 @@ import { CliError, UsageError } from "../errors.js";
 import { c, eprintln, fmtDate, fmtNum, fmtPct, fmtStatus, fmtWhen, println, printJson, table, truncate } from "../format.js";
 import { readStdin } from "../io.js";
 import { accountLabel, buildSettings, missingSettings, resolveAccounts, type Target } from "../resolve.js";
-import { exposure, type AccountDTO, type CreatePostsInput, type PostDTO, type PostMetricsDTO, type ThreadItem } from "../types.js";
+import { exposure, type AccountDTO, type CreatePostsInput, type PostDTO, type PostMetricsDTO, type ResolvePostInput, type ThreadItem } from "../types.js";
 import { uploadAll } from "./media.js";
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -177,9 +177,9 @@ export const post: Command = {
 
 export const posts: Command = {
   name: "posts",
-  summary: "List posts (newest first). Subcommands: show, edit, cancel, retry, rm.",
+  summary: "List posts (newest first). Subcommands: show, edit, cancel, retry, resolve, rm.",
   options: {
-    status: { type: "string", arg: "<list>", description: "Comma separated: draft,scheduled,publishing,published,failed,cancelled" },
+    status: { type: "string", arg: "<list>", description: "Comma separated: draft,scheduled,publishing,published,failed,needs_check,cancelled" },
     upcoming: { type: "boolean", description: "Scheduled posts, soonest first" },
     from: { type: "string", arg: "<when>", description: "From (scheduled/created time): \"7d\", \"2026-10-01\", \"yesterday\"..." },
     to: { type: "string", arg: "<when>", description: "Until" },
@@ -222,7 +222,10 @@ export const postsShow: Command = {
     println(`${c.bold(p.id)}  ${fmtStatus(p.status)}  ${a ? `${a.provider} ${accountLabel(a)}` : p.accountId}`);
     if (p.status === "published") println(`Published: ${fmtWhen(p.publishedAt)}${p.externalUrl ? `  ${c.cyan(p.externalUrl)}` : ""}`);
     else if (p.scheduledAt) println(`Scheduled: ${fmtWhen(p.scheduledAt)}`);
-    if (p.error) println(c.red(`Error: ${p.error}`));
+    if (p.status === "needs_check") {
+      println(c.yellow(`Needs check: ${p.error ?? "the platform did not confirm whether it accepted the post."}`));
+      println(c.gray(`  Live on the profile? postflare posts resolve ${p.id} --published [--url URL]. Not there? postflare posts resolve ${p.id} --retry`));
+    } else if (p.error) println(c.red(`Error: ${p.error}`));
     println(c.gray(`Group ${p.groupId} · created ${fmtDate(p.createdAt)} · attempts ${p.attempts}`));
     println("");
     println(p.content || c.gray("(no text)"));
@@ -309,4 +312,30 @@ function simple(name: string, summary: string, method: "POST" | "DELETE", path: 
 
 export const postsCancel = simple("posts cancel", "Cancel scheduled posts (they stay in the list as cancelled).", "POST", (id) => `/posts/${id}/cancel`, "Cancelled");
 export const postsRetry = simple("posts retry", "Retry failed or cancelled posts now.", "POST", (id) => `/posts/${id}/retry`, "Retrying");
+export const postsResolve: Command = {
+  name: "posts resolve",
+  args: "<id>",
+  summary: "Resolve a needs_check post (publish outcome unknown): it is live (--published) or publish it again (--retry).",
+  description:
+    "needs_check: the platform did not confirm whether it accepted the post, so it is never retried automatically. Check the profile first: --retry may publish a duplicate if the first attempt went through.",
+  options: {
+    published: { type: "boolean", description: "The post is live: mark it published" },
+    url: { type: "string", arg: "<url>", description: "Link to the live post (with --published)" },
+    retry: { type: "boolean", description: "The post is not live: publish it again now" },
+  },
+  min: 1,
+  max: 1,
+  examples: ["postflare posts resolve pst_abc --published --url https://x.com/me/status/123", "postflare posts resolve pst_abc --retry"],
+  async run(ctx, { values, positionals }) {
+    const url = str(values.url);
+    if (!!values.published === !!values.retry) throw new UsageError("Give either --published or --retry", "posts resolve");
+    if (url && !values.published) throw new UsageError("--url only goes with --published", "posts resolve");
+    if (url && !/^https?:\/\/\S+$/i.test(url)) throw new UsageError(`--url ${url}: not an http(s) URL`, "posts resolve");
+    const body: ResolvePostInput = values.published ? { published: true, ...(url ? { url } : {}) } : { published: false };
+    const p = await ctx.api.request<PostDTO>("POST", `/posts/${encodeURIComponent(positionals[0])}/resolve`, { body });
+    if (ctx.json) return printJson(p);
+    println(`${c.green("✓")} ${values.published ? "Marked as published" : "Publishing again"}: ${p.id} ${fmtStatus(p.status)}${p.externalUrl ? `  ${c.cyan(p.externalUrl)}` : ""}`);
+  },
+};
+
 export const postsRm = simple("posts rm", "Delete posts from Postflare (published posts stay on the platforms).", "DELETE", (id) => `/posts/${id}`, "Deleted");

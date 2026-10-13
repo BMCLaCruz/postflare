@@ -1,5 +1,5 @@
 import { ProviderError } from "./errors";
-import { requestJson, type RequestOptions } from "./http";
+import { checkedCommit, requestJson, type RequestOptions } from "./http";
 import { streamBody, streamingMultipart, type MultipartPart } from "./multipart";
 import type { AccountRecord, MediaItem, Provider, ProviderContext, PublishPost } from "./types";
 
@@ -27,6 +27,8 @@ type Payload = Record<string, unknown>;
 
 async function call<T>(ctx: ProviderContext, token: string, method: string, payload: Payload, files: MultipartPart[] = []): Promise<T> {
   const url = `${API}/bot${token}/${method}`;
+  // send* methods post a message: each is a commit (docs/provider-brief.md "Commit semantics").
+  const commit = method.startsWith("send");
   const classify: RequestOptions["classify"] = (status, body) => {
     const d = String(body?.description ?? "");
     if (status === 401 || /bot was kicked|bot is not a member|have no rights|not enough rights|chat_write_forbidden/i.test(d)) return "auth";
@@ -39,13 +41,18 @@ async function call<T>(ctx: ProviderContext, token: string, method: string, payl
       .filter(([, v]) => v !== undefined && v !== null)
       .map(([name, v]) => ({ name, value: typeof v === "string" ? v : JSON.stringify(v) }));
     const mp = streamingMultipart([...fields, ...files]);
-    opts = { ...streamBody(mp.body, mp.contentType), classify };
+    opts = { ...streamBody(mp.body, mp.contentType), classify, commit };
   } else {
-    opts = { method: "POST", json: payload, classify };
+    opts = { method: "POST", json: payload, classify, commit };
   }
   try {
-    const res = await requestJson<{ ok: boolean; result: T; description?: string }>(ctx, url, opts);
-    if (!res?.ok) throw new ProviderError(`Telegram: ${res?.description ?? "request failed"}`, "invalid");
+    const res = await checkedCommit(
+      ctx,
+      () => requestJson<{ ok: boolean; result: T; description?: string }>(ctx, url, opts),
+      (res) => {
+        if (!res?.ok) throw new ProviderError(`Telegram: ${res?.description ?? "request failed"}`, "invalid");
+      },
+    );
     return res.result;
   } catch (err) {
     // Re-throw with Telegram's own description (and never the URL, which contains the bot token).

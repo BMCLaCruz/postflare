@@ -30,6 +30,7 @@ const mdImage = (m: MediaItem) => `![${(m.alt ?? "").replace(/[[\]]/g, "")}](${m
 
 /** DEV.to (Forem) articles via the API key from Settings > Extensions. */
 export const devto: Provider = {
+  hotlinksMedia: true,
   id: "devto",
   name: "DEV",
   color: "0A0A0A",
@@ -99,7 +100,7 @@ export const devto: Provider = {
       ...(s.description ? { description: String(s.description) } : {}),
       ...(s.organization ? { organization_id: Number(s.organization) } : {}),
     };
-    const res = await devApi(ctx, key(account), "/articles", { method: "POST", json: { article } });
+    const res = await devApi(ctx, key(account), "/articles", { method: "POST", json: { article }, commit: true });
     return { status: "published", externalId: String(res.id), url: res.url ?? null };
   },
 

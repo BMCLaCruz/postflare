@@ -30,7 +30,7 @@ function groupPosts(posts: PostDTO[]): Group[] {
   const map = new Map<string, Group>();
   for (const p of posts) {
     const at = postTime(p);
-    const key = `${p.groupId}:${at}:${p.status === "published" || p.status === "failed" ? p.id : ""}`;
+    const key = `${p.groupId}:${at}:${p.status === "published" || p.status === "failed" || p.status === "needs_check" ? p.id : ""}`;
     const g = map.get(key) ?? { key, at, posts: [] };
     g.posts.push(p);
     map.set(key, g);
@@ -214,7 +214,7 @@ export function CalendarPage() {
         )}
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-zinc-500">
-        {(["scheduled", "publishing", "published", "failed", "draft"] as const).map((s) => (
+        {(["scheduled", "publishing", "published", "needs_check", "failed", "draft"] as const).map((s) => (
           <span key={s} className="flex items-center gap-1.5">
             <span className={cn("size-2 rounded-full", STATUS_META[s].dot)} />
             {STATUS_META[s].label}
@@ -437,7 +437,7 @@ function Chip({ group, dragged, showText }: { group: Group; dragged: React.RefOb
   const canWrite = useSession().can("posts.write");
   const first = group.posts[0];
   const statuses = new Set(group.posts.map((p) => p.status));
-  const status = statuses.has("failed") ? "failed" : statuses.has("publishing") ? "publishing" : first.status;
+  const status = statuses.has("failed") ? "failed" : statuses.has("needs_check") ? "needs_check" : statuses.has("publishing") ? "publishing" : first.status;
   const draggable = canWrite && group.posts.every((p) => p.status === "scheduled");
   const accs = group.posts.map((p) => accountMap.get(p.accountId));
   const provider = accs[0] ? providerMap.get(accs[0].provider) : undefined;

@@ -129,7 +129,7 @@ uploadLinkPublic.on(["PUT", "POST"], "/:token/file", async (c) => {
   const id = newId("med_");
   const key = `${id}/${safeFilename(meta.filename)}`;
   await c.env.MEDIA.put(key, c.req.raw.body, { httpMetadata: { contentType: meta.mime } });
-  await insertMedia(c.env, id, key, meta, "ready", null, linkOwner(link));
+  await insertMedia(c.env, id, key, meta, "ready", null, linkOwner(link), "upload_link");
   await attach(c.env, link.id, id);
   return c.json(await dto(c, link.workspace_id, id));
 });
@@ -144,7 +144,7 @@ uploadLinkPublic.post("/:token/multipart", async (c) => {
   const id = newId("med_");
   const key = `${id}/${safeFilename(meta.filename)}`;
   const upload = await c.env.MEDIA.createMultipartUpload(key, { httpMetadata: { contentType: meta.mime } });
-  await insertMedia(c.env, id, key, meta, "uploading", upload.uploadId, linkOwner(link));
+  await insertMedia(c.env, id, key, meta, "uploading", upload.uploadId, linkOwner(link), "upload_link");
   await attach(c.env, link.id, id);
   return c.json({ id, partSize: PART_SIZE, parts: Math.ceil(meta.size / PART_SIZE) });
 });

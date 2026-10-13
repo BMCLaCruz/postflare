@@ -100,6 +100,8 @@ function fakeApi() {
       }
       case "GET /api/posts/pst_1":
         return json({ id: "pst_1", groupId: "grp_1", accountId: "acc_tt", status: "scheduled", scheduledAt: NOW.getTime() + 3_600_000, content: "Old", media: ["med_1"], settings: { postMode: "direct", privacy_level: "SELF_ONLY" }, thread: [], externalId: null, externalUrl: null, error: null, attempts: 0, createdAt: 0, updatedAt: 0, publishedAt: null, logs: [] });
+      case "POST /api/posts/pst_nc/resolve":
+        return json({ id: "pst_nc", accountId: "acc_x", status: call.json.published ? "published" : "scheduled", externalUrl: call.json.url ?? null, error: null });
       case "PATCH /api/posts/pst_1":
         return json({ id: "pst_1", accountId: "acc_tt", status: "scheduled", scheduledAt: NOW.getTime() + 86_400_000, ...call.json });
     }
@@ -211,6 +213,19 @@ describe("other commands against the fake API", () => {
     expect(await run(["posts", "edit", "pst_1", "--at", "tomorrow 9:00", "--set", "privacy_level=PUBLIC_TO_EVERYONE", "--text", "New"], deps)).toBe(0);
     const patch = api.calls.find((c) => c.method === "PATCH")!.json;
     expect(patch).toEqual({ content: "New", scheduledAt: new Date(2026, 9, 13, 9, 0).getTime(), settings: { postMode: "direct", privacy_level: "PUBLIC_TO_EVERYONE" } });
+  });
+
+  it("posts resolve marks a needs_check post published (with URL) or retries it", async () => {
+    expect(await run(["posts", "resolve", "pst_nc", "--published", "--url", "https://x.com/fiona/status/1"], deps)).toBe(0);
+    expect(api.calls.at(-1)!.json).toEqual({ published: true, url: "https://x.com/fiona/status/1" });
+    expect(out).toContain("Marked as published: pst_nc");
+    expect(await run(["posts", "resolve", "pst_nc", "--retry"], deps)).toBe(0);
+    expect(api.calls.at(-1)!.json).toEqual({ published: false });
+    const n = api.calls.length;
+    expect(await run(["posts", "resolve", "pst_nc"], deps)).toBe(2);
+    expect(await run(["posts", "resolve", "pst_nc", "--retry", "--url", "https://x.com/a"], deps)).toBe(2);
+    expect(await run(["posts", "resolve", "pst_nc", "--published", "--url", "nope"], deps)).toBe(2);
+    expect(api.calls.length).toBe(n);
   });
 
   it("accounts table shows followers and analytics state", async () => {

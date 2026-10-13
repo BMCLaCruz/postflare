@@ -1,6 +1,6 @@
 import { ProviderError } from "./errors";
 import { googleAppFields, googleAuthorizeUrl, googleClassify, googleExchangeCode, googleRefresh } from "./google-shared";
-import { requestJson } from "./http";
+import { checkedCommit, requestJson } from "./http";
 import type { ConnectedAccount, Provider, ProviderContext, PublishPost } from "./types";
 
 const NAME = "Google Business Profile";
@@ -194,6 +194,7 @@ export const gmb: Provider = {
         profileUrl: location.metadata?.mapsUri ?? null,
         credentials: tok.credentials,
         expiresAt: tok.expiresAt,
+        refreshExpiresAt: tok.refreshExpiresAt,
         meta: { accountName: account.name, locationName: location.name, mapsUri: location.metadata?.mapsUri ?? null },
       };
     });
@@ -219,13 +220,21 @@ export const gmb: Provider = {
   },
 
   async publish(ctx, account, post) {
-    const res = await requestJson<{ name?: string; searchUrl?: string; state?: string }>(ctx, `${POSTS_API}/${account.externalId}/localPosts`, {
-      method: "POST",
-      token: String(account.credentials.accessToken),
-      json: localPostBody(post),
-      classify: googleClassify,
-    });
-    if (res?.state === "REJECTED") throw new ProviderError(`${NAME}: Google rejected the post for a content policy violation`, "invalid");
+    // A REJECTED post is not live: a plain refusal, not an ambiguous commit.
+    const res = await checkedCommit(
+      ctx,
+      () =>
+        requestJson<{ name?: string; searchUrl?: string; state?: string }>(ctx, `${POSTS_API}/${account.externalId}/localPosts`, {
+          method: "POST",
+          token: String(account.credentials.accessToken),
+          json: localPostBody(post),
+          classify: googleClassify,
+          commit: true,
+        }),
+      (res) => {
+        if (res?.state === "REJECTED") throw new ProviderError(`${NAME}: Google rejected the post for a content policy violation`, "invalid");
+      },
+    );
     if (!res?.name) throw new ProviderError(`${NAME}: Google did not confirm the post`, "invalid");
     return {
       status: "published",

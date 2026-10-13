@@ -27,6 +27,7 @@ export interface PostRow {
   metrics_at?: number | null;
   metrics_next_at?: number | null;
   metrics_fails?: number;
+  publish_lock?: string | null;
 }
 
 export function postDto(row: PostRow): PostDTO {
@@ -51,9 +52,12 @@ export function postDto(row: PostRow): PostDTO {
 }
 
 export async function logPost(env: Env, postId: string, level: PostLogDTO["level"], message: string) {
-  await env.DB.prepare("INSERT INTO post_logs (post_id, level, message, created_at) VALUES (?, ?, ?, ?)")
-    .bind(postId, level, message.slice(0, 2000), now())
-    .run();
+  await logStatement(env.DB, postId, level, message).run();
+}
+
+/** The INSERT of `logPost`, for a `db.batch`. */
+export function logStatement(db: D1Database, postId: string, level: PostLogDTO["level"], message: string): D1PreparedStatement {
+  return db.prepare("INSERT INTO post_logs (post_id, level, message, created_at) VALUES (?, ?, ?, ?)").bind(postId, level, message.slice(0, 2000), now());
 }
 
 /** Unscoped: only for workflows and cron. Request handlers use `findPost`. */
@@ -69,7 +73,7 @@ export async function findPost(env: Env, workspaceId: string, id: string): Promi
 /** Start (or restart) the publishing workflow of a scheduled post. */
 export async function startWorkflow(env: Env, row: Pick<PostRow, "id" | "revision" | "workflow_id">): Promise<void> {
   if (row.workflow_id) await terminateWorkflow(env, row.workflow_id);
-  const instanceId = `${row.id}-${row.revision}`;
+  const instanceId = workflowInstanceId(row);
   try {
     await env.PUBLISH_WORKFLOW.create({ id: instanceId, params: { postId: row.id, revision: row.revision } });
   } catch (err) {
@@ -77,6 +81,21 @@ export async function startWorkflow(env: Env, row: Pick<PostRow, "id" | "revisio
     if (!/already exists/i.test(String(err))) throw err;
   }
   await env.DB.prepare("UPDATE posts SET workflow_id = ? WHERE id = ?").bind(instanceId, row.id).run();
+}
+
+export const workflowInstanceId = (row: Pick<PostRow, "id" | "revision">) => `${row.id}-${row.revision}`;
+
+/**
+ * Start the workflows of new scheduled posts in one call per 100 posts (`createBatch`), whatever their number:
+ * O(1) subrequests and no D1 query. The caller stores `workflowInstanceId(row)` as `workflow_id` (e.g. in the INSERT).
+ * Instances that already exist (a retried request) are skipped by the binding.
+ */
+export async function startWorkflows(env: Env, rows: Array<Pick<PostRow, "id" | "revision">>): Promise<void> {
+  for (let i = 0; i < rows.length; i += 100) {
+    await env.PUBLISH_WORKFLOW.createBatch(
+      rows.slice(i, i + 100).map((r) => ({ id: workflowInstanceId(r), params: { postId: r.id, revision: r.revision } })),
+    );
+  }
 }
 
 export async function terminateWorkflow(env: Env, instanceId: string): Promise<void> {
@@ -120,31 +139,40 @@ export async function sweepScheduledPosts(env: Env): Promise<void> {
   }
 }
 
+/** Workflow states in which an instance can still make progress (or might: `unknown`). */
+const ALIVE = new Set(["queued", "running", "waiting", "paused", "waitingForPause", "unknown"]);
+/** Longer than any publish can take (120 status checks of at most 10 minutes, plus retries). */
+const STUCK_FOR_SURE = 3 * 24 * 60 * 60 * 1000;
+
 /**
- * Cron: a post stuck in "publishing" whose workflow is no longer alive (errored, terminated, gone) is marked
- * failed. It is not retried automatically because it may already be live on the platform.
+ * Cron: a post stuck in "publishing" whose workflow is definitely over (errored, terminated, complete) goes to
+ * needs_check: the instance may have published it before it died, so it is never failed or retried automatically.
+ * A `status()` error says nothing about the instance (it may be alive): the post is left alone, unless it has been
+ * publishing for longer than any publish can take (the instance was purged).
  */
 export async function recoverStuckPosts(env: Env): Promise<void> {
   const { results } = await env.DB.prepare(
-    `SELECT id, revision, workflow_id FROM posts WHERE status = 'publishing' AND updated_at < ? AND ${NOT_DEMO} LIMIT 50`,
+    `SELECT id, revision, workflow_id, updated_at FROM posts WHERE status = 'publishing' AND updated_at < ? AND ${NOT_DEMO} LIMIT 20`,
   )
     .bind(now() - 30 * 60 * 1000)
-    .all<Pick<PostRow, "id" | "revision" | "workflow_id">>();
+    .all<Pick<PostRow, "id" | "revision" | "workflow_id" | "updated_at">>();
   for (const row of results) {
-    let alive = false;
+    let dead = !row.workflow_id;
     if (row.workflow_id) {
       try {
         const { status } = await (await env.PUBLISH_WORKFLOW.get(row.workflow_id)).status();
-        alive = status === "queued" || status === "running" || status === "waiting" || status === "paused";
-      } catch {}
+        dead = !ALIVE.has(status);
+      } catch {
+        dead = row.updated_at < now() - STUCK_FOR_SURE;
+      }
     }
-    if (alive) continue;
-    const message = "Publishing was interrupted. Check the platform before retrying: the post may already be live.";
+    if (!dead) continue;
+    const message = "Publishing was interrupted. We couldn't confirm whether the platform accepted the post. Check your profile, then mark it as published or retry.";
     const res = await env.DB.prepare(
-      "UPDATE posts SET status = 'failed', error = ?, updated_at = ? WHERE id = ? AND revision = ? AND status = 'publishing'",
+      "UPDATE posts SET status = 'needs_check', error = ?, updated_at = ? WHERE id = ? AND revision = ? AND status = 'publishing'",
     )
       .bind(message, now(), row.id, row.revision)
       .run();
-    if (res.meta.changes) await logPost(env, row.id, "error", message);
+    if (res.meta.changes) await logPost(env, row.id, "warn", message);
   }
 }

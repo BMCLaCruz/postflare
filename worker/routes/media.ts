@@ -1,8 +1,10 @@
 import { Hono } from "hono";
-import { forbidInDemoWorkspace, requirePermission, wsId, type AppEnv } from "../lib/auth";
+import type { MediaUsageDTO } from "../../shared/types";
+import { forbidInDemoWorkspace, isInstanceAdmin, requirePermission, wsId, type AppEnv } from "../lib/auth";
 import { verifySignature } from "../lib/crypto";
 import { mediaDto, safeFilename, type MediaRow } from "../lib/media";
-import { baseUrl } from "../lib/settings";
+import { mediaUsage, postsBlockingMediaDelete } from "../lib/media-lifecycle";
+import { baseUrl, mediaRetentionDays } from "../lib/settings";
 import { newId, now } from "../lib/util";
 
 export const mediaRoutes = new Hono<AppEnv>();
@@ -52,12 +54,14 @@ export async function insertMedia(
   status: "ready" | "uploading",
   uploadId: string | null,
   owner: MediaOwner,
+  /** "upload_link" for files sent through an upload link (the media sweep removes them when never used). */
+  source: "upload_link" | null = null,
 ) {
   await env.DB.prepare(
-    `INSERT INTO media (id, r2_key, filename, mime, size, kind, width, height, duration, alt, status, upload_id, created_at, workspace_id, created_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO media (id, r2_key, filename, mime, size, kind, width, height, duration, alt, status, upload_id, created_at, workspace_id, created_by, source)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   )
-    .bind(id, key, m.filename, m.mime, m.size, kindOf(m.mime), m.width ?? null, m.height ?? null, m.duration ?? null, m.alt ?? null, status, uploadId, now(), owner.workspaceId, owner.userId)
+    .bind(id, key, m.filename, m.mime, m.size, kindOf(m.mime), m.width ?? null, m.height ?? null, m.duration ?? null, m.alt ?? null, status, uploadId, now(), owner.workspaceId, owner.userId, source)
     .run();
 }
 
@@ -79,6 +83,18 @@ mediaRoutes.get("/media", requirePermission("media.read"), async (c) => {
     .all<MediaRow>();
   const base = await baseUrl(c.env, c.req.url);
   return c.json(await Promise.all(results.map((r) => mediaDto(c.env, base, r))));
+});
+
+/** Stored bytes of the workspace (and of the instance, for instance admins) next to the R2 Free plan's 10 GB. */
+mediaRoutes.get("/media/usage", requirePermission("media.read"), async (c) => {
+  const admin = isInstanceAdmin(c.var.instancePermissions);
+  const [workspace, instance, retentionDays] = await Promise.all([
+    mediaUsage(c.env.DB, wsId(c)),
+    admin ? mediaUsage(c.env.DB, null) : Promise.resolve(null),
+    mediaRetentionDays(c.env.DB),
+  ]);
+  const body: MediaUsageDTO = { workspace, instance, freeTierBytes: 10 * 1024 ** 3, retentionDays };
+  return c.json(body);
 });
 
 /** Single request upload. Raw body; metadata in headers. */
@@ -185,6 +201,14 @@ mediaRoutes.delete("/media/:id", requirePermission("media.write"), noDemo, async
     .bind(c.req.param("id"), wsId(c))
     .first<{ r2_key: string; upload_id: string | null; status: string }>();
   if (!row) return c.json({ error: "Not found" }, 404);
+  // Deleting it would make these posts fail when they publish.
+  const postIds = await postsBlockingMediaDelete(c.env.DB, wsId(c), c.req.param("id"));
+  if (postIds.length) {
+    return c.json(
+      { error: `This file is used by ${postIds.length === 1 ? "a draft, scheduled or unresolved post" : `${postIds.length} draft, scheduled or unresolved posts`}: remove it from ${postIds.length === 1 ? "that post" : "them"} first.`, postIds },
+      409,
+    );
+  }
   if (row.status === "uploading" && row.upload_id) {
     await c.env.MEDIA.resumeMultipartUpload(row.r2_key, row.upload_id).abort().catch(() => {});
   } else {

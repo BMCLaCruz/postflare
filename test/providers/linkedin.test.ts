@@ -22,7 +22,7 @@ describe("linkedin oauth", () => {
 
   it("exchanges the code and reads userinfo", async () => {
     const m = mockFetch([
-      ["POST https://www.linkedin.com/oauth/v2/accessToken", () => ({ access_token: "AT", expires_in: 5184000, refresh_token: "RT" })],
+      ["POST https://www.linkedin.com/oauth/v2/accessToken", () => ({ access_token: "AT", expires_in: 5184000, refresh_token: "RT", refresh_token_expires_in: 31536000 })],
       ["GET https://api.linkedin.com/v2/userinfo", () => ({ sub: "abc", name: "Ada L", picture: "https://pic" })],
     ]);
     const [acc] = await linkedin.callback!(testContext(m.fetch, app), { code: "c", codeVerifier: "", params: new URLSearchParams() });
@@ -33,6 +33,7 @@ describe("linkedin oauth", () => {
       credentials: { accessToken: "AT", refreshToken: "RT" },
       meta: { personUrn: "urn:li:person:abc" },
     });
+    expect(acc.refreshExpiresAt).toBeGreaterThan(Date.now() + 364 * 86400_000);
     expect(m.requests[0].form).toMatchObject({ grant_type: "authorization_code", code: "c", client_id: "cid", client_secret: "csecret" });
   });
 

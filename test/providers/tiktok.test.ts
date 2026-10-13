@@ -37,7 +37,7 @@ describe("tiktok", () => {
 
   it("callback exchanges the code and loads the user", async () => {
     const m = mockFetch([
-      ["POST https://open.tiktokapis.com/v2/oauth/token/", () => ({ access_token: "AT", refresh_token: "RT", expires_in: 86400, open_id: "OID" })],
+      ["POST https://open.tiktokapis.com/v2/oauth/token/", () => ({ access_token: "AT", refresh_token: "RT", expires_in: 86400, refresh_expires_in: 31536000, open_id: "OID" })],
       ["GET https://open.tiktokapis.com/v2/user/info/", () => ok({ user: { open_id: "OID", display_name: "Me", username: "me", avatar_url: "https://a" } })],
     ]);
     const [acc] = await tiktok.callback!(testContext(m.fetch, app, "tiktok"), { code: "C", codeVerifier: "V", params: new URLSearchParams() });
@@ -45,11 +45,13 @@ describe("tiktok", () => {
     expect(m.requests[1].url).toContain("fields=open_id");
     expect(acc).toMatchObject({ externalId: "OID", name: "Me", username: "me", profileUrl: "https://www.tiktok.com/@me", credentials: { accessToken: "AT", refreshToken: "RT" } });
     expect(acc.expiresAt).toBeGreaterThan(Date.now());
+    expect(acc.refreshExpiresAt).toBeGreaterThan(Date.now() + 364 * 86400_000);
   });
 
   it("refresh; a 200 with invalid_grant maps to auth", async () => {
-    const m = mockFetch([["POST https://open.tiktokapis.com/v2/oauth/token/", () => ({ access_token: "AT2", refresh_token: "RT2", expires_in: 86400 })]]);
+    const m = mockFetch([["POST https://open.tiktokapis.com/v2/oauth/token/", () => ({ access_token: "AT2", refresh_token: "RT2", expires_in: 86400, refresh_expires_in: 86400 * 365 })]]);
     const u = await tiktok.refresh!(testContext(m.fetch, app), account());
+    expect(u.refreshExpiresAt).toBeGreaterThan(Date.now() + 364 * 86400_000);
     expect(m.requests[0].form).toMatchObject({ grant_type: "refresh_token", refresh_token: "RT" });
     expect(u.credentials).toEqual({ accessToken: "AT2", refreshToken: "RT2" });
 

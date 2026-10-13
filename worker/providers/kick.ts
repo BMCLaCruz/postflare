@@ -1,5 +1,5 @@
 import { ProviderError } from "./errors";
-import { clientFields, expiresAt, oauthToken, requestJson, requireApp } from "./http";
+import { checkedCommit, clientFields, expiresAt, oauthToken, requestJson, requireApp } from "./http";
 import type { AccountRecord, Provider, ProviderContext, PublishPost } from "./types";
 
 const API = "https://api.kick.com/public/v1";
@@ -18,14 +18,22 @@ async function profile(ctx: ProviderContext, token: string) {
 async function send(ctx: ProviderContext, account: AccountRecord, post: PublishPost, replyTo?: string) {
   const content = post.content.trim();
   if (!content) throw new ProviderError("Kick: message is empty", "invalid");
-  const res = await requestJson<{ data?: { is_sent: boolean; message_id: string } }>(ctx, `${API}/chat`, {
-    method: "POST",
-    token: String(account.credentials.accessToken ?? ""),
-    json: { type: "user", content, broadcaster_user_id: Number(account.externalId), reply_to_message_id: replyTo },
-  });
-  if (!res?.data?.is_sent) throw new ProviderError("Kick did not send the message", "invalid", 200, res);
+  // is_sent: false = not posted: a refusal, not an ambiguous commit.
+  const res = await checkedCommit(
+    ctx,
+    () =>
+      requestJson<{ data?: { is_sent: boolean; message_id: string } }>(ctx, `${API}/chat`, {
+        method: "POST",
+        token: String(account.credentials.accessToken ?? ""),
+        json: { type: "user", content, broadcaster_user_id: Number(account.externalId), reply_to_message_id: replyTo },
+        commit: true,
+      }),
+    (res) => {
+      if (!res?.data?.is_sent) throw new ProviderError("Kick did not send the message", "invalid", 200, res);
+    },
+  );
   const slug = account.meta.slug ?? account.username;
-  return { externalId: res.data.message_id, url: slug ? `https://kick.com/${slug}` : null };
+  return { externalId: res.data!.message_id, url: slug ? `https://kick.com/${slug}` : null };
 }
 
 export const kick: Provider = {

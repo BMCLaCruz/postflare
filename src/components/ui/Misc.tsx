@@ -69,6 +69,7 @@ export const STATUS_META: Record<PostStatus, { label: string; tone: Tone; dot: s
   published: { label: "Published", tone: "green", dot: "bg-emerald-500" },
   failed: { label: "Failed", tone: "red", dot: "bg-red-500" },
   cancelled: { label: "Cancelled", tone: "amber", dot: "bg-amber-500" },
+  needs_check: { label: "Needs check", tone: "amber", dot: "bg-amber-500" },
 };
 
 export function StatusBadge({ status }: { status: PostStatus }) {

@@ -53,15 +53,24 @@ export async function decryptJson<T>(env: Env, blob: string): Promise<T> {
   return JSON.parse(new TextDecoder().decode(pt)) as T;
 }
 
-async function hmacKey(env: Env): Promise<CryptoKey> {
-  let secret = await getSetting(env.DB, "signing_key");
-  if (!secret) {
-    await env.DB.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES ('signing_key', ?)").bind(randomToken(32)).run();
-    secret = (await getSetting(env.DB, "signing_key"))!;
+const hmacCache = new WeakMap<D1Database, Promise<CryptoKey>>();
+
+/** Media link signing key: read from D1 and imported once per isolate (like the AES key), not once per `sign()`. */
+function hmacKey(env: Env): Promise<CryptoKey> {
+  let key = hmacCache.get(env.DB);
+  if (!key) {
+    key = (async () => {
+      let secret = await getSetting(env.DB, "signing_key");
+      if (!secret) {
+        await env.DB.prepare("INSERT OR IGNORE INTO settings (key, value) VALUES ('signing_key', ?)").bind(randomToken(32)).run();
+        secret = (await getSetting(env.DB, "signing_key"))!;
+      }
+      return crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    })();
+    hmacCache.set(env.DB, key);
+    key.catch(() => hmacCache.delete(env.DB));
   }
-  return crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, [
-    "sign",
-  ]);
+  return key;
 }
 
 /** Short HMAC signature, used for public media links. */

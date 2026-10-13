@@ -8,5 +8,7 @@ declare module "cloudflare:test" {
     ANALYTICS_DB: D1Database;
     /** Own instance for the security hardening tests (SETUP_TOKEN needs a fresh instance). */
     SECURITY_DB: D1Database;
+    /** Own instance for publishing safety, token refresh, D1 budget and media lifecycle tests. */
+    PUBLISH_DB: D1Database;
   }
 }

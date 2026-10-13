@@ -1,21 +1,28 @@
 import { ProviderError } from "./errors";
-import { requestJson } from "./http";
+import { checkedCommit, requestJson } from "./http";
 import type { AccountRecord, MetricValues, PostMetricsResult, Provider, ProviderContext } from "./types";
 
 const GQL = "https://gql.hashnode.com";
 
-/** GraphQL call; Hashnode answers 200 with `errors` for most failures. */
-async function gql<T = any>(ctx: ProviderContext, token: string, query: string, variables: Record<string, unknown> = {}): Promise<T> {
-  const res = await requestJson(ctx, GQL, {
-    method: "POST",
-    headers: { authorization: token },
-    json: { query, variables },
-    classify: (status, body) => kindFor(body?.errors) ?? (status === 403 ? "auth" : undefined),
+/**
+ * GraphQL call; Hashnode answers 200 with `errors` for most failures (a refusal: nothing created). `commit`: the
+ * mutation creates the post or draft (docs/provider-brief.md "Commit semantics").
+ */
+async function gql<T = any>(ctx: ProviderContext, token: string, query: string, variables: Record<string, unknown> = {}, commit = false): Promise<T> {
+  const send = () =>
+    requestJson(ctx, GQL, {
+      method: "POST",
+      headers: { authorization: token },
+      json: { query, variables },
+      classify: (status, body) => kindFor(body?.errors) ?? (status === 403 ? "auth" : undefined),
+      commit,
+    });
+  const res = await checkedCommit(ctx, send, (res) => {
+    if (res?.errors?.length) {
+      const kind = kindFor(res.errors) ?? "invalid";
+      throw new ProviderError(`Hashnode: ${res.errors[0].message}`, kind, 200, res);
+    }
   });
-  if (res?.errors?.length) {
-    const kind = kindFor(res.errors) ?? "invalid";
-    throw new ProviderError(`Hashnode: ${res.errors[0].message}`, kind, 200, res);
-  }
   return res.data as T;
 }
 
@@ -63,6 +70,7 @@ function postValues(p: any): MetricValues {
 
 /** Hashnode blogs via a Personal Access Token. One account per publication. */
 export const hashnode: Provider = {
+  hotlinksMedia: true,
   id: "hashnode",
   name: "Hashnode",
   color: "2962FF",
@@ -154,14 +162,14 @@ export const hashnode: Provider = {
     };
     if (draft) {
       input.settings = { enableTableOfContent: !!s.enableTableOfContent, delist: !!s.delisted, ...(s.slug ? { slugOverridden: true } : {}) };
-      const data = await gql(ctx, tok, `mutation($input: CreateDraftInput!) { createDraft(input: $input) { draft { id } } }`, { input });
+      const data = await gql(ctx, tok, `mutation($input: CreateDraftInput!) { createDraft(input: $input) { draft { id } } }`, { input }, true);
       const id = data?.createDraft?.draft?.id;
       if (!id) throw new ProviderError("Hashnode did not return the draft", "transient");
       return { status: "published", externalId: id, url: `https://hashnode.com/draft/${id}` };
     }
     input.settings = { enableTableOfContent: !!s.enableTableOfContent, delisted: !!s.delisted, ...(s.slug ? { slugOverridden: true } : {}) };
     if (s.disableComments) input.disableComments = true;
-    const data = await gql(ctx, tok, `mutation($input: PublishPostInput!) { publishPost(input: $input) { post { id url } } }`, { input });
+    const data = await gql(ctx, tok, `mutation($input: PublishPostInput!) { publishPost(input: $input) { post { id url } } }`, { input }, true);
     const p = data?.publishPost?.post;
     if (!p?.id) throw new ProviderError("Hashnode did not return the post", "transient");
     return { status: "published", externalId: p.id, url: p.url ?? null };

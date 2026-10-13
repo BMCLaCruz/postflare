@@ -1,5 +1,5 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { AlertCircle, Ban, Copy, ExternalLink, Pencil, RotateCcw, Trash2 } from "lucide-react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { AlertCircle, AlertTriangle, Ban, CheckCircle2, Copy, ExternalLink, Pencil, RotateCcw, Trash2 } from "lucide-react";
 import { api } from "../../lib/api";
 import { useApp } from "../../lib/app";
 import { cn } from "../../lib/format";
@@ -13,7 +13,8 @@ import { PostPerformance } from "../analytics/PostPerformance";
 import { AccountAvatar } from "../ProviderLogo";
 import { Button } from "../ui/Button";
 import { useConfirm } from "../ui/Confirm";
-import { Drawer } from "../ui/Dialog";
+import { Dialog, Drawer } from "../ui/Dialog";
+import { Field, Input } from "../ui/Form";
 import { Skeleton, StatusBadge } from "../ui/Misc";
 import { useToast } from "../ui/Toast";
 import { MediaThumb } from "./MediaThumb";
@@ -60,6 +61,16 @@ export function usePostActions() {
   };
   return {
     retry: (p: PostDTO) => run(() => api.posts.retry(p.id), "Retry queued"),
+    /** needs_check: the post is live on the platform. */
+    markPublished: (p: PostDTO, url: string | null) => run(() => api.posts.resolve(p.id, { published: true, url }), "Marked as published"),
+    /** needs_check: the post is not live, publish it again now. */
+    retryAnyway: async (p: PostDTO) =>
+      (await confirm({
+        title: "Retry anyway?",
+        message: "This may publish a duplicate if the platform did accept the first attempt. Check your profile first.",
+        confirmLabel: "Retry anyway",
+        danger: true,
+      })) && run(() => api.posts.resolve(p.id, { published: false }), "Publishing again"),
     cancel: async (p: PostDTO) =>
       (await confirm({ title: "Cancel this post?", message: "It will not be published. You can retry or edit it later.", confirmLabel: "Cancel post", danger: true })) &&
       run(() => api.posts.cancel(p.id), "Post cancelled"),
@@ -166,7 +177,19 @@ function PostBody({ post }: { post: PostWithLogs }) {
         {post.attempts > 1 && <span className="text-xs text-zinc-400">{post.attempts} attempts</span>}
       </div>
 
-      {post.error && (
+      {post.status === "needs_check" ? (
+        <div className="flex gap-3 rounded-lg bg-amber-50 p-3.5 text-sm text-amber-900 ring-1 ring-amber-200 dark:bg-amber-950/40 dark:text-amber-200 dark:ring-amber-900">
+          <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+          <div className="space-y-1.5">
+            <p className="whitespace-pre-wrap break-words">
+              {post.error || "We couldn't confirm whether the platform accepted the post. Check your profile, then mark it as published or retry."}
+            </p>
+            <p className="text-xs text-amber-800/80 dark:text-amber-300/80">
+              It is not retried automatically, so it cannot be posted twice by accident.
+            </p>
+          </div>
+        </div>
+      ) : post.error && (
         <div className="flex gap-3 rounded-lg bg-red-50 p-3.5 text-sm text-red-800 ring-1 ring-red-200 dark:bg-red-950/40 dark:text-red-200 dark:ring-red-900">
           <AlertCircle className="mt-0.5 size-4 shrink-0" />
           <p className="whitespace-pre-wrap break-words">{post.error}</p>
@@ -263,6 +286,7 @@ function Actions({ post, onClose }: { post: PostDTO; onClose: () => void }) {
   const actions = usePostActions();
   const composer = useComposer();
   const [busy, setBusy] = useState<string | null>(null);
+  const [marking, setMarking] = useState(false);
   const canWrite = useSession().can("posts.write");
   const wrap = (key: string, fn: () => Promise<unknown>) => async () => {
     setBusy(key);
@@ -301,6 +325,17 @@ function Actions({ post, onClose }: { post: PostDTO; onClose: () => void }) {
         <Button icon={<RotateCcw className="size-4" />} loading={busy === "retry"} onClick={wrap("retry", () => actions.retry(post))}>
           {post.status === "failed" ? "Retry now" : "Publish now"}
         </Button>
+      )}
+      {post.status === "needs_check" && (
+        <>
+          <Button variant="primary" icon={<CheckCircle2 className="size-4" />} onClick={() => setMarking(true)}>
+            Mark as published
+          </Button>
+          <Button icon={<RotateCcw className="size-4" />} loading={busy === "resolve"} onClick={wrap("resolve", () => actions.retryAnyway(post))}>
+            Retry anyway
+          </Button>
+          <MarkPublishedDialog open={marking} onClose={() => setMarking(false)} onSubmit={(url) => actions.markPublished(post, url)} />
+        </>
       )}
       {post.status === "scheduled" && (
         <Button icon={<Ban className="size-4" />} loading={busy === "cancel"} onClick={wrap("cancel", () => actions.cancel(post))}>
@@ -341,5 +376,43 @@ function Actions({ post, onClose }: { post: PostDTO; onClose: () => void }) {
         </Button>
       )}
     </>
+  );
+}
+
+/** needs_check → published, with the link to the live post when the user has it. */
+function MarkPublishedDialog({ open, onClose, onSubmit }: { open: boolean; onClose: () => void; onSubmit: (url: string | null) => Promise<boolean> }) {
+  const [url, setUrl] = useState("");
+  const [busy, setBusy] = useState(false);
+  const trimmed = url.trim();
+  const invalid = !!trimmed && !/^https?:\/\/\S+$/i.test(trimmed);
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    if (invalid) return;
+    setBusy(true);
+    const ok = await onSubmit(trimmed || null);
+    setBusy(false);
+    if (ok) {
+      setUrl("");
+      onClose();
+    }
+  }
+  return (
+    <Dialog open={open} onClose={onClose} size="sm" title="Mark as published" description="Only do this if the post is live on the platform.">
+      <form onSubmit={submit}>
+        <div className="p-5">
+          <Field label="Post URL" help="Optional. Link to the live post, so it can be opened from Postflare." error={invalid ? "Enter an http(s) URL" : undefined}>
+            {(id) => (
+              <Input id={id} data-autofocus type="url" value={url} invalid={invalid} onChange={(e) => setUrl(e.target.value)} placeholder="https://" maxLength={2048} />
+            )}
+          </Field>
+        </div>
+        <div className="flex justify-end gap-2 border-t border-zinc-200 bg-zinc-50/60 px-5 py-3 dark:border-zinc-800 dark:bg-zinc-900">
+          <Button onClick={onClose}>Cancel</Button>
+          <Button type="submit" variant="primary" loading={busy} disabled={invalid}>
+            Mark as published
+          </Button>
+        </div>
+      </form>
+    </Dialog>
   );
 }

@@ -1,11 +1,11 @@
 import { Hono } from "hono";
-import type { CreatePostsInput, ThreadItem } from "../../shared/types";
+import type { CreatePostsInput, ResolvePostInput, ThreadItem } from "../../shared/types";
 import type { Context } from "hono";
 import { requirePermission, wsId, type AppEnv } from "../lib/auth";
-import { findAccount } from "../lib/accounts";
+import type { AccountRow } from "../lib/accounts";
 import { DEMO_POSTS_PER_DAY, demoPostsLeft, queueDemoPublish, simulateDueDemoPosts } from "../lib/demo";
 import type { MediaRow } from "../lib/media";
-import { findPost, logPost, postDto, startWorkflow, terminateWorkflow, type PostRow } from "../lib/posts";
+import { findPost, logPost, logStatement, postDto, startWorkflow, startWorkflows, terminateWorkflow, workflowInstanceId, type PostRow } from "../lib/posts";
 import { newId, now, parseJson } from "../lib/util";
 import { validatePost } from "../lib/validate";
 import { getProvider } from "../providers/registry";
@@ -14,36 +14,57 @@ export const postRoutes = new Hono<AppEnv>();
 
 type Draft = { accountId: string; content: string; media: string[]; settings: Record<string, unknown>; thread: ThreadItem[] };
 
-/** Media of the workspace, in order. Throws for ids that are unknown or belong to another workspace. */
-async function mediaRows(env: Env, workspaceId: string, ids: string[]): Promise<MediaRow[]> {
-  if (!ids.length) return [];
-  const { results } = await env.DB.prepare(`SELECT * FROM media WHERE workspace_id = ? AND id IN (${ids.map(() => "?").join(",")})`)
-    .bind(workspaceId, ...ids)
-    .all<MediaRow>();
-  const byId = new Map(results.map((r) => [r.id, r]));
+type Media = Map<string, MediaRow>;
+
+/** Accounts and media of the workspace that the drafts use: two queries whatever the number of drafts. */
+async function loadRefs(env: Env, workspaceId: string, drafts: Draft[]): Promise<{ accounts: Map<string, AccountRow>; media: Media }> {
+  const accountIds = [...new Set(drafts.map((d) => d.accountId))];
+  const mediaIds = [...new Set(drafts.flatMap((d) => [...d.media, ...d.thread.flatMap((t) => t.media)]))];
+  const [accounts, media] = await Promise.all([
+    accountIds.length
+      ? env.DB.prepare(`SELECT * FROM accounts WHERE workspace_id = ? AND id IN (${accountIds.map(() => "?").join(",")})`)
+          .bind(workspaceId, ...accountIds)
+          .all<AccountRow>()
+      : { results: [] as AccountRow[] },
+    mediaIds.length
+      ? env.DB.prepare(`SELECT * FROM media WHERE workspace_id = ? AND id IN (${mediaIds.map(() => "?").join(",")})`)
+          .bind(workspaceId, ...mediaIds)
+          .all<MediaRow>()
+      : { results: [] as MediaRow[] },
+  ]);
+  return { accounts: new Map(accounts.results.map((r) => [r.id, r])), media: new Map(media.results.map((r) => [r.id, r])) };
+}
+
+/** Media rows in order. Throws for ids that are unknown or belong to another workspace. */
+function mediaRows(media: Media, ids: string[]): MediaRow[] {
   return ids.map((id) => {
-    const row = byId.get(id);
+    const row = media.get(id);
     if (!row) throw new Error(`Media ${id} not found`);
     return row;
   });
 }
 
-/** Validate a draft against its account's provider. Returns errors (empty when valid). */
-async function check(env: Env, workspaceId: string, d: Draft, strict: boolean): Promise<string[]> {
-  const account = await findAccount(env, workspaceId, d.accountId);
+/** Validate a draft against its account's provider. Returns errors (empty when valid). No D1 query. */
+function check(refs: Awaited<ReturnType<typeof loadRefs>>, d: Draft, strict: boolean): string[] {
+  const account = refs.accounts.get(d.accountId);
   if (!account) return [`Account ${d.accountId} not found`];
   const provider = getProvider(account.provider);
   if (!provider) return [`Unknown provider ${account.provider}`];
   try {
     // Drafts are not validated against the platform, but their media must belong to this workspace.
-    const media = await mediaRows(env, workspaceId, d.media);
-    const thread = await Promise.all(d.thread.map(async (t) => ({ ...t, mediaRows: await mediaRows(env, workspaceId, t.media) })));
+    const media = mediaRows(refs.media, d.media);
+    const thread = d.thread.map((t) => ({ ...t, mediaRows: mediaRows(refs.media, t.media) }));
     if (!strict) return [];
     if (account.status === "disabled") return [`${account.name} is disabled`];
     return validatePost(provider, { content: d.content, media, settings: d.settings, thread }).map((e) => `${account.name}: ${e}`);
   } catch (err) {
     return [(err as Error).message];
   }
+}
+
+async function checkAll(env: Env, workspaceId: string, drafts: Draft[], strict: boolean): Promise<string[]> {
+  const refs = await loadRefs(env, workspaceId, drafts);
+  return drafts.flatMap((d) => check(refs, d, strict));
 }
 
 function normalize(p: CreatePostsInput["posts"][number]): Draft {
@@ -112,7 +133,7 @@ postRoutes.get("/posts/:id", requirePermission("posts.read"), async (c) => {
 
 postRoutes.post("/posts/validate", requirePermission("posts.write"), async (c) => {
   const body = await c.req.json<CreatePostsInput>();
-  const errors = (await Promise.all((body.posts ?? []).map((p) => check(c.env, wsId(c), normalize(p), true)))).flat();
+  const errors = await checkAll(c.env, wsId(c), (body.posts ?? []).map(normalize), true);
   return c.json({ errors });
 });
 
@@ -124,7 +145,7 @@ postRoutes.post("/posts", requirePermission("posts.write"), async (c) => {
   const schedule = resolveSchedule(body.scheduledAt);
   if (!schedule) return c.json({ error: "Invalid scheduledAt" }, 400);
   const { status, at } = schedule;
-  const errors = (await Promise.all(drafts.map((d) => check(c.env, workspaceId, d, status !== "draft")))).flat();
+  const errors = await checkAll(c.env, workspaceId, drafts, status !== "draft");
   if (errors.length) return c.json({ error: errors.join("\n"), errors }, 400);
   if (isDemo(c) && (await demoPostsLeft(c.env, workspaceId)) < drafts.length) {
     return c.json(
@@ -135,47 +156,29 @@ postRoutes.post("/posts", requirePermission("posts.write"), async (c) => {
 
   const groupId = newId("grp_");
   const t = now();
-  const rows: PostRow[] = drafts.map((d) => ({
-    id: newId("pst_"),
-    group_id: groupId,
-    account_id: d.accountId,
-    status,
-    scheduled_at: at,
-    content: d.content,
-    media: JSON.stringify(d.media),
-    settings: JSON.stringify(d.settings),
-    thread: JSON.stringify(d.thread),
-    external_id: null,
-    external_url: null,
-    error: null,
-    attempts: 0,
-    workflow_id: null,
-    revision: 0,
-    created_at: t,
-    updated_at: t,
-    published_at: null,
-    workspace_id: workspaceId,
-    created_by: c.var.user.id,
-  }));
-  await c.env.DB.batch(
-    rows.map((r) =>
+  const demo = isDemo(c);
+  // Real workspaces start one workflow per scheduled post; its instance id is known up front (`${id}-0`).
+  const withWorkflow = status === "scheduled" && !demo;
+  const rows = drafts.map((d) => {
+    const id = newId("pst_");
+    return { id, revision: 0, d, workflowId: withWorkflow ? workflowInstanceId({ id, revision: 0 }) : null };
+  });
+  const message = status === "scheduled" ? (body.scheduledAt === "now" ? "Queued for immediate publishing" : `Scheduled for ${new Date(at!).toISOString()}`) : null;
+  // One batch (one transaction) for every row and log line: the D1 query count does not grow with the accounts.
+  await c.env.DB.batch([
+    ...rows.map((r) =>
       c.env.DB.prepare(
-        `INSERT INTO posts (id, group_id, account_id, status, scheduled_at, content, media, settings, thread, attempts, revision, created_at, updated_at, workspace_id, created_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?)`,
-      ).bind(r.id, r.group_id, r.account_id, r.status, r.scheduled_at, r.content, r.media, r.settings, r.thread, t, t, workspaceId, c.var.user.id),
+        `INSERT INTO posts (id, group_id, account_id, status, scheduled_at, content, media, settings, thread, attempts, revision, workflow_id, created_at, updated_at, workspace_id, created_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?)`,
+      ).bind(r.id, groupId, r.d.accountId, status, at, r.d.content, JSON.stringify(r.d.media), JSON.stringify(r.d.settings), JSON.stringify(r.d.thread), r.workflowId, t, t, workspaceId, c.var.user.id),
     ),
-  );
-  if (status === "scheduled") {
-    const message = body.scheduledAt === "now" ? "Queued for immediate publishing" : `Scheduled for ${new Date(at!).toISOString()}`;
-    if (isDemo(c)) {
-      for (const r of rows) await logPost(c.env, r.id, "info", message);
-      if (isImmediate(at)) await demoPublish(c, rows.map((r) => r.id));
-    } else {
-      for (const r of rows) {
-        await startWorkflow(c.env, r);
-        await logPost(c.env, r.id, "info", message);
-      }
-    }
+    ...(message ? rows.map((r) => logStatement(c.env.DB, r.id, "info", message)) : []),
+  ]);
+  if (withWorkflow) {
+    // If this fails, the posts keep their workflow ids and the cron sweep (sweepScheduledPosts) re-arms them.
+    await startWorkflows(c.env, rows);
+  } else if (demo && status === "scheduled" && isImmediate(at)) {
+    await demoPublish(c, rows.map((r) => r.id));
   }
   const { results } = await c.env.DB.prepare("SELECT * FROM posts WHERE group_id = ? AND workspace_id = ?")
     .bind(groupId, workspaceId)
@@ -202,7 +205,7 @@ postRoutes.patch("/posts/:id", requirePermission("posts.write"), async (c) => {
       ? resolveSchedule(body.scheduledAt)
       : { status: row.status === "scheduled" ? "scheduled" : ("draft" as PostRow["status"]), at: row.scheduled_at };
   if (!sched) return c.json({ error: "Invalid scheduledAt" }, 400);
-  const errors = await check(c.env, wsId(c), draft, sched.status === "scheduled");
+  const errors = await checkAll(c.env, wsId(c), [draft], sched.status === "scheduled");
   if (errors.length) return c.json({ error: errors.join("\n"), errors }, 400);
 
   // Guarded on the revision/status we read: if the workflow claimed the post meanwhile, it is publishing and must
@@ -245,6 +248,57 @@ postRoutes.post("/posts/:id/retry", requirePermission("posts.write"), async (c) 
   } else {
     await startWorkflow(c.env, { id: row.id, revision, workflow_id: null });
     await logPost(c.env, row.id, "info", "Retry requested");
+  }
+  return c.json(postDto((await findPost(c.env, wsId(c), row.id))!));
+});
+
+/**
+ * A needs_check post (the platform may or may not have it): the user checked the profile.
+ * published: true marks it published (with the URL of the live post, if given); false publishes it again now.
+ */
+postRoutes.post("/posts/:id/resolve", requirePermission("posts.write"), async (c) => {
+  const row = await findPost(c.env, wsId(c), c.req.param("id"));
+  if (!row) return c.json({ error: "Not found" }, 404);
+  if (row.status !== "needs_check") return c.json({ error: "Only posts that need a check can be resolved" }, 409);
+  const body = await c.req.json<ResolvePostInput>().catch(() => null);
+  if (!body || typeof body.published !== "boolean") return c.json({ error: "published (boolean) is required" }, 400);
+  const revision = row.revision + 1;
+  const t = now();
+  if (body.published) {
+    let url: string | null = null;
+    if (body.url) {
+      try {
+        const u = new URL(String(body.url));
+        if (u.protocol !== "https:" && u.protocol !== "http:") throw new Error();
+        url = u.toString();
+      } catch {
+        return c.json({ error: "Invalid url" }, 400);
+      }
+    }
+    // Guarded on the revision we read; the bump makes any instance still holding this post stale.
+    const res = await c.env.DB.prepare(
+      `UPDATE posts SET status = 'published', external_url = COALESCE(?, external_url), error = NULL, published_at = ?, revision = ?, updated_at = ?
+       WHERE id = ? AND workspace_id = ? AND revision = ? AND status = 'needs_check'`,
+    )
+      .bind(url, t, revision, t, row.id, wsId(c), row.revision)
+      .run();
+    if (!res.meta.changes) return c.json({ error: "The post changed meanwhile, reload and try again" }, 409);
+    await logPost(c.env, row.id, "info", `Marked as published by ${c.var.user.name ?? "a user"}${url ? `: ${url}` : ""}`);
+  } else {
+    const res = await c.env.DB.prepare(
+      "UPDATE posts SET status = 'scheduled', scheduled_at = ?, error = NULL, revision = ?, workflow_id = NULL, updated_at = ? WHERE id = ? AND workspace_id = ? AND revision = ? AND status = 'needs_check'",
+    )
+      .bind(t, revision, t, row.id, wsId(c), row.revision)
+      .run();
+    if (!res.meta.changes) return c.json({ error: "The post changed meanwhile, reload and try again" }, 409);
+    const message = `Retry requested by ${c.var.user.name ?? "a user"} after a check (the platform may now have it twice)`;
+    if (isDemo(c)) {
+      await logPost(c.env, row.id, "info", message);
+      await demoPublish(c, [row.id]);
+    } else {
+      await startWorkflow(c.env, { id: row.id, revision, workflow_id: null });
+      await logPost(c.env, row.id, "info", message);
+    }
   }
   return c.json(postDto((await findPost(c.env, wsId(c), row.id))!));
 });
@@ -292,7 +346,7 @@ postRoutes.get("/overview", requirePermission("posts.read"), async (c) => {
     .bind(ws)
     .all<PostRow>();
   const { results: recent } = await c.env.DB.prepare(
-    "SELECT * FROM posts WHERE workspace_id = ? AND status IN ('published', 'failed') ORDER BY updated_at DESC LIMIT 10",
+    "SELECT * FROM posts WHERE workspace_id = ? AND status IN ('published', 'failed', 'needs_check') ORDER BY updated_at DESC LIMIT 10",
   )
     .bind(ws)
     .all<PostRow>();

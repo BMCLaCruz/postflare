@@ -193,6 +193,8 @@ async function advancePost(ctx: CountedContext, account: AccountRecord, state: W
       ...(isPost && st.sticky ? { sticky: true } : {}),
       ...(st.commentStatus ? { comment_status: st.commentStatus } : {}),
     },
+    // Creating the post is the commit; media uploads above are invisible until it references them.
+    commit: true,
   });
   return { status: "published", externalId: String(res.id), url: res.link ?? null };
 }

@@ -85,7 +85,8 @@ async function postStatus(ctx: ProviderContext, account: AccountRecord, params: 
   const res = await requestJson<{ id: string; url: string | null; uri: string }>(ctx, `${api(account)}/api/v1/statuses`, {
     method: "POST",
     token: token(account),
-    // Mastodon caches the result per key for an hour: a retried step does not post twice.
+    // Mastodon caches the result per key for an hour: a retried step does not post twice. That is why this
+    // create is not marked `commit: true` (docs/provider-brief.md "Commit semantics"): failures stay retryable.
     headers: { "idempotency-key": idempotencyKey },
     json: params,
     classify,

@@ -1,6 +1,6 @@
 import type { ProviderErrorKind } from "./errors";
 import { missingScope, ProviderError } from "./errors";
-import { expiresAt, request, requireApp } from "./http";
+import { checkedCommit, expiresAt, request, requireApp } from "./http";
 import {
   allowInteraction,
   bool,
@@ -47,31 +47,47 @@ function envelopeKind(body: any): ProviderErrorKind {
   return "invalid";
 }
 
+/** `commit`: this call creates the post (docs/provider-brief.md "Commit semantics"). */
 async function call<T = any>(
   ctx: ProviderContext,
   path: string,
-  opts: { token?: string; query?: Record<string, string | undefined>; json?: unknown } = {},
+  opts: { token?: string; query?: Record<string, string | undefined>; json?: unknown; commit?: boolean } = {},
 ): Promise<T> {
-  const res = await request(ctx, `${API}${path}`, {
-    method: opts.json === undefined ? "GET" : "POST",
-    headers: opts.token ? { "access-token": opts.token } : {},
-    query: opts.query,
-    json: opts.json,
-    classify: (_s, body) => tiktokReason(JSON.stringify(body ?? ""))?.kind,
-  });
-  const raw = await res.text();
-  const body = JSON.parse(raw || "{}");
-  if (body?.code !== 0) {
+  const send = async () => {
+    const res = await request(ctx, `${API}${path}`, {
+      method: opts.json === undefined ? "GET" : "POST",
+      headers: opts.token ? { "access-token": opts.token } : {},
+      query: opts.query,
+      json: opts.json,
+      classify: (_s, body) => tiktokReason(JSON.stringify(body ?? ""))?.kind,
+      commit: opts.commit,
+    });
+    const raw = await res.text();
+    return { raw, body: JSON.parse(raw || "{}") };
+  };
+  // A 200 envelope error is a refusal (nothing created), except a server error code on a commit: ambiguous.
+  const { raw, body } = await checkedCommit(ctx, send, ({ body }) => {
+    if (body?.code === 0) return;
     const r = tiktokReason(JSON.stringify(body));
-    throw new ProviderError(`${NAME}: ${r?.message ?? body?.message ?? "request failed"}`, envelopeKind(body), 200, body);
-  }
+    let kind = envelopeKind(body);
+    if (opts.commit && kind === "transient") kind = "ambiguous";
+    throw new ProviderError(`${NAME}: ${r?.message ?? body?.message ?? "request failed"}`, kind, 200, body);
+  });
   return { ...body.data, __raw: raw } as T;
 }
 
 async function tokenRequest(ctx: ProviderContext, path: string, params: Record<string, string>) {
   const { clientKey, clientSecret } = requireApp(ctx, NAME, "clientKey", "clientSecret");
   try {
-    return await call<{ access_token: string; refresh_token?: string; open_id: string; expires_in?: number; scope?: string }>(ctx, path, {
+    return await call<{
+      access_token: string;
+      refresh_token?: string;
+      open_id: string;
+      expires_in?: number;
+      refresh_token_expires_in?: number;
+      refresh_expires_in?: number;
+      scope?: string;
+    }>(ctx, path, {
       json: { client_id: clientKey, client_secret: clientSecret, ...params },
     });
   } catch (err) {
@@ -255,6 +271,7 @@ export const tiktokBusiness: Provider = {
         profileUrl: p.username ? `https://www.tiktok.com/@${p.username}` : null,
         credentials: { accessToken: tok.access_token, refreshToken: tok.refresh_token },
         expiresAt: expiresAt(tok.expires_in ?? 86400),
+        refreshExpiresAt: expiresAt(tok.refresh_token_expires_in ?? tok.refresh_expires_in),
         meta: { businessId: tok.open_id, username: p.username ?? null },
       },
     ];
@@ -268,6 +285,9 @@ export const tiktokBusiness: Provider = {
     return {
       credentials: { accessToken: tok.access_token, ...(tok.refresh_token ? { refreshToken: tok.refresh_token } : {}) },
       expiresAt: expiresAt(tok.expires_in ?? 86400),
+      ...(tok.refresh_token_expires_in || tok.refresh_expires_in
+        ? { refreshExpiresAt: expiresAt(tok.refresh_token_expires_in ?? tok.refresh_expires_in) }
+        : {}),
     };
   },
 
@@ -281,6 +301,8 @@ export const tiktokBusiness: Provider = {
     const data = await call<{ share_id?: string }>(ctx, video ? "/business/video/publish/" : "/business/photo/publish/", {
       token: token(account),
       json: video ? videoBody(account.externalId, post) : photoBody(account.externalId, post),
+      // TikTok pulls the media and posts it: this is the commit.
+      commit: true,
     });
     if (!data.share_id) throw tiktokError(NAME, "TikTok did not return a publish id", "invalid");
     return { status: "pending", state: { publishId: data.share_id }, retryAfterSeconds: 15 };

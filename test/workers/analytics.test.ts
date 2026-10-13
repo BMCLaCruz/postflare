@@ -5,7 +5,7 @@ import { saveConnectedAccounts } from "../../worker/lib/accounts";
 import { createApiKey } from "../../worker/lib/auth";
 import { encryptJson, hashPassword } from "../../worker/lib/crypto";
 import { demoAccountMetrics, demoPostMetrics } from "../../worker/lib/demo-metrics";
-import { CHECKPOINTS, MAX_POST_FAILS, collectMetrics, nextCheckpoint, utcDay } from "../../worker/lib/metrics";
+import { CHECKPOINTS, MAX_POST_FAILS, collectMetrics, expireMetricsSchedules, nextCheckpoint, utcDay } from "../../worker/lib/metrics";
 import { getProvider } from "../../worker/providers/registry";
 import { ORIGIN, sessionCookie, type CallOptions, type Client } from "./helpers";
 
@@ -423,8 +423,10 @@ describe("collection", () => {
     // Published 2h ago: next checkpoint is 24h after publishing.
     expect(c0.metrics_next_at).toBe(now - 2 * HOUR + DAY);
     expect((await one<any>("SELECT COUNT(*) AS n FROM post_metrics WHERE post_id = 'c00'")).n).toBe(1);
-    expect((await one<any>("SELECT COUNT(*) AS n FROM posts WHERE account_id = 'acc_c_yt' AND metrics_next_at <= ?", Date.now())).n).toBe(10);
-    // Too old: no longer planned.
+    expect((await one<any>("SELECT COUNT(*) AS n FROM posts WHERE account_id = 'acc_c_yt' AND id != 'c_old' AND metrics_next_at <= ?", Date.now())).n).toBe(10);
+    // Too old: not collected; the daily job stops planning it.
+    expect((await one<any>("SELECT metrics_next_at FROM posts WHERE id = 'c_old'")).metrics_next_at).not.toBeNull();
+    expect(await expireMetricsSchedules(E)).toBeGreaterThanOrEqual(1);
     expect((await one<any>("SELECT metrics_next_at FROM posts WHERE id = 'c_old'")).metrics_next_at).toBeNull();
   });
 

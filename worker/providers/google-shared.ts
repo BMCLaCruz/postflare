@@ -46,6 +46,8 @@ export async function googleExchangeCode(ctx: ProviderContext, providerName: str
   return {
     credentials: { accessToken: token.access_token, refreshToken: token.refresh_token },
     expiresAt: expiresAt(token.expires_in),
+    // Only sent for time-limited grants (e.g. an OAuth consent screen in Testing: 7 days).
+    refreshExpiresAt: expiresAt(token.refresh_token_expires_in),
     scope: token.scope ?? "",
   };
 }
@@ -62,6 +64,7 @@ export async function googleRefresh(ctx: ProviderContext, providerName: string, 
     // Google usually does not rotate the refresh token; keep the stored one unless a new one is returned.
     credentials: { accessToken: token.access_token, ...(token.refresh_token ? { refreshToken: token.refresh_token } : {}) },
     expiresAt: expiresAt(token.expires_in),
+    ...(token.refresh_token_expires_in ? { refreshExpiresAt: expiresAt(token.refresh_token_expires_in) } : {}),
   };
 }
 
