@@ -52,6 +52,9 @@ profile (handy in CI). `postflare logout [--profile x | --all]`.
 | `analytics [--range 7d\|30d\|90d \| --from --to] [-a] [--platform]` | KPIs vs the previous period, per platform/account, top posts |
 | `analytics top [--sort views\|engagements\|engagementRate\|publishedAt] [--limit]` | Best posts |
 | `analytics refresh --post <id> \| --account <selector>` | Collect metrics now |
+| `playbooks [query] [--platform] [--goal] [--format]`, `playbooks search <query>` | Find a recipe for the post (built-in and the workspace's own) |
+| `playbooks show <id>[@version] [--prompt] [-a]` | The playbook, or `--prompt`: the ready-to-use agent prompt with your accounts' limits |
+| `playbooks stats [--days] [--platform] [-a]` | Rank playbooks (and A/B variants) by lift vs each account's usual |
 | `skill install [--dir ~/.claude/skills]` | Install/update the bundled Claude Code skill (`<dir>/postflare/SKILL.md`) |
 
 `postflare <command> --help` shows every option with examples.
@@ -85,6 +88,8 @@ postflare post -a youtube -m video.mp4 --set title="Launch" --draft --dry-run
   Field defaults are filled in like in the web composer. Required settings that are missing are reported with the
   `--set` to add before anything is uploaded.
 - `--thread "text"` (repeatable): follow-ups (thread replies, first comment) for platforms that support them.
+- `--playbook <id>[@version]` records the playbook the post was written with (for `playbooks stats`), `--variant A`
+  labels an A/B version. `posts edit --playbook ... | --no-playbook | --variant` changes it.
 
 ### Scripting
 

@@ -225,6 +225,10 @@ export interface PostDTO {
   createdAt: number;
   updatedAt: number;
   publishedAt: number | null;
+  /** Playbook the post was written with (built-in id or custom pbk_ id), its version and A/B variant label. */
+  playbookId: string | null;
+  playbookVersion: number | null;
+  variant: string | null;
 }
 
 /** Body of POST /api/posts/:id/resolve (only for `needs_check` posts). */
@@ -264,6 +268,12 @@ export interface CreatePostsInput {
     settings?: Record<string, unknown>;
     thread?: ThreadItem[];
   }>;
+  /** Playbook the posts were written with (attribution for the playbook ranking). Built-in id, custom id or slug. */
+  playbookId?: string | null;
+  /** Version used (default: the latest). */
+  playbookVersion?: number | null;
+  /** A/B label, e.g. "A" or "short-hook" (at most 32 characters). */
+  variant?: string | null;
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -286,6 +296,7 @@ export type WorkspacePermission =
   | "posts.write"
   | "media.read"
   | "media.write"
+  | "playbooks.manage"
   | "apikeys.manage";
 
 export type PermissionKey = InstancePermission | WorkspacePermission;
@@ -731,4 +742,118 @@ export interface AdminOverviewDTO {
     meteringSince: string | null;
   };
   workspaces: AdminWorkspaceRowDTO[];
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Playbooks (worker/lib/playbooks.ts, shared/playbooks.ts)
+
+export type PlaybookGoal = "engagement" | "reach" | "clicks" | "followers" | "conversions";
+export type PlaybookFormat = "text" | "thread" | "image" | "carousel" | "video";
+
+/** A playbook in lists and searches (no body). */
+export interface PlaybookSummaryDTO {
+  /** Built-in: its kebab id (e.g. "launch-announcement"). Custom: pbk_... */
+  id: string;
+  /** Kebab-case handle (built-ins: the id). */
+  slug: string;
+  /** Latest version. */
+  version: number;
+  name: string;
+  summary: string;
+  goal: PlaybookGoal;
+  /** Provider ids and groups (short-video, microblog, professional, visual, all). */
+  platforms: string[];
+  formats: PlaybookFormat[];
+  tags: string[];
+  /** What the writer must know (or ask) before writing. */
+  inputs: string[];
+  builtin: boolean;
+  /** Custom playbooks duplicated from a built-in: "<id>@<version>". */
+  basedOn: string | null;
+  archived: boolean;
+  updatedAt: number | null;
+  /** Search relevance (GET /api/playbooks?q=). */
+  score?: number;
+}
+
+/** GET /api/playbooks/:id */
+export interface PlaybookDTO extends PlaybookSummaryDTO {
+  /** The version returned (latest unless ?version=). */
+  version: number;
+  latestVersion: number;
+  /** Every version that can be fetched with ?version= (built-ins: only the bundled one). */
+  versions: number[];
+  /** Markdown body (When to use, Structure, Platform notes, Hooks, Examples, Avoid, Checklist). */
+  body: string;
+  /** The playbook as a Markdown file with frontmatter (duplicate, export, `pf playbooks show`). */
+  markdown: string;
+  /** Items of the Checklist section. */
+  checklist: string[];
+  /** Ready-to-use prompt for an AI agent: the playbook, this workspace's target accounts and limits, attribution. */
+  prompt: string;
+}
+
+/** Body of POST /api/playbooks and PATCH /api/playbooks/:id (PATCH: every field optional). Or `markdown` with frontmatter. */
+export interface PlaybookInput {
+  slug?: string;
+  name?: string;
+  summary?: string;
+  goal?: PlaybookGoal;
+  platforms?: string[];
+  formats?: PlaybookFormat[];
+  tags?: string[];
+  inputs?: string[];
+  body?: string;
+  /** A whole playbook file (frontmatter + body); its fields are used when the others are absent. */
+  markdown?: string;
+}
+
+/** insufficient: < 5 posts, low: 5–19, ok: ≥ 20. */
+export type PlaybookConfidence = "insufficient" | "low" | "ok";
+
+/** One row of the playbook ranking (a playbook, one of its versions or variants, or the no-playbook baseline). */
+export interface PlaybookStatsRow {
+  /** null: posts without a playbook. */
+  playbookId: string | null;
+  name: string;
+  builtin: boolean;
+  /** Version rows only. */
+  version?: number | null;
+  /** Variant rows only (null = posts of the playbook without a variant label). */
+  variant?: string | null;
+  /** Published posts with metrics in the range. */
+  posts: number;
+  accounts: number;
+  /** Median / mean engagement rate (engagements ÷ views, else impressions, else reach) of posts that report an exposure. */
+  medianEngagementRate: number | null;
+  meanEngagementRate: number | null;
+  /** Median exposure (views, else impressions, else reach). */
+  medianViews: number | null;
+  /**
+   * Median of (post metric ÷ the same account's baseline median) − 1: 0.25 = 25 % above the account's usual.
+   * Metric: engagement rate (engagements for accounts whose platform reports no exposure).
+   */
+  lift: number | null;
+  /** Posts that have a lift value (account baseline available). */
+  liftPosts: number;
+  confidence: PlaybookConfidence;
+}
+
+/** GET /api/playbooks/stats */
+export interface PlaybookStatsDTO {
+  from: number;
+  to: number;
+  days: number;
+  platform: string | null;
+  accountId: string | null;
+  /** Published posts with metrics that were analyzed. */
+  postsAnalyzed: number;
+  /** True when the range had more posts than the cap (the most recent ones were analyzed). */
+  capped: boolean;
+  /** Posts without a playbook. */
+  baseline: PlaybookStatsRow;
+  /** Best first (rows with enough posts before insufficient ones, then by lift). */
+  playbooks: Array<PlaybookStatsRow & { versions: PlaybookStatsRow[]; variants: PlaybookStatsRow[] }>;
+  /** How the numbers are computed (shown as a disclaimer: correlation, not causation). */
+  method: string;
 }

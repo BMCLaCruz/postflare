@@ -15,6 +15,7 @@ describe("permission catalog", () => {
       "posts.write",
       "media.read",
       "media.write",
+      "playbooks.manage",
       "apikeys.manage",
     ]);
     for (const p of PERMISSIONS) expect(p.description && p.label && p.action, p.key).toBeTruthy();

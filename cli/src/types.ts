@@ -100,6 +100,10 @@ export interface PostDTO {
   createdAt: number;
   updatedAt: number;
   publishedAt: number | null;
+  /** Playbook attribution (built-in id or custom pbk_ id), its version and A/B variant. */
+  playbookId?: string | null;
+  playbookVersion?: number | null;
+  variant?: string | null;
   logs?: Array<{ id: number; level: string; message: string; createdAt: number }>;
 }
 
@@ -114,6 +118,9 @@ export interface ResolvePostInput {
 export interface CreatePostsInput {
   scheduledAt: number | "now" | null;
   posts: Array<{ accountId: string; content: string; media: string[]; settings: Record<string, unknown>; thread: ThreadItem[] }>;
+  playbookId?: string | null;
+  playbookVersion?: number | null;
+  variant?: string | null;
 }
 
 export interface AnalyticsTotals {
@@ -194,4 +201,62 @@ export interface VersionDTO {
   version: string;
   commit: string;
   apiVersion: number;
+}
+
+// Playbooks (GET /api/playbooks, /api/playbooks/:id, /api/playbooks/stats)
+
+export interface PlaybookSummaryDTO {
+  id: string;
+  slug: string;
+  version: number;
+  name: string;
+  summary: string;
+  goal: string;
+  platforms: string[];
+  formats: string[];
+  tags: string[];
+  inputs: string[];
+  builtin: boolean;
+  basedOn: string | null;
+  archived: boolean;
+  updatedAt: number | null;
+  score?: number;
+}
+
+export interface PlaybookDTO extends PlaybookSummaryDTO {
+  latestVersion: number;
+  versions: number[];
+  body: string;
+  markdown: string;
+  checklist: string[];
+  prompt: string;
+}
+
+export interface PlaybookStatsRow {
+  playbookId: string | null;
+  name: string;
+  builtin: boolean;
+  version?: number | null;
+  variant?: string | null;
+  posts: number;
+  accounts: number;
+  medianEngagementRate: number | null;
+  meanEngagementRate: number | null;
+  medianViews: number | null;
+  lift: number | null;
+  liftPosts: number;
+  confidence: "insufficient" | "low" | "ok";
+}
+
+export interface PlaybookStatsDTO {
+  from: number;
+  to: number;
+  days: number;
+  platform: string | null;
+  accountId: string | null;
+  postsAnalyzed: number;
+  capped: boolean;
+  baseline: PlaybookStatsRow;
+  playbooks: Array<PlaybookStatsRow & { versions: PlaybookStatsRow[]; variants: PlaybookStatsRow[] }>;
+  method: string;
 }

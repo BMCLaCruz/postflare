@@ -10,7 +10,8 @@
     { "binding": "DEMO_DB", "database_name": "postflare-demo", "database_id": "demo" },
     { "binding": "ANALYTICS_DB", "database_name": "postflare-analytics", "database_id": "analytics" },
     { "binding": "SECURITY_DB", "database_name": "postflare-security", "database_id": "security" },
-    { "binding": "PUBLISH_DB", "database_name": "postflare-publish", "database_id": "publish" }
+    { "binding": "PUBLISH_DB", "database_name": "postflare-publish", "database_id": "publish" },
+    { "binding": "PLAYBOOKS_DB", "database_name": "postflare-playbooks", "database_id": "playbooks" }
   ],
   "r2_buckets": [{ "binding": "MEDIA", "bucket_name": "postflare-media" }],
   "workflows": [{ "name": "postflare-publish", "binding": "PUBLISH_WORKFLOW", "class_name": "PublishWorkflow" }]

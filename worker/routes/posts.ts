@@ -5,6 +5,7 @@ import { requirePermission, wsId, type AppEnv } from "../lib/auth";
 import type { AccountRow } from "../lib/accounts";
 import { DEMO_POSTS_PER_DAY, demoPostsLeft, queueDemoPublish, simulateDueDemoPosts } from "../lib/demo";
 import type { MediaRow } from "../lib/media";
+import { normalizeVariant, resolveAttribution } from "../lib/playbooks";
 import { findPost, logPost, logStatement, postDto, startWorkflow, startWorkflows, terminateWorkflow, workflowInstanceId, type PostRow } from "../lib/posts";
 import { newId, now, parseJson } from "../lib/util";
 import { validatePost } from "../lib/validate";
@@ -77,6 +78,33 @@ function normalize(p: CreatePostsInput["posts"][number]): Draft {
   };
 }
 
+/**
+ * Playbook attribution of a create/update body: `undefined` when the body has none of the fields, else the values to
+ * store (`playbookId: null` clears it). The playbook must be built-in or belong to this workspace (else "not found").
+ */
+async function attribution(
+  env: Env,
+  workspaceId: string,
+  body: { playbookId?: string | null; playbookVersion?: number | null; variant?: string | null },
+  current?: { id: string | null; version: number | null; variant: string | null },
+): Promise<{ id: string | null; version: number | null; variant: string | null } | { error: string } | undefined> {
+  if (body.playbookId === undefined && body.playbookVersion === undefined && body.variant === undefined) return undefined;
+  const variant = body.variant === undefined ? (current?.variant ?? null) : normalizeVariant(body.variant);
+  if (variant && typeof variant === "object") return variant;
+  // Only the variant changes: keep the playbook as it is.
+  if (current && body.playbookId === undefined && body.playbookVersion === undefined) return { id: current.id, version: current.version, variant };
+  const ref = body.playbookId === undefined ? (current?.id ?? null) : body.playbookId;
+  if (ref === null || ref === "") {
+    if (body.playbookVersion != null) return { error: "playbookVersion needs a playbookId" };
+    return { id: null, version: null, variant };
+  }
+  if (typeof ref !== "string") return { error: "playbookId must be a string" };
+  const version = body.playbookVersion === undefined || body.playbookVersion === null ? null : Number(body.playbookVersion);
+  const res = await resolveAttribution(env.DB, workspaceId, ref, version);
+  if ("error" in res) return res;
+  return { id: res.id, version: res.version, variant };
+}
+
 /** Returns null for an unparseable `scheduledAt` (NaN would otherwise be stored as NULL and publish immediately). */
 function resolveSchedule(scheduledAt: CreatePostsInput["scheduledAt"]): { status: PostRow["status"]; at: number | null } | null {
   if (scheduledAt === null || scheduledAt === undefined) return { status: "draft", at: null };
@@ -110,6 +138,12 @@ postRoutes.get("/posts", requirePermission("posts.read"), async (c) => {
   }
   if (accountId) where.push("account_id = ?") && binds.push(accountId);
   if (groupId) where.push("group_id = ?") && binds.push(groupId);
+  const playbookId = c.req.query("playbookId");
+  if (playbookId === "none") where.push("playbook_id IS NULL");
+  else if (playbookId === "any") where.push("playbook_id IS NOT NULL");
+  else if (playbookId) where.push("playbook_id = ?") && binds.push(playbookId);
+  const variant = c.req.query("variant");
+  if (variant) where.push("variant = ?") && binds.push(variant);
   const limit = Math.min(Number(c.req.query("limit")) || 500, 1000);
   const order = c.req.query("order") === "desc" ? "DESC" : "ASC";
   const { results } = await c.env.DB.prepare(
@@ -147,6 +181,8 @@ postRoutes.post("/posts", requirePermission("posts.write"), async (c) => {
   const { status, at } = schedule;
   const errors = await checkAll(c.env, workspaceId, drafts, status !== "draft");
   if (errors.length) return c.json({ error: errors.join("\n"), errors }, 400);
+  const pb = await attribution(c.env, workspaceId, body);
+  if (pb && "error" in pb) return c.json({ error: pb.error }, pb.error.endsWith("not found") ? 404 : 400);
   if (isDemo(c) && (await demoPostsLeft(c.env, workspaceId)) < drafts.length) {
     return c.json(
       { error: `The live demo has reached today's limit of ${DEMO_POSTS_PER_DAY} new posts. It resets daily: come back tomorrow, or deploy your own Postflare.` },
@@ -168,9 +204,9 @@ postRoutes.post("/posts", requirePermission("posts.write"), async (c) => {
   await c.env.DB.batch([
     ...rows.map((r) =>
       c.env.DB.prepare(
-        `INSERT INTO posts (id, group_id, account_id, status, scheduled_at, content, media, settings, thread, attempts, revision, workflow_id, created_at, updated_at, workspace_id, created_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?)`,
-      ).bind(r.id, groupId, r.d.accountId, status, at, r.d.content, JSON.stringify(r.d.media), JSON.stringify(r.d.settings), JSON.stringify(r.d.thread), r.workflowId, t, t, workspaceId, c.var.user.id),
+        `INSERT INTO posts (id, group_id, account_id, status, scheduled_at, content, media, settings, thread, attempts, revision, workflow_id, created_at, updated_at, workspace_id, created_by, playbook_id, playbook_version, variant)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).bind(r.id, groupId, r.d.accountId, status, at, r.d.content, JSON.stringify(r.d.media), JSON.stringify(r.d.settings), JSON.stringify(r.d.thread), r.workflowId, t, t, workspaceId, c.var.user.id, pb?.id ?? null, pb?.version ?? null, pb?.variant ?? null),
     ),
     ...(message ? rows.map((r) => logStatement(c.env.DB, r.id, "info", message)) : []),
   ]);
@@ -192,7 +228,7 @@ postRoutes.patch("/posts/:id", requirePermission("posts.write"), async (c) => {
   if (!row) return c.json({ error: "Not found" }, 404);
   if (!["draft", "scheduled", "failed", "cancelled"].includes(row.status))
     return c.json({ error: `A ${row.status} post cannot be edited` }, 409);
-  const body = await c.req.json<Partial<Draft> & { scheduledAt?: CreatePostsInput["scheduledAt"] }>();
+  const body = await c.req.json<Partial<Draft> & Pick<CreatePostsInput, "playbookId" | "playbookVersion" | "variant"> & { scheduledAt?: CreatePostsInput["scheduledAt"] }>();
   const draft: Draft = {
     accountId: row.account_id,
     content: body.content ?? row.content,
@@ -207,15 +243,21 @@ postRoutes.patch("/posts/:id", requirePermission("posts.write"), async (c) => {
   if (!sched) return c.json({ error: "Invalid scheduledAt" }, 400);
   const errors = await checkAll(c.env, wsId(c), [draft], sched.status === "scheduled");
   if (errors.length) return c.json({ error: errors.join("\n"), errors }, 400);
+  const pb = (await attribution(c.env, wsId(c), body, { id: row.playbook_id ?? null, version: row.playbook_version ?? null, variant: row.variant ?? null })) ?? {
+    id: row.playbook_id ?? null,
+    version: row.playbook_version ?? null,
+    variant: row.variant ?? null,
+  };
+  if ("error" in pb) return c.json({ error: pb.error }, pb.error.endsWith("not found") ? 404 : 400);
 
   // Guarded on the revision/status we read: if the workflow claimed the post meanwhile, it is publishing and must
   // not be rescheduled (that would publish it twice). Bump first, then stop the old workflow: its claim now fails.
   const revision = row.revision + 1;
   const res = await c.env.DB.prepare(
     `UPDATE posts SET content = ?, media = ?, settings = ?, thread = ?, status = ?, scheduled_at = ?, error = NULL,
-       revision = ?, workflow_id = NULL, updated_at = ? WHERE id = ? AND workspace_id = ? AND revision = ? AND status = ?`,
+       revision = ?, workflow_id = NULL, updated_at = ?, playbook_id = ?, playbook_version = ?, variant = ? WHERE id = ? AND workspace_id = ? AND revision = ? AND status = ?`,
   )
-    .bind(draft.content, JSON.stringify(draft.media), JSON.stringify(draft.settings), JSON.stringify(draft.thread), sched.status, sched.at, revision, now(), row.id, wsId(c), row.revision, row.status)
+    .bind(draft.content, JSON.stringify(draft.media), JSON.stringify(draft.settings), JSON.stringify(draft.thread), sched.status, sched.at, revision, now(), pb.id, pb.version, pb.variant, row.id, wsId(c), row.revision, row.status)
     .run();
   if (!res.meta.changes) return c.json({ error: "The post changed while saving (it may be publishing), reload and try again" }, 409);
   if (row.workflow_id) await terminateWorkflow(c.env, row.workflow_id);

@@ -10,6 +10,8 @@ export interface ComposerOptions {
   /** Start a new post from an existing one. */
   duplicate?: PostDTO;
   accountIds?: string[];
+  /** Write the post with this playbook (attribution + checklist and prompt in the side panel). */
+  playbook?: { id: string; version: number };
 }
 
 interface ComposerApi {

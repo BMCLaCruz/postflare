@@ -4,6 +4,14 @@ Changes to the `postflare` CLI ([npm](https://www.npmjs.com/package/postflare)).
 server, with tags `cli-v<version>`; the server's changes are in the [root changelog](../CHANGELOG.md). From 0.1.0 on this
 file is maintained by release-please from Conventional Commits touching `cli/`.
 
+## Unreleased
+
+### Features
+
+* `postflare playbooks [query]`, `playbooks search`, `playbooks show <id> [--prompt]` and `playbooks stats`;
+  `post --playbook <id>@<version> --variant A`, `posts edit --playbook/--no-playbook/--variant`, `posts --playbook`.
+  The bundled skill tells agents to look up a playbook before writing and to attribute posts.
+
 ## 0.1.0 (2026-10-13)
 
 First release.

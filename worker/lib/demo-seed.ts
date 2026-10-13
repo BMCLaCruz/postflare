@@ -84,6 +84,9 @@ interface PostDef {
   /** Posts with the same group are one multi-account post. */
   group?: string;
   error?: string;
+  /** Built-in playbook the post was written with (version 1), and its A/B variant. */
+  playbook?: string;
+  variant?: string;
 }
 
 const tiktok = (title?: string) => ({
@@ -101,6 +104,7 @@ const POSTS: PostDef[] = [
   // ---- Published (last 10 days)
   {
     group: "launch",
+    playbook: "launch-announcement",
     acc: "x",
     day: -9,
     at: [10, 0],
@@ -111,6 +115,7 @@ const POSTS: PostDef[] = [
   },
   {
     group: "launch",
+    playbook: "launch-announcement",
     acc: "li",
     day: -9,
     at: [10, 0],
@@ -122,6 +127,7 @@ const POSTS: PostDef[] = [
   },
   {
     group: "launch",
+    playbook: "launch-announcement",
     acc: "th",
     day: -9,
     at: [10, 0],
@@ -132,6 +138,7 @@ const POSTS: PostDef[] = [
   },
   {
     group: "launch",
+    playbook: "launch-announcement",
     acc: "bs",
     day: -9,
     at: [10, 0],
@@ -141,6 +148,7 @@ const POSTS: PostDef[] = [
   },
   {
     group: "launch",
+    playbook: "launch-announcement",
     acc: "ig",
     day: -9,
     at: [10, 0],
@@ -155,6 +163,7 @@ const POSTS: PostDef[] = [
     day: -7,
     at: [18, 30],
     status: "published",
+    playbook: "app-feature-spotlight",
     content: "POV: your plants finally stop dying 🌿 Pocket Plants tells you exactly when and how much to water. #planttok #plantcare #houseplants",
     media: ["plants"],
     settings: tiktok("Never forget to water again"),
@@ -164,6 +173,7 @@ const POSTS: PostDef[] = [
     day: -6,
     at: [9, 15],
     status: "published",
+    playbook: "text-thread",
     content: "We built and shipped Tempo 2.0 in 6 weeks with a team of 3. Here's what worked (and what didn't) 🧵",
     settings: { replySettings: "everyone" },
     thread: [
@@ -191,6 +201,7 @@ const POSTS: PostDef[] = [
     day: -4,
     at: [16, 0],
     status: "published",
+    playbook: "indie-dev-behind-the-scenes",
     content:
       "Six weeks, three people, one big update. In this devlog we walk through how we planned, designed and shipped Tempo 2.0.\n\n00:00 Intro\n01:12 Scoping the release\n04:30 Designing widgets\n09:05 Streaks without the guilt\n13:40 Launch day",
     media: ["devlog"],
@@ -212,6 +223,7 @@ const POSTS: PostDef[] = [
     day: -3,
     at: [12, 30],
     status: "published",
+    playbook: "player-feedback-showcase",
     content: "Reviews like this keep a tiny studio going 🥹 Thank you, Maya!",
     media: ["review"],
     settings: ig,
@@ -221,6 +233,7 @@ const POSTS: PostDef[] = [
     day: -2,
     at: [8, 45],
     status: "published",
+    playbook: "milestone-celebration",
     content:
       "3 people. 2 apps. 1 tiny studio.\n\nAcme Studio turns two this month. We've shipped Tempo and Pocket Plants to 120,000 people without a single ad campaign, mostly by sharing what we build, every week.\n\nHere's to year three 🥂",
     media: ["studio"],
@@ -242,6 +255,7 @@ const POSTS: PostDef[] = [
     day: -1,
     at: [19, 0],
     status: "published",
+    playbook: "app-update-notes-to-social",
     content: "Pocket Plants 1.8 is out with dark mode 🌙 Your plants won't notice, your eyes will.",
     media: ["dark"],
     settings: { lang: "en", linkCard: true, label: "none" },
@@ -252,6 +266,7 @@ const POSTS: PostDef[] = [
     day: -1,
     at: [19, 0],
     status: "published",
+    playbook: "app-update-notes-to-social",
     content: "Pocket Plants 1.8 is out with dark mode 🌙 Your plants won't notice, your eyes will.",
     media: ["dark"],
     settings: { reply_control: "everyone", topic_tag: "PlantTok" },
@@ -306,6 +321,8 @@ const POSTS: PostDef[] = [
     day: 2,
     at: [9, 0],
     status: "scheduled",
+    playbook: "short-video-hook-script",
+    variant: "A",
     content: "3 widgets that made me actually focus 📱⏱️ #productivity #studytok #focus",
     media: ["widgets"],
     settings: tiktok("Widgets that help you focus"),
@@ -315,6 +332,7 @@ const POSTS: PostDef[] = [
     day: 3,
     at: [10, 0],
     status: "scheduled",
+    playbook: "linkedin-story-post",
     content:
       "Two years of running an indie app studio, in five lessons:\n\n1. Ship small, ship weekly\n2. Your changelog is marketing\n3. Support emails are product research\n4. Say no to most feature requests\n5. Rest is part of the roadmap",
     settings: { disableReshare: false },
@@ -369,6 +387,7 @@ const POSTS: PostDef[] = [
     day: 8,
     at: [16, 0],
     status: "scheduled",
+    playbook: "poll-question",
     content: "What's one app you open every single day? Ours is (obviously) Tempo ⏱️",
     settings: { reply_control: "everyone" },
   },
@@ -412,6 +431,89 @@ const POSTS: PostDef[] = [
   },
 ];
 
+/**
+ * Older published posts (11 to 80 days ago), many written with playbooks (some as A/B variants), so the demo's
+ * analytics and playbook ranking have history. [account, playbook, variant, content, media].
+ */
+const ARCHIVE: Array<[AccountKey, string | null, string | null, string, MediaKey[]]> = [
+  ["tt", "short-video-hook-script", "A", "Your monstera is not dramatic, it's thirsty 💧 3 signs it needs water today #planttok #monstera", ["plants"]],
+  ["tt", "short-video-hook-script", "B", "Stop watering your plants every Sunday. Here's why 👇 #planttok #plantcare", ["plants"]],
+  ["tt", "app-feature-spotlight", null, "This button saved 14 of my plants 🌿 Pocket Plants photo diagnosis in 5 seconds #planttok", ["plants"]],
+  ["tt", null, null, "Plant shelf tour, autumn edition 🍂🪴 #plantshelf #houseplants", ["dark"]],
+  ["tt", "short-video-hook-script", "A", "If your pothos has yellow leaves, watch this before you repot 🪴 #pothos #planttok", ["plants"]],
+  ["tt", "short-video-hook-script", "B", "Nobody tells you this about fiddle leaf figs 😬 #fiddleleaffig #planttok", ["plants"]],
+  ["tt", null, null, "Morning routine with my 32 plants ☀️ #plantparent", ["plants"]],
+  ["tt", "app-feature-spotlight", null, "The watering reminder that adapts to the weather ☔ Pocket Plants knows it rained #plantcare", ["dark"]],
+  ["ig", "listicle-carousel", null, "5 plants that survive a dark apartment (swipe →) Save this for your next plant shop trip 🪴", ["plants", "dark"]],
+  ["ig", null, null, "Studio Friday ☕ What are you working on this weekend?", ["studio"]],
+  ["ig", "player-feedback-showcase", null, "Your reviews made our week 🥹 Thank you, Jonas, for the kind words about Tempo's widgets", ["review"]],
+  ["ig", "listicle-carousel", null, "4 focus habits we built into Tempo (swipe →) Which one do you need most?", ["widgets", "launch"]],
+  ["ig", null, null, "New wallpaper drop for Tempo users 🎨 Link in bio", ["launch"]],
+  ["ig", "app-feature-spotlight", null, "One tap, 25 minutes, zero distractions. Tempo's focus widget in action ⏱️", ["widgets"]],
+  ["x", "text-thread", "A", "We grew Tempo from 0 to 50k users without ads. Here's the playbook, step by step 🧵", []],
+  ["x", "text-thread", "B", "7 things we learned shipping 40 app updates in 2 years 🧵", []],
+  ["x", null, null, "Shipping a small fix today: widgets now refresh at midnight in every timezone 🌍", []],
+  ["x", "download-cta-without-spam", null, "Tempo is free on iPhone. If you've been meaning to try a calmer focus timer, today's a good day → https://example.com/tempo", ["launch"]],
+  ["x", "indie-dev-behind-the-scenes", null, "Spent 3 days on a bug that turned out to be one missing `await`. Indie dev life 🙃", []],
+  ["x", null, null, "Weekend reading: our favorite essays on calm software, linked below 📚", []],
+  ["x", "text-thread", "A", "How we price a subscription app as a 3-person studio (with real numbers) 🧵", []],
+  ["th", "poll-question", null, "Morning focus or late-night focus? We're settling a team debate ☕🌙", []],
+  ["th", null, null, "Little Tempo tip: long-press the timer to change the session length ⏱️", ["widgets"]],
+  ["th", "indie-dev-behind-the-scenes", null, "Our whiteboard right now: 23 sticky notes, 2 good ideas. Guess which ones 👀", ["studio"]],
+  ["th", "poll-question", null, "Be honest: how many plants have you lost this year? 🪦🌿", ["plants"]],
+  ["bs", "indie-dev-behind-the-scenes", null, "Swapped our analytics for a privacy-friendly setup this week. Here's what we gave up and why", []],
+  ["bs", null, null, "Tempo 2.0.3 is out: smoother widgets and fewer notifications 🙏", []],
+  ["bs", "text-thread", "B", "A short thread on designing streaks that don't make people feel guilty 🧵", []],
+  ["li", "linkedin-story-post", null, "Two years ago we almost shut down Acme Studio.\n\nRevenue was flat, we were tired, and the roadmap was a wish list.\n\nWhat changed: we stopped building for everyone and listened to 40 support emails a week.", []],
+  ["li", null, null, "We're hiring a part-time iOS contractor for Tempo 2.2. Remote, async, calm. Details in the comments.", ["studio"]],
+  ["li", "linkedin-story-post", null, "The best feature we ever shipped came from a one-line support email.\n\n“Can the timer just… not ring?”\n\nSilent mode is now used in 60% of Tempo sessions.", []],
+  ["li", "milestone-celebration", null, "Pocket Plants just passed 50,000 downloads 🌿\n\nNo ads, no growth hacks: just plant people telling plant people. Thank you.", ["plants"]],
+  ["yt", "indie-dev-behind-the-scenes", null, "Devlog #10: designing the Pocket Plants watering algorithm, and why weather data made it 3x better.", ["devlog"]],
+  ["yt", null, null, "Tempo in 60 seconds: a quick tour of the timer, presets and widgets.", ["devlog"]],
+  ["yt", "indie-dev-behind-the-scenes", null, "Devlog #11: we rewrote our widgets in a weekend (and what broke on Monday).", ["devlog"]],
+  ["pin", "listicle-carousel", null, "7 low-light houseplants for small apartments 🪴 Save for later", ["plants"]],
+  ["pin", null, null, "Minimal focus desk setup ideas ✨", ["widgets"]],
+  ["tt", null, null, "Repotting day 🪴 Before and after of my calathea rescue #plantcare", ["plants"]],
+  ["tt", null, null, "Answering your plant questions: why are my leaves curling? 🌿", ["dark"]],
+  ["tt", "short-video-hook-script", "B", "Your snake plant can survive this. You can't 😅 #snakeplant #planttok", ["plants"]],
+  ["tt", "app-feature-spotlight", null, "Scan a leaf, get a diagnosis. That's it. That's the feature 🔍🌿 #plantcare", ["plants"]],
+  ["tt", "short-video-hook-script", "A", "3 watering mistakes I made for 5 years 💧 #plantparent #planttok", ["plants"]],
+  ["ig", null, null, "A calm desk for a calm mind ✨ Tempo on the home screen, coffee on the left", ["widgets"]],
+  ["ig", null, null, "Behind our app icons: 40 sketches, 1 winner 🎨", ["studio"]],
+  ["ig", "listicle-carousel", null, "6 tiny habits for a focused morning (swipe →) Save it for Monday", ["widgets", "launch"]],
+  ["ig", "player-feedback-showcase", null, "Fan art Friday 🖍️ Thank you, Lena, for drawing our little timer mascot", ["review"]],
+  ["ig", "app-feature-spotlight", null, "Your streak, right on your lock screen 🔥 Tempo's new widget", ["widgets"]],
+  ["x", null, null, "Small update: Tempo now remembers your last session length ⏱️", []],
+  ["x", null, null, "What we're reading this week: three essays on calm technology 📚", []],
+  ["x", "text-thread", "B", "We tried 5 onboarding flows for Pocket Plants. Here's the one that doubled day-7 retention 🧵", []],
+  ["x", "text-thread", "A", "The 4 App Store screenshots that doubled our conversion rate (with before/afters) 🧵", []],
+  ["x", "indie-dev-behind-the-scenes", null, "Today's commit message: “fix the fix that fixed the widget fix”. Send help 🙃", []],
+  ["th", null, null, "Coffee, plants, SwiftUI. A typical Tuesday at the studio ☕🪴", ["studio"]],
+  ["th", "text-thread", "A", "How we answer 200 support emails a week as a team of 3 🧵", []],
+  ["th", "indie-dev-behind-the-scenes", null, "We almost shipped this bug to 50k people. Here's how TestFlight caught it 🐛", []],
+  ["bs", null, null, "Pocket Plants now supports 1,200 plant species 🌱", []],
+  ["bs", "indie-dev-behind-the-scenes", null, "Our entire analytics stack costs $0 a month. Here's what's in it", []],
+  ["li", null, null, "We're giving a talk on calm software at IndieConf next month. Come say hi 👋", ["studio"]],
+  ["li", "linkedin-story-post", null, "Our worst launch taught us more than our best one.\n\nZero downloads on day one. Here's what we changed for the next launch.", []],
+  ["yt", null, null, "Pocket Plants tutorial: setting up your first plant in 2 minutes.", ["devlog"]],
+  ["yt", "indie-dev-behind-the-scenes", null, "Devlog #9: the month we deleted half our code.", ["devlog"]],
+];
+
+/** Archive posts as PostDefs: spread over days -12 to -80, alternating morning and evening slots. */
+function archiveDefs(): PostDef[] {
+  return ARCHIVE.map(([acc, playbook, variant, content, media], i) => ({
+    acc,
+    day: -12 - Math.round((i * 68) / ARCHIVE.length),
+    at: [i % 2 ? 18 : 9, (i * 17) % 60] as [number, number],
+    status: "published" as const,
+    content,
+    media,
+    settings: acc === "tt" ? tiktok() : acc === "ig" ? ig : acc === "x" ? { replySettings: "everyone" } : acc === "yt" ? { title: content.slice(0, 90), privacy: "public", category: "28" } : {},
+    ...(playbook ? { playbook } : {}),
+    ...(variant ? { variant } : {}),
+  }));
+}
+
 export interface SeedPost {
   id: string;
   group_id: string;
@@ -429,6 +531,9 @@ export interface SeedPost {
   created_at: number;
   updated_at: number;
   published_at: number | null;
+  playbook_id: string | null;
+  playbook_version: number | null;
+  variant: string | null;
 }
 
 /** [post id, level, message, created_at] */
@@ -478,7 +583,7 @@ export function seedPosts(t0: number, tz: string, newId: (prefix: string) => str
   // "Later today": a round half hour a few hours from now.
   const later = (h: number) => Math.ceil((t0 + h * HOUR) / (30 * 60 * 1000)) * 30 * 60 * 1000;
 
-  POSTS.forEach((d, i) => {
+  [...POSTS, ...archiveDefs()].forEach((d, i) => {
     const account = DEMO_ACCOUNTS[d.acc];
     const id = newId("pst_");
     const groupId = d.group ? (groups.get(d.group) ?? groups.set(d.group, newId("grp_")).get(d.group)!) : newId("grp_");
@@ -530,6 +635,9 @@ export function seedPosts(t0: number, tz: string, newId: (prefix: string) => str
       created_at: created,
       updated_at: updated,
       published_at: published,
+      playbook_id: d.playbook ?? null,
+      playbook_version: d.playbook ? 1 : null,
+      variant: d.variant ?? null,
     });
   });
   return { posts, logs };

@@ -316,7 +316,7 @@ describe("permissions", () => {
     expect((await call(vera, "/api/providers")).status).toBe(200);
     expect((await call(vera, "/api/settings")).status).toBe(200);
     expect((await call(vera, "/api/roles")).status).toBe(200);
-    expect((await call(vera, "/api/permissions")).json.length).toBe(15);
+    expect((await call(vera, "/api/permissions")).json.length).toBe(16);
   });
 
   it("Editor writes posts and manages own keys only", async () => {

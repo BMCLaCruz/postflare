@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 /** Data tags used to refetch every hook that depends on something after a mutation. */
-export type Tag = "posts" | "accounts" | "media" | "providers" | "settings" | "keys" | "roles" | "workspaces" | "members" | "invitations" | "users" | "analytics" | "updates";
+export type Tag = "posts" | "accounts" | "media" | "providers" | "settings" | "keys" | "roles" | "workspaces" | "members" | "invitations" | "users" | "analytics" | "updates" | "playbooks";
 
 const bus = new EventTarget();
 

@@ -120,6 +120,8 @@ export async function deleteWorkspace(env: Env, workspaceId: string): Promise<vo
     db.prepare("DELETE FROM post_metrics WHERE workspace_id = ?").bind(workspaceId),
     db.prepare("DELETE FROM account_metrics WHERE workspace_id = ?").bind(workspaceId),
     db.prepare("DELETE FROM posts WHERE workspace_id = ?").bind(workspaceId),
+    db.prepare("DELETE FROM playbook_versions WHERE workspace_id = ?").bind(workspaceId),
+    db.prepare("DELETE FROM playbooks WHERE workspace_id = ?").bind(workspaceId),
     db.prepare("DELETE FROM accounts WHERE workspace_id = ?").bind(workspaceId),
     db.prepare("DELETE FROM media WHERE workspace_id = ?").bind(workspaceId),
     db.prepare("DELETE FROM upload_links WHERE workspace_id = ?").bind(workspaceId),

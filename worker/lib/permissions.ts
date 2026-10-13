@@ -81,6 +81,13 @@ export const PERMISSIONS: ReadonlyArray<PermissionInfo & { action: string }> = [
     action: "upload or change media",
   },
   {
+    key: "playbooks.manage",
+    scope: "workspace",
+    label: "Manage playbooks",
+    description: "Create, edit, duplicate and archive the workspace's own playbooks (everyone who can view posts can read them).",
+    action: "manage playbooks",
+  },
+  {
     key: "apikeys.manage",
     scope: "workspace",
     label: "Manage own API keys",
@@ -112,7 +119,7 @@ export const ROLE = {
   viewer: "role_ws_viewer",
 } as const;
 
-/** Mirrors the seed rows of migrations/0003 plus 0007 (a test checks they match). */
+/** Mirrors the seed rows of migrations/0003 plus 0007 and 0008 (a test checks they match). */
 export const BUILTIN_ROLES: Record<string, { scope: "instance" | "workspace"; name: string; permissions: PermissionKey[] }> = {
   [ROLE.instanceAdmin]: { scope: "instance", name: "Admin", permissions: [...INSTANCE_PERMISSIONS] },
   [ROLE.instanceMember]: { scope: "instance", name: "Member", permissions: ["instance.workspaces.create"] },
@@ -121,7 +128,7 @@ export const BUILTIN_ROLES: Record<string, { scope: "instance" | "workspace"; na
   [ROLE.editor]: {
     scope: "workspace",
     name: "Editor",
-    permissions: ["accounts.read", "accounts.manage", "posts.read", "posts.write", "media.read", "media.write", "apikeys.manage"],
+    permissions: ["accounts.read", "accounts.manage", "posts.read", "posts.write", "media.read", "media.write", "playbooks.manage", "apikeys.manage"],
   },
   [ROLE.viewer]: { scope: "workspace", name: "Viewer", permissions: ["accounts.read", "posts.read", "media.read"] },
 };

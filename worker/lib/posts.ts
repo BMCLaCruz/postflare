@@ -28,6 +28,9 @@ export interface PostRow {
   metrics_next_at?: number | null;
   metrics_fails?: number;
   publish_lock?: string | null;
+  playbook_id?: string | null;
+  playbook_version?: number | null;
+  variant?: string | null;
 }
 
 export function postDto(row: PostRow): PostDTO {
@@ -48,6 +51,9 @@ export function postDto(row: PostRow): PostDTO {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     publishedAt: row.published_at,
+    playbookId: row.playbook_id ?? null,
+    playbookVersion: row.playbook_version ?? null,
+    variant: row.variant ?? null,
   };
 }
 

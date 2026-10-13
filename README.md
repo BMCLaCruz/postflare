@@ -50,6 +50,10 @@ workspace with sample data that never publishes anything, reset daily).
   (`POST /api/posts/:id/resolve`, `pf posts resolve`).
 - **Analytics**: views, reach, likes, comments, shares... of published posts and daily follower counts, collected by the
   cron within the Free plan budget (see [Analytics](#analytics)).
+- **Playbooks**: 20 built-in, versioned recipes for posts that perform (launches, threads, short-video hooks, app
+  feature spotlights, game clips...), plus your workspace's own. AI agents find them over MCP and the CLI, posts record
+  the playbook they were written with, and a ranking shows which ones beat each account's usual (see
+  [Playbooks](#playbooks)).
 - **Users, workspaces and roles**: several people on one deployment, each workspace with its own accounts, posts and
   media; built-in and custom permission-based roles, invite links (see [below](#users-workspaces-and-roles)).
 - REST API with per-workspace API keys and a built-in **MCP server** (`/mcp`) so AI agents can schedule posts and read
@@ -319,6 +323,35 @@ for local development). Then:
 - The cron resets the demo workspace once a day. With `DEMO_MODE` off, every demo endpoint returns 404, nothing is
   seeded and existing demo sessions stop working.
 
+## Playbooks
+
+A playbook is a reusable recipe for a kind of post: when to use it, a step-by-step structure, platform notes (limits,
+hashtags, where links go), hook formulas, examples, what to avoid and a checklist. Postflare runs no LLM: your agent (or
+you) writes the post by following the playbook, and Postflare measures how it performs.
+
+- **Built-in library**: 20 Markdown files in [`playbooks/`](playbooks/) bundled into the Worker, including mobile app
+  and game marketing (app feature spotlight, game clip hook, store update notes, download CTA without the spam,
+  behind-the-scenes, player feedback, milestones) and general ones (launch, build in public, problem → solution,
+  listicle/carousel, thread, contrarian take, how-to, poll, before/after, customer story, short-video script, LinkedIn
+  story, announcement with link). Built-ins are read-only; **Duplicate & edit** copies one into the workspace.
+- **Custom playbooks** per workspace (permission `playbooks.manage`, given to Owner, Admin and Editor): every edit saves
+  a new, immutable version, so posts keep pointing at the version they were written with. Archiving keeps attribution.
+- **Attribution**: posts store `playbookId`, `playbookVersion` and an optional A/B `variant` (composer *Playbook* field,
+  `POST /api/posts`, MCP `create_post`, `pf post --playbook <id>@<version> --variant A`). Filter the posts list by
+  playbook.
+- **Agent prompt**: `GET /api/playbooks/:id` returns the recipe plus the workspace's target accounts with their limits
+  and the attribution to use (*Copy agent prompt* in the app, `pf playbooks show <id> --prompt`, MCP `get_playbook`).
+- **Ranking** (Playbooks → Ranking, and in Analytics; `GET /api/playbooks/stats?days=90&platform=&accountId=`): for
+  each playbook, version and variant: posts, accounts, median and mean engagement rate, median views and **lift vs the
+  account's usual** = median over its posts of (engagement rate ÷ the same account's median for posts without a
+  playbook, or all its posts when it has fewer than 3) − 1. Platforms without views/impressions use engagements.
+  Confidence: *insufficient* < 5 posts, *low* 5–19, *ok* ≥ 20. It is a correlation, not an experiment: topics, timing
+  and media differ. One D1 query over at most the 2,000 most recent posts of the range.
+
+API: `GET /api/playbooks?q=&platform=&goal=&format=`, `GET /api/playbooks/:id[?version=]`, `POST /api/playbooks`,
+`PATCH|DELETE /api/playbooks/:id`, `POST /api/playbooks/:id/duplicate`, `GET /api/playbooks/stats`. Writing a built-in:
+see [CONTRIBUTING](CONTRIBUTING.md#writing-a-playbook).
+
 ## API & MCP
 
 Create an API key in **Profile**. A key belongs to one workspace and acts with your permissions there. The Profile page
@@ -339,20 +372,25 @@ claude mcp add --transport http postflare https://<your-app>/mcp --header "Autho
 
 MCP tools: `list_platforms`, `list_accounts` (with followers and analytics status), `get_account_options`, media
 (`upload_media_from_url`, `create_upload_link`, `get_upload_link`, `list_media`), posts (`create_post`, `list_posts`,
-`get_post`, `update_post`, `cancel_post`, `retry_post`, `delete_post`) and analytics (`get_analytics_summary`,
-`get_top_posts`, `get_post_metrics`, `refresh_metrics`; ranges as ISO dates or `"7d"`/`"30d"`).
+`get_post`, `update_post`, `cancel_post`, `retry_post`, `delete_post`; `create_post` takes `playbookId`,
+`playbookVersion` and `variant`), playbooks (`search_playbooks`, `get_playbook`, `get_playbook_stats`) and analytics
+(`get_analytics_summary`, `get_top_posts`, `get_post_metrics`, `refresh_metrics`; ranges as ISO dates or
+`"7d"`/`"30d"`). The server's instructions tell agents to look up a playbook before writing and to attribute the post.
 
 ### CLI
 
 [`cli/`](cli/README.md) is a zero-dependency Node.js (20+) command line client: `postflare login`, `accounts`,
 `platforms`, `media upload` (streamed, multipart for big files), `post` (natural dates, per-platform settings, threads,
-dry runs), `posts show|edit|cancel|retry|rm`, `analytics`, `upload-link`, with `--json` on every command.
+dry runs, `--playbook <id>@<version>`), `posts show|edit|cancel|retry|rm`, `playbooks [search|show|stats]`, `analytics`,
+`upload-link`, with `--json` on every command.
 
 ```bash
 npm i -g postflare                       # or from a clone: npm run cli:build && npm i -g ./cli
 pf login --url https://<your-app>        # asks for an API key; in CI set POSTFLARE_URL + POSTFLARE_API_KEY instead
 pf post -a bluesky -a x --text "Hello" -m ./clip.mp4 --at "tomorrow 9:00"
 pf posts --upcoming
+pf playbooks search launch --platform x && pf playbooks show launch-announcement --prompt
+pf playbooks stats
 pf analytics --range 7d
 ```
 

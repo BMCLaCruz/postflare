@@ -22,6 +22,8 @@ import { DashboardPage } from "./pages/DashboardPage";
 import { InvitePage } from "./pages/InvitePage";
 import { MediaPage } from "./pages/MediaPage";
 import { PlatformsPage } from "./pages/PlatformsPage";
+import { PlaybookPage } from "./pages/PlaybookPage";
+import { PlaybooksPage } from "./pages/PlaybooksPage";
 import { PostsPage } from "./pages/PostsPage";
 import { ProfilePage } from "./pages/ProfilePage";
 import { InstanceSettingsPage } from "./pages/SettingsPage";
@@ -130,6 +132,8 @@ function WorkspaceScope() {
               <Route path="calendar" element={<Gate permission="posts.read">{<CalendarPage />}</Gate>} />
               <Route path="posts" element={<Gate permission="posts.read">{<PostsPage />}</Gate>} />
               <Route path="analytics" element={<Gate permission="posts.read">{<AnalyticsPage />}</Gate>} />
+              <Route path="playbooks" element={<Gate permission="posts.read">{<PlaybooksPage />}</Gate>} />
+              <Route path="playbooks/:id" element={<Gate permission="posts.read">{<PlaybookPage />}</Gate>} />
               <Route path="accounts" element={<Gate permission="accounts.read">{<AccountsPage />}</Gate>} />
               <Route path="media" element={<Gate permission="media.read">{<MediaPage />}</Gate>} />
               <Route path="workspace" element={<Gate>{<WorkspaceSettingsPage />}</Gate>} />

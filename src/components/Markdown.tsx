@@ -1,15 +1,16 @@
 import { Fragment, type ReactNode } from "react";
 
 /**
- * Tiny, safe markdown renderer (no HTML passthrough): headings, paragraphs, ordered/unordered lists,
- * fenced code, inline code, bold, italic and http(s)/mailto links.
+ * Tiny, safe markdown renderer (no HTML passthrough): headings, paragraphs, ordered/unordered lists, task items
+ * (`- [ ]`), blockquotes, fenced code, inline code, bold, italic and http(s)/mailto links.
+ * `doc`: long documents (playbooks): bigger section headings, wrapped code blocks.
  */
-export function Markdown({ source, vars = {} }: { source: string; vars?: Record<string, string> }) {
+export function Markdown({ source, vars = {}, doc = false }: { source: string; vars?: Record<string, string>; doc?: boolean }) {
   const text = source.replace(/\{\{\s*(\w+)\s*\}\}/g, (m, k: string) => vars[k] ?? m);
-  return <div className="space-y-3 text-sm leading-relaxed text-zinc-700 dark:text-zinc-300">{blocks(text)}</div>;
+  return <div className="space-y-3 text-sm leading-relaxed text-zinc-700 dark:text-zinc-300">{blocks(text, doc)}</div>;
 }
 
-function blocks(text: string): ReactNode[] {
+function blocks(text: string, doc = false): ReactNode[] {
   const lines = text.replace(/\r\n/g, "\n").split("\n");
   const out: ReactNode[] = [];
   let i = 0;
@@ -27,7 +28,7 @@ function blocks(text: string): ReactNode[] {
       while (i < lines.length && !/^\s*```/.test(lines[i])) code.push(lines[i++]);
       i++;
       out.push(
-        <pre key={key++} className="overflow-x-auto rounded-lg bg-zinc-100 p-3 font-mono text-xs dark:bg-zinc-900">
+        <pre key={key++} className={`rounded-lg bg-zinc-100 p-3 font-mono text-xs dark:bg-zinc-900 ${doc ? "whitespace-pre-wrap break-words" : "overflow-x-auto"}`}>
           <code>{code.join("\n")}</code>
         </pre>,
       );
@@ -37,7 +38,9 @@ function blocks(text: string): ReactNode[] {
     if (h) {
       const level = h[1].length;
       const cls =
-        level === 1
+        doc && level === 2
+          ? "!mt-7 border-t border-zinc-100 pt-5 text-base font-semibold text-zinc-900 first:!mt-0 first:border-0 first:pt-0 dark:border-zinc-800 dark:text-zinc-100"
+          : level === 1
           ? "text-base font-semibold text-zinc-900 dark:text-zinc-100"
           : level === 2
             ? "text-sm font-semibold text-zinc-900 dark:text-zinc-100"
@@ -48,6 +51,16 @@ function blocks(text: string): ReactNode[] {
         </p>,
       );
       i++;
+      continue;
+    }
+    if (/^\s*>/.test(line)) {
+      const quote: string[] = [];
+      while (i < lines.length && /^\s*>/.test(lines[i])) quote.push(lines[i++].replace(/^\s*>\s?/, ""));
+      out.push(
+        <blockquote key={key++} className="border-l-2 border-zinc-300 pl-3 text-zinc-600 dark:border-zinc-700 dark:text-zinc-400">
+          {inline(quote.join(" "))}
+        </blockquote>,
+      );
       continue;
     }
     const listRe = /^\s*([-*+]|\d+[.)])\s+(.*)$/;
@@ -61,6 +74,19 @@ function blocks(text: string): ReactNode[] {
         i++;
       }
       const Tag = ordered ? "ol" : "ul";
+      if (!ordered && items.every((it) => /^\[[ xX]\]\s/.test(it))) {
+        out.push(
+          <ul key={key++} className="space-y-1.5">
+            {items.map((it, j) => (
+              <li key={j} className="flex gap-2">
+                <span aria-hidden className="mt-[3px] size-3.5 shrink-0 rounded border border-zinc-300 dark:border-zinc-600" />
+                <span>{inline(it.slice(4))}</span>
+              </li>
+            ))}
+          </ul>,
+        );
+        continue;
+      }
       out.push(
         <Tag key={key++} className={`${ordered ? "list-decimal" : "list-disc"} space-y-1 pl-5 marker:text-zinc-400`}>
           {items.map((it, j) => (
@@ -71,7 +97,7 @@ function blocks(text: string): ReactNode[] {
       continue;
     }
     const para: string[] = [];
-    while (i < lines.length && lines[i].trim() && !listRe.test(lines[i]) && !/^(#{1,4})\s/.test(lines[i]) && !/^\s*```/.test(lines[i]))
+    while (i < lines.length && lines[i].trim() && !listRe.test(lines[i]) && !/^(#{1,4})\s/.test(lines[i]) && !/^\s*```/.test(lines[i]) && !/^\s*>/.test(lines[i]))
       para.push(lines[i++].trim());
     out.push(<p key={key++}>{inline(para.join(" "))}</p>);
   }

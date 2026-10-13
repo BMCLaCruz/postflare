@@ -23,10 +23,18 @@ describe("0003_users_workspaces", () => {
     for (const s of stmts) expect(s.includes(";\n"), s.slice(0, 60)).toBe(false);
   });
 
-  it("seeds the built-in roles exactly as worker/lib/permissions.ts defines them (with 0007's additions)", () => {
-    // 0007 grants instance.overview.view to the built-in instance Admin.
-    const later: Record<string, string[]> = { role_instance_admin: ["instance.overview.view"] };
+  it("seeds the built-in roles exactly as worker/lib/permissions.ts defines them (with 0007's and 0008's additions)", () => {
+    // 0007 grants instance.overview.view to the built-in instance Admin, 0008 playbooks.manage to Owner, Admin and Editor.
+    const later: Record<string, string[]> = {
+      role_instance_admin: ["instance.overview.view"],
+      role_ws_owner: ["playbooks.manage"],
+      role_ws_admin: ["playbooks.manage"],
+      role_ws_editor: ["playbooks.manage"],
+    };
     expect(readFileSync("migrations/0007_usage_events.sql", "utf8")).toMatch(/json_insert\(permissions, '\$\[#\]', 'instance\.overview\.view'\)\s+WHERE id = 'role_instance_admin'/);
+    expect(readFileSync("migrations/0008_playbooks.sql", "utf8")).toMatch(
+      /json_insert\(permissions, '\$\[#\]', 'playbooks\.manage'\)\s+WHERE id IN \('role_ws_owner', 'role_ws_admin', 'role_ws_editor'\)/,
+    );
     const insert = stmts.find((s) => s.startsWith("INSERT OR IGNORE INTO roles"))!;
     const rows = [...insert.matchAll(/\('(role_[a-z_]+)', '(instance|workspace)', '([^']+)', '[^']*', '(\[[^\]]*\])', 1, 0\)/g)];
     expect(rows.length).toBe(Object.keys(BUILTIN_ROLES).length);

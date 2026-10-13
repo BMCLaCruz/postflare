@@ -44,6 +44,43 @@ In short:
 3. `publish`, `checkStatus` and `reply` run as retried Workflow steps: they must be safe to retry and never double-post.
 4. Add `test/providers/<id>.test.ts` with mocked API responses (see `test/helpers.ts`).
 
+## Writing a playbook
+
+Built-in playbooks are Markdown files in [`playbooks/`](playbooks/), bundled into the Worker at build time
+(`worker/lib/playbooks.ts`) and validated by `test/playbooks.test.ts`. One file per playbook, named `<id>.md`:
+
+```markdown
+---
+id: app-feature-spotlight            # kebab-case, unique, equals the file name, never renamed
+version: 1                           # bump when the advice changes meaningfully (posts record the version they used)
+name: App feature spotlight          # ≤ 60 characters
+summary: One sentence, ≤ 160 characters.
+goal: conversions                    # engagement | reach | clicks | followers | conversions
+platforms: [short-video, x, threads] # provider ids or groups: short-video, microblog, professional, visual, all
+formats: [video, image, carousel]    # text, thread, image, carousel, video
+tags: [mobile-app, feature]          # lowercase
+inputs: [app name, the one feature, store link]  # what the writer must know first (no commas inside an item)
+---
+```
+
+(The frontmatter is a strict subset of YAML: one `key: value` per line, inline `[a, b]` lists, no comments in real
+files.) The body has exactly these `## ` sections, in this order: **When to use**, **Structure**, **Platform notes**,
+**Hooks**, **Examples**, **Avoid**, **Checklist** (`- [ ] ...` items). Use `###` inside sections, plain Markdown only (no
+tables or HTML).
+
+Quality bar: be concrete and specific, not generic marketing advice.
+- Structure as numbered steps with real constraints ("line 1: the hook, ≤ 70 characters").
+- Platform notes with real numbers: X 280 (a URL counts as 23; links in the main post cut reach and cost more through
+  the API, so put them in the first reply), Bluesky 300, Threads 500, LinkedIn's ~210-character fold, Instagram's
+  ~125-character fold and no clickable links, TikTok's first two seconds... Mention Postflare follow-ups (thread replies
+  / first comment) for links where they help.
+- 2–4 hook formulas with `{placeholders}` and why each works; 1–3 complete, realistic examples that obey the playbook's
+  own rules (with character counts for short posts).
+- An *Avoid* list of what platforms penalise or audiences hate (engagement bait, hashtag stuffing, misleading hooks).
+- Never present invented statistics as facts.
+
+Run `npx vitest run test/playbooks.test.ts` to check the file. Changing a playbook's advice: bump `version`.
+
 ## Database changes
 
 Add a new `migrations/000N_*.sql` file; never edit an existing migration. Migrations are applied automatically on the

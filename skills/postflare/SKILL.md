@@ -1,6 +1,6 @@
 ---
 name: postflare
-description: Schedule and publish social media posts (Instagram, TikTok, X, Bluesky, Threads, YouTube, LinkedIn, Facebook, Pinterest, Reddit, Mastodon and more) and read post analytics with the `postflare` CLI for a self-hosted Postflare instance. Use when the user wants to post, schedule, cross-post, draft, reschedule or cancel social posts, upload media for them, check why a post failed, or report on post/account performance (views, engagement, followers, top posts) in Postflare.
+description: Write, schedule and publish social media posts (Instagram, TikTok, X, Bluesky, Threads, YouTube, LinkedIn, Facebook, Pinterest, Reddit, Mastodon and more) following Postflare playbooks, and read post analytics with the `postflare` CLI for a self-hosted Postflare instance. Use when the user wants to write, post, schedule, cross-post, draft, reschedule or cancel social posts, upload media for them, check why a post failed, find which post formats work best, or report on post/account performance (views, engagement, followers, top posts) in Postflare.
 ---
 
 # Postflare CLI
@@ -31,7 +31,25 @@ Accounts with STATUS `reconnect` or `disabled` cannot publish: tell the user to 
 Write text per platform limits (X 280 unless the account has Premium, Bluesky 300, Threads 500, Instagram/TikTok
 2200 with ≤30 hashtags on Instagram). If texts must differ per platform, create one post per platform.
 
-## 3. Media
+## 3. Pick a playbook before writing
+
+Playbooks are tested recipes for a kind of post (launch, thread, short-video hook, app feature spotlight, game clip,
+LinkedIn story...): structure, per-platform limits, hook formulas, examples, what to avoid and a checklist. Always look
+one up before writing, follow it, and attribute the post to it so Postflare can measure what works.
+
+```bash
+postflare playbooks stats --json                              # what has worked best in this workspace (lift, confidence)
+postflare playbooks search launch --platform x --goal clicks  # or: postflare playbooks --platform tiktok
+postflare playbooks show <id> --prompt [-a <account>]         # the recipe + target accounts and limits: follow it
+```
+- Prefer playbooks with a positive lift and confidence `low`/`ok` in `playbooks stats`; `insufficient` means too few
+  posts to tell. Lift is correlational (topics and timing differ), say so when you report it.
+- Ask the user for the playbook's inputs you don't know (product, audience, link...). Never invent numbers, reviews or
+  quotes. Run its checklist before creating the post.
+- Then pass `--playbook <id>@<version>` to `postflare post` (the prompt shows the exact value). When writing two
+  versions to compare, create them as separate posts with `--variant A` and `--variant B`.
+
+## 4. Media
 
 ```bash
 postflare media upload clip.mp4 cover.jpg --alt "What the image shows" --json   # → ids med_...
@@ -40,11 +58,12 @@ postflare upload-link --note "Photos for Friday" --wait   # user uploads from a 
 ```
 `post --media` also accepts local paths directly (uploaded first). Files >90MB use multipart automatically.
 
-## 4. Create the post
+## 5. Create the post
 
 ```bash
 postflare post -a <account> [-a <account>...] --text "..." [-m <id|path>...] \
-  (--at "<when>" | --now | --draft) [--set key=value | --set <platform>.key=value ...] [--thread "..."...] [--dry-run]
+  (--at "<when>" | --now | --draft) [--set key=value | --set <platform>.key=value ...] [--thread "..."...] \
+  [--playbook <id>@<version> [--variant A]] [--dry-run]
 ```
 - `-a`: account id (safest), `@username`, platform id (if only one account there), or `platform:@username`.
 - `--at`: user's local time: `"2026-10-14 09:00"`, `"tomorrow 9:00"`, `"fri 18:00"`, `"in 2h"`, or ISO with offset.
@@ -52,8 +71,9 @@ postflare post -a <account> [-a <account>...] --text "..." [-m <id|path>...] \
 - Long or multi-line text: write it to a file and use `--text-file caption.txt` (avoids shell quoting issues).
 - Run with `--dry-run` first when unsure; it validates against every platform's rules.
 - Missing required settings are reported with the exact `--set` to add.
+- Always pass `--playbook` when you followed one (`posts edit <id> --playbook <id>@<v>` fixes a forgotten one).
 
-## 5. Verify
+## 6. Verify
 
 ```bash
 postflare posts show <id>        # status, schedule, publishing log, error, URL, metrics
@@ -92,10 +112,11 @@ Each part must fit the smallest limit (Bluesky 300).
 ```bash
 postflare analytics --range 7d --json        # totals vs previous 7 days, byProvider, byAccount, followers
 postflare analytics top --range 7d --sort engagementRate --limit 5 --json
+postflare playbooks stats --days 30 --json   # which playbooks (and A/B variants) beat each account's usual
 postflare accounts --json                    # analytics status per account
 ```
 Report: posts published, views/impressions, engagements, engagement rate (and change vs the previous period), follower
-change, best/worst posts with links, and what to repeat. Metrics are collected ~1h, 24h, 3d, 7d, 30d after publishing,
+change, best/worst posts with links, which playbooks worked, and what to repeat. Metrics are collected ~1h, 24h, 3d, 7d, 30d after publishing,
 so the newest posts are incomplete; `postflare analytics refresh --post <id>` collects one now.
 
 ## Pitfalls

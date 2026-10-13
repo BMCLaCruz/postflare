@@ -9,6 +9,16 @@ is maintained by [release-please](https://github.com/googleapis/release-please) 
 
 ### Features
 
+* **Playbooks**: reusable, versioned recipes for writing posts that perform. 20 built-ins (mobile app and game
+  marketing, launches, threads, short-video hooks, LinkedIn stories, polls...) in `playbooks/`, bundled into the Worker;
+  custom workspace playbooks with immutable versions (new permission `playbooks.manage` for Owner, Admin and Editor;
+  migration 0008). Posts record `playbookId`, `playbookVersion` and an A/B `variant`. Playbooks page (library, detail
+  with *Copy agent prompt*, *Use in composer*, *Duplicate & edit*, ranking), a *Playbook* field with its checklist in
+  the composer, playbook filter on the posts list and a ranking section in Analytics. API `GET/POST /api/playbooks`,
+  `GET/PATCH/DELETE /api/playbooks/:id`, `POST /api/playbooks/:id/duplicate`, `GET /api/playbooks/stats` (lift vs each
+  account's baseline, confidence, variants; one D1 query). MCP tools `search_playbooks`, `get_playbook`,
+  `get_playbook_stats`; `create_post` / `update_post` take the attribution. The demo workspace has attributed posts.
+
 * **Needs check** post status: when the request that creates a post fails ambiguously (network error, timeout, 5xx
   after sending), the post is no longer retried automatically (that could publish it twice). It goes to `needs_check`
   with "We couldn't confirm whether <platform> accepted the post"; resolve it in the post drawer (Mark as published,

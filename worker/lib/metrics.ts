@@ -165,10 +165,12 @@ interface DuePost {
   content: string;
   provider: string;
   is_demo: number;
+  /** Demo metrics only (lib/demo-metrics.ts makes playbook posts perform differently). */
+  playbook_id: string | null;
 }
 
 const DUE_POST_COLUMNS =
-  "p.id, p.workspace_id, p.account_id, p.external_id, p.external_data, p.published_at, p.metrics_fails, p.content, a.provider, COALESCE(w.is_demo, 0) AS is_demo";
+  "p.id, p.workspace_id, p.account_id, p.external_id, p.external_data, p.published_at, p.metrics_fails, p.content, a.provider, COALESCE(w.is_demo, 0) AS is_demo, p.playbook_id";
 
 /** Statements that store one post's metrics and plan its next collection. */
 function savePostStatements(db: D1Database, post: Pick<DuePost, "id" | "workspace_id" | "published_at">, values: MetricValues, t: number) {

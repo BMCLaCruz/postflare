@@ -1,10 +1,12 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
-import { AlertCircle, AlertTriangle, Ban, CheckCircle2, Copy, ExternalLink, Pencil, RotateCcw, Trash2 } from "lucide-react";
+import { AlertCircle, AlertTriangle, Ban, BookOpenText, CheckCircle2, Copy, ExternalLink, Pencil, RotateCcw, Trash2 } from "lucide-react";
+import { Link } from "react-router";
 import { api } from "../../lib/api";
 import { useApp } from "../../lib/app";
 import { cn } from "../../lib/format";
 import { useMediaLookup } from "../../lib/mediaCache";
 import { useSession } from "../../lib/session";
+import { playbookLabel, usePlaybookList } from "../../lib/playbooks";
 import { formatDateTime } from "../../lib/time";
 import type { PostDTO, PostWithLogs } from "../../lib/types";
 import { invalidate, useFetch } from "../../lib/useFetch";
@@ -156,6 +158,21 @@ function PostDrawer({ ids, onClose }: { ids: string[]; onClose: () => void }) {
   );
 }
 
+/** "Written with <playbook> v1 · variant A", linking to the playbook. */
+function PlaybookLine({ post }: { post: PostDTO }) {
+  const list = usePlaybookList();
+  return (
+    <div className="flex items-center gap-2 rounded-lg bg-zinc-50 px-3 py-2 text-sm ring-1 ring-zinc-200 dark:bg-zinc-800/40 dark:ring-zinc-800">
+      <BookOpenText className="size-4 shrink-0 text-zinc-400" aria-hidden />
+      <span className="text-zinc-500">Written with</span>
+      <Link to={`/playbooks/${encodeURIComponent(post.playbookId!)}`} className="truncate font-medium text-brand-600 hover:underline dark:text-brand-400">
+        {playbookLabel(list.data, post.playbookId!, post.playbookVersion)}
+      </Link>
+      {post.variant && <span className="shrink-0 rounded bg-zinc-200 px-1.5 text-xs font-medium text-zinc-700 dark:bg-zinc-700 dark:text-zinc-200">Variant {post.variant}</span>}
+    </div>
+  );
+}
+
 function PostBody({ post }: { post: PostWithLogs }) {
   const { tz } = useApp();
   const media = useMediaLookup([...post.media, ...post.thread.flatMap((t) => t.media)]);
@@ -211,6 +228,8 @@ function PostBody({ post }: { post: PostWithLogs }) {
           </div>
         )}
       </section>
+
+      {post.playbookId && <PlaybookLine post={post} />}
 
       {post.status === "published" && <PostPerformance post={post} />}
 

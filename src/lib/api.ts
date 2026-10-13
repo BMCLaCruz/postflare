@@ -29,6 +29,10 @@ import type {
   MediaUsageDTO,
   Overview,
   PlatformConfig,
+  PlaybookDTO,
+  PlaybookInput,
+  PlaybookStatsDTO,
+  PlaybookSummaryDTO,
   PostDTO,
   PostWithLogs,
   Provider,
@@ -87,7 +91,7 @@ export function errorMessage(err: unknown): string {
   return String(err);
 }
 
-type PostPatch = Partial<Pick<PostDTO, "content" | "media" | "settings">> & {
+type PostPatch = Partial<Pick<PostDTO, "content" | "media" | "settings" | "playbookId" | "playbookVersion" | "variant">> & {
   thread?: ThreadItem[];
   scheduledAt?: CreatePostsInput["scheduledAt"];
 };
@@ -200,6 +204,15 @@ export const api = {
     remove: (id: string) => request<{ ok: true }>("DELETE", `/posts/${id}`),
   },
   overview: () => get<Overview>("/overview"),
+  playbooks: {
+    list: (q: { q?: string; platform?: string; goal?: string; format?: string; source?: "builtin" | "custom" } = {}) => get<PlaybookSummaryDTO[]>(`/playbooks${qs(q)}`),
+    get: (id: string, q: { version?: number; accountId?: string } = {}) => get<PlaybookDTO>(`/playbooks/${encodeURIComponent(id)}${qs(q)}`),
+    create: (input: PlaybookInput) => request<PlaybookDTO>("POST", "/playbooks", input),
+    update: (id: string, input: PlaybookInput) => request<PlaybookDTO>("PATCH", `/playbooks/${encodeURIComponent(id)}`, input),
+    duplicate: (id: string, body: { name?: string; slug?: string } = {}) => request<PlaybookDTO>("POST", `/playbooks/${encodeURIComponent(id)}/duplicate`, body),
+    archive: (id: string) => request<{ ok: true }>("DELETE", `/playbooks/${encodeURIComponent(id)}`),
+    stats: (q: { days?: number; platform?: string; accountId?: string } = {}) => get<PlaybookStatsDTO>(`/playbooks/stats${qs(q)}`),
+  },
   analytics: {
     summary: (q: AnalyticsQuery) => get<AnalyticsSummaryDTO>(`/analytics/summary${qs(q)}`),
     posts: (q: AnalyticsQuery & { sort?: AnalyticsSort; limit?: number; offset?: number }) => get<AnalyticsPostDTO[]>(`/analytics/posts${qs(q)}`),

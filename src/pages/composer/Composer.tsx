@@ -20,6 +20,7 @@ import { uploadsInFlight } from "../../lib/useUploader";
 import { AccountPicker } from "./AccountPicker";
 import type { ComposerOptions } from "./ComposerProvider";
 import { ItemEditor } from "./ItemEditor";
+import { PlaybookPanel, PlaybookPicker, type PlaybookRef } from "./PlaybookPicker";
 import { attributeErrors, checkAccount, effectiveItem, emptyItem, type ComposerState, type Issue, type Item } from "./model";
 import { Preview } from "./Preview";
 import { SchedulePicker, defaultScheduleTime } from "./SchedulePicker";
@@ -54,6 +55,10 @@ export default function Composer({ options, onClose }: { options: ComposerOption
   const [serverErrors, setServerErrors] = useState<{ byAccount: Record<string, string[]>; general: string[] } | null>(null);
   const [busy, setBusy] = useState<Mode | null>(null);
   const [previewId, setPreviewId] = useState<string | null>(null);
+  const [playbook, setPlaybook] = useState<PlaybookRef | null>(() =>
+    options.playbook ?? (options.duplicate?.playbookId ? { id: options.duplicate.playbookId, version: options.duplicate.playbookVersion ?? 1 } : null),
+  );
+  const [variant, setVariant] = useState(options.duplicate?.variant ?? "");
   const initial = useRef<string>("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -65,6 +70,8 @@ export default function Composer({ options, onClose }: { options: ComposerOption
       .then((p) => {
         setOriginal(p);
         setState(stateFromPost(p));
+        setPlaybook(p.playbookId ? { id: p.playbookId, version: p.playbookVersion ?? 1 } : null);
+        setVariant(p.variant ?? "");
         if (p.scheduledAt && p.scheduledAt > Date.now()) setScheduledAt(p.scheduledAt);
       })
       .catch((err) => {
@@ -192,7 +199,8 @@ export default function Composer({ options, onClose }: { options: ComposerOption
     return labels.size === 1 ? [...labels][0] : "Follow-ups";
   };
 
-  const dirty = settingsTouched || snapshot(state) !== initial.current;
+  const playbookChanged = editing ? (playbook?.id ?? null) !== (original?.playbookId ?? null) || variant !== (original?.variant ?? "") : false;
+  const dirty = settingsTouched || playbookChanged || snapshot(state) !== initial.current;
   const requestClose = async () => {
     if (dirty && !(await confirm({ title: "Discard changes?", message: "Your post has not been saved.", confirmLabel: "Discard", danger: true }))) return;
     onClose();
@@ -238,11 +246,14 @@ export default function Composer({ options, onClose }: { options: ComposerOption
           return;
         }
       }
+      const attribution = { playbookId: playbook?.id ?? null, playbookVersion: playbook?.version ?? null, variant: playbook && variant.trim() ? variant.trim() : null };
       if (editing) {
         const p = posts[0];
-        await api.posts.update(editing, { content: p.content, media: p.media, settings: p.settings, thread: p.thread, scheduledAt: at });
+        // Attribution only when it changed (an archived playbook stays on the post).
+        const changed = playbookChanged || (playbook?.version ?? null) !== (original?.playbookVersion ?? null);
+        await api.posts.update(editing, { content: p.content, media: p.media, settings: p.settings, thread: p.thread, scheduledAt: at, ...(changed ? attribution : {}) });
       } else {
-        await api.posts.create({ scheduledAt: at, posts });
+        await api.posts.create({ scheduledAt: at, posts, ...(playbook ? attribution : {}) });
       }
       const n = posts.length;
       toast.success(
@@ -325,6 +336,8 @@ export default function Composer({ options, onClose }: { options: ComposerOption
             <AccountPicker selected={state.selected} onToggle={toggleAccount} locked={!!editing} onNavigate={onClose} />
           </section>
 
+          <PlaybookPicker value={playbook} variant={variant} onChange={setPlaybook} onVariant={setVariant} onNavigate={onClose} />
+
           {selectedAccounts.length > 0 && !editing && (
             <div className="-mx-1 flex gap-1 overflow-x-auto px-1 pb-1" role="tablist" aria-label="Content per account">
               <TabButton active={tab === "shared"} onClick={() => setTab("shared")}>
@@ -382,6 +395,12 @@ export default function Composer({ options, onClose }: { options: ComposerOption
 
         {/* Preview + checks column */}
         <aside className="min-w-0 space-y-5 border-t border-zinc-200 bg-zinc-50/70 p-5 lg:overflow-y-auto lg:border-l lg:border-t-0 lg:p-6 dark:border-zinc-800 dark:bg-zinc-950/40">
+          {playbook && (
+            <section>
+              <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-zinc-500">Playbook</h3>
+              <PlaybookPanel key={`${playbook.id}@${playbook.version}`} value={playbook} />
+            </section>
+          )}
           <section>
             <div className="mb-3 flex items-center justify-between gap-2">
               <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Preview</h3>

@@ -8,6 +8,7 @@ import { readStdin } from "../io.js";
 import { accountLabel, buildSettings, missingSettings, resolveAccounts, type Target } from "../resolve.js";
 import { exposure, type AccountDTO, type CreatePostsInput, type PostDTO, type PostMetricsDTO, type ResolvePostInput, type ThreadItem } from "../types.js";
 import { uploadAll } from "./media.js";
+import { parsePlaybookRef } from "./playbooks.js";
 
 // ---------------------------------------------------------------------------------------------------------------
 // Shared option handling
@@ -16,6 +17,25 @@ const TEXT_OPTIONS = {
   text: { type: "string", short: "t", arg: "<text>", description: "Post text (\"-\" reads stdin)" },
   "text-file": { type: "string", arg: "<path>", description: "Read the post text from a file (\"-\" = stdin)" },
 } as const;
+
+const PLAYBOOK_OPTIONS = {
+  playbook: { type: "string", arg: "<id[@version]>", description: "Playbook the post was written with (postflare playbooks), e.g. text-thread@1" },
+  variant: { type: "string", arg: "<label>", description: "A/B variant label, e.g. A or B (compared in postflare playbooks stats)" },
+} as const;
+
+/** --playbook / --variant → body fields (none when not given). */
+function readPlaybook(values: Parsed["values"]): Pick<CreatePostsInput, "playbookId" | "playbookVersion" | "variant"> {
+  const out: Pick<CreatePostsInput, "playbookId" | "playbookVersion" | "variant"> = {};
+  const ref = str(values.playbook);
+  if (ref) {
+    const r = parsePlaybookRef(ref);
+    out.playbookId = r.id;
+    if (r.version !== undefined) out.playbookVersion = r.version;
+  }
+  const variant = str(values.variant);
+  if (variant !== undefined) out.variant = variant;
+  return out;
+}
 
 const WHEN_OPTIONS = {
   at: { type: "string", arg: "<when>", description: "Schedule: \"2026-10-14 09:00\", \"tomorrow 9:00\", \"mon 18:00\", \"in 2h\", ISO (local time)" },
@@ -108,6 +128,7 @@ export const post: Command = {
     ...WHEN_OPTIONS,
     set: { type: "string", multiple: true, arg: "<key=value>", description: "Platform setting, e.g. tiktok.privacy_level=SELF_ONLY" },
     thread: { type: "string", multiple: true, arg: "<text>", description: "Follow-up (thread reply / first comment), in order" },
+    ...PLAYBOOK_OPTIONS,
     "dry-run": { type: "boolean", description: "Only validate (files given to --media are still uploaded)" },
   },
   max: 0,
@@ -117,6 +138,7 @@ export const post: Command = {
     "postflare post -a x --text \"1/ A thread\" --thread \"2/ more\" --thread \"3/ end\" --now",
     "postflare post -a youtube -m video.mp4 --set title=\"Launch\" --set privacy=public --draft",
     "echo \"Hello\" | postflare post -a @me --now --dry-run",
+    "postflare post -a x --text-file a.txt --playbook text-thread@1 --variant A --at \"tue 9:00\"",
   ],
   async run(ctx, { values }) {
     const all = await ctx.accounts();
@@ -147,6 +169,7 @@ export const post: Command = {
         settings: settings.get(t.account.id) ?? {},
         thread: t.provider.capabilities.thread ? thread : [],
       })),
+      ...readPlaybook(values),
     };
 
     if (values["dry-run"]) {
@@ -185,6 +208,7 @@ export const posts: Command = {
     to: { type: "string", arg: "<when>", description: "Until" },
     account: { type: "string", short: "a", multiple: true, arg: "<selector>", description: "Only these accounts" },
     limit: { type: "string", arg: "<n>", description: "Max posts (default 50)" },
+    playbook: { type: "string", arg: "<id>", description: "Only posts written with this playbook (\"none\": without one)" },
   },
   max: 0,
   examples: ["postflare posts --upcoming", "postflare posts --status failed", "postflare posts -a tiktok --from 7d --json"],
@@ -200,6 +224,7 @@ export const posts: Command = {
       accountId: selected?.length === 1 ? selected[0].id : undefined,
       order: values.upcoming ? "asc" : "desc",
       limit: selected && selected.length > 1 ? 1000 : limit,
+      playbookId: str(values.playbook),
     });
     if (selected) rows = rows.filter((p) => selected.some((a) => a.id === p.accountId)).slice(0, limit);
     if (ctx.json) return printJson(rows);
@@ -227,6 +252,7 @@ export const postsShow: Command = {
       println(c.gray(`  Live on the profile? postflare posts resolve ${p.id} --published [--url URL]. Not there? postflare posts resolve ${p.id} --retry`));
     } else if (p.error) println(c.red(`Error: ${p.error}`));
     println(c.gray(`Group ${p.groupId} · created ${fmtDate(p.createdAt)} · attempts ${p.attempts}`));
+    if (p.playbookId) println(c.gray(`Playbook ${p.playbookId}${p.playbookVersion ? `@${p.playbookVersion}` : ""}${p.variant ? ` · variant ${p.variant}` : ""}`));
     println("");
     println(p.content || c.gray("(no text)"));
     if (p.media.length) println(`\nMedia: ${p.media.join(", ")}`);
@@ -267,6 +293,8 @@ export const postsEdit: Command = {
     "no-media": { type: "boolean", description: "Remove all media" },
     thread: { type: "string", multiple: true, arg: "<text>", description: "Replace the follow-ups" },
     "no-thread": { type: "boolean", description: "Remove the follow-ups" },
+    ...PLAYBOOK_OPTIONS,
+    "no-playbook": { type: "boolean", description: "Remove the playbook attribution" },
   },
   min: 1,
   max: 1,
@@ -288,7 +316,12 @@ export const postsEdit: Command = {
     else if (list(values.media).length) body.media = await resolveMedia(ctx, list(values.media));
     if (values["no-thread"]) body.thread = [];
     else if (list(values.thread).length) body.thread = list(values.thread).map((t) => ({ content: t, media: [] }));
-    if (!Object.keys(body).length) throw new UsageError("Nothing to change: give --text, --at/--now/--draft, --set, --media or --thread", "posts edit");
+    if (values["no-playbook"]) {
+      if (str(values.playbook)) throw new UsageError("Use either --playbook or --no-playbook", "posts edit");
+      body.playbookId = null;
+    }
+    Object.assign(body, readPlaybook(values));
+    if (!Object.keys(body).length) throw new UsageError("Nothing to change: give --text, --at/--now/--draft, --set, --media, --thread or --playbook", "posts edit");
     const updated = await ctx.api.patch<PostDTO>(`/posts/${current.id}`, body);
     if (ctx.json) return printJson(updated);
     println(`${c.green("✓")} Updated ${updated.id}: ${fmtStatus(updated.status)} ${updated.status === "scheduled" ? fmtWhen(updated.scheduledAt) : ""}`);

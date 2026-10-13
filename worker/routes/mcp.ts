@@ -140,12 +140,16 @@ export function mcpRoutes(api: { fetch: (req: Request, env: Env, ctx: ExecutionC
     },
     create_post: {
       description:
-        "Create a post on one or more accounts. `scheduledAt` is an ISO date, \"now\" to publish immediately, or null for a draft. Per-account `content`, `settings`, `media` and `thread` override the shared values.",
+        "Create a post on one or more accounts. `scheduledAt` is an ISO date, \"now\" to publish immediately, or null for a draft. Per-account `content`, `settings`, `media` and `thread` override the shared values. " +
+        "Pass the `playbookId` (and `playbookVersion`) of the playbook you followed (get_playbook), and a `variant` label (\"A\"/\"B\") when testing two versions.",
       inputSchema: {
         type: "object",
         properties: {
           scheduledAt: { type: ["string", "null"] },
           content: { type: "string" },
+          playbookId: { type: "string", description: "Id of the playbook the post was written with (search_playbooks / get_playbook)." },
+          playbookVersion: { type: "number", description: "Version of that playbook (default: latest)." },
+          variant: { type: "string", description: "A/B label, e.g. \"A\" or \"B\" (max 32 characters)." },
           media: { type: "array", items: { type: "string" } },
           thread: {
             type: "array",
@@ -171,6 +175,9 @@ export function mcpRoutes(api: { fetch: (req: Request, env: Env, ctx: ExecutionC
       run: (c, a) =>
         call(c, "POST", "/posts", {
           scheduledAt: toMs(a.scheduledAt),
+          ...(a.playbookId ? { playbookId: String(a.playbookId) } : {}),
+          ...(a.playbookVersion != null ? { playbookVersion: Number(a.playbookVersion) } : {}),
+          ...(a.variant ? { variant: String(a.variant) } : {}),
           posts: a.accounts.map((x: any) => ({
             accountId: x.accountId,
             content: x.content ?? a.content ?? "",
@@ -213,6 +220,9 @@ export function mcpRoutes(api: { fetch: (req: Request, env: Env, ctx: ExecutionC
           settings: { type: "object" },
           thread: { type: "array", items: { type: "object" } },
           scheduledAt: { type: ["string", "null"] },
+          playbookId: { type: ["string", "null"], description: "Playbook attribution (null removes it)." },
+          playbookVersion: { type: "number" },
+          variant: { type: ["string", "null"] },
         },
         required: ["id"],
       },
@@ -317,6 +327,90 @@ export function mcpRoutes(api: { fetch: (req: Request, env: Env, ctx: ExecutionC
         };
       },
     },
+    search_playbooks: {
+      description:
+        "Search the playbook library (built-in recipes plus this workspace's own) for writing a post: by text (`q`, e.g. \"app launch\", \"game clip\"), " +
+        "`platform` (provider id like x, tiktok, instagram_standalone, or a group: short-video, microblog, professional, visual), " +
+        "`goal` (engagement, reach, clicks, followers, conversions) and `format` (text, thread, image, carousel, video). Best match first. " +
+        "Then call get_playbook for the full recipe.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          q: { type: "string" },
+          platform: { type: "string" },
+          goal: { type: "string", enum: ["engagement", "reach", "clicks", "followers", "conversions"] },
+          format: { type: "string", enum: ["text", "thread", "image", "carousel", "video"] },
+          limit: { type: "number", description: "Default 8." },
+        },
+      },
+      run: async (c, a) => {
+        const q = new URLSearchParams();
+        for (const k of ["q", "platform", "goal", "format"]) if (a[k]) q.set(k, String(a[k]));
+        const list = (await call(c, "GET", `/playbooks?${q}`)) as any[];
+        return list.slice(0, Math.min(Math.max(Number(a.limit) || 8, 1), 30)).map((p) =>
+          drop({ id: p.id, version: p.version, name: p.name, summary: p.summary, goal: p.goal, platforms: p.platforms, formats: p.formats, builtin: p.builtin || undefined, inputs: p.inputs }),
+        );
+      },
+    },
+    get_playbook: {
+      description:
+        "Get a playbook as a ready-to-use prompt: the recipe (structure, platform notes, hooks, examples, things to avoid, checklist), " +
+        "this workspace's target accounts with their limits, and how to attribute the post. Follow it, then pass its playbookId/playbookVersion to create_post. " +
+        "`accountId` narrows the target accounts.",
+      inputSchema: {
+        type: "object",
+        properties: { id: { type: "string" }, version: { type: "number" }, accountId: { type: "string" } },
+        required: ["id"],
+      },
+      run: async (c, a) => {
+        const q = new URLSearchParams();
+        if (a.version) q.set("version", String(a.version));
+        if (a.accountId) q.set("accountId", String(a.accountId));
+        const p = await call(c, "GET", `/playbooks/${seg(a.id)}?${q}`);
+        return { id: p.id, version: p.version, name: p.name, goal: p.goal, inputs: p.inputs, checklist: p.checklist, prompt: p.prompt };
+      },
+    },
+    get_playbook_stats: {
+      description:
+        "Rank playbooks by measured performance in this workspace: for each playbook (and version / A-B variant), published posts with metrics, " +
+        "median engagement rate, median views and lift vs each account's usual (posts without a playbook), with a confidence label " +
+        "(insufficient < 5 posts, low < 20, ok). Correlational, not causal. Use it to pick the playbook that works best for an account or platform.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          days: { type: "number", description: "Look-back window in days (default 90, max 366)." },
+          platform: { type: "string", description: "Provider id, e.g. tiktok." },
+          accountId: { type: "string" },
+        },
+      },
+      run: async (c, a) => {
+        const q = new URLSearchParams();
+        if (a.days) q.set("days", String(a.days));
+        if (a.platform) q.set("platform", String(a.platform));
+        if (a.accountId) q.set("accountId", String(a.accountId));
+        const s = await call(c, "GET", `/playbooks/stats?${q}`);
+        const row = (r: any) =>
+          drop({
+            playbookId: r.playbookId ?? undefined,
+            name: r.name,
+            version: r.version ?? undefined,
+            variant: r.variant === undefined ? undefined : (r.variant ?? "(none)"),
+            posts: r.posts,
+            accounts: r.accounts,
+            liftPct: pct(r.lift),
+            medianEngagementRatePct: pct(r.medianEngagementRate),
+            medianViews: r.medianViews ?? undefined,
+            confidence: r.confidence,
+          });
+        return drop({
+          range: { from: iso(s.from), to: iso(s.to), days: s.days },
+          postsAnalyzed: s.postsAnalyzed,
+          baseline: row(s.baseline),
+          playbooks: s.playbooks.map((p: any) => drop({ ...row(p), versions: p.versions.length > 1 ? p.versions.map(row) : undefined, variants: p.variants.map(row) })),
+          method: s.method,
+        });
+      },
+    },
     delete_post: {
       description: "Delete a post from Postflare (does not delete it from the platform).",
       inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
@@ -350,6 +444,8 @@ export function mcpRoutes(api: { fetch: (req: Request, env: Env, ctx: ExecutionC
             instructions:
               "Schedule social posts and read their analytics. This API key works in one Postflare workspace: you only see and change its accounts, posts and media, " +
               "and only what the key's user is allowed to (tools return a permission error otherwise). Typical flow: list_accounts -> attach media -> create_post. Check list_platforms for limits and required settings. " +
+              "Before writing a post, search_playbooks for the goal/platform, get_playbook and follow it, and pass its playbookId (and playbookVersion) to create_post; " +
+              "get_playbook_stats shows which playbooks perform best in this workspace. " +
               "Media from a public URL: upload_media_from_url. Files attached in chat or on the user's device: create_upload_link " +
               "(user opens pageUrl, or your code sandbox PUTs bytes to putUrl), then get_upload_link. " +
               "Local files from a terminal agent (up to 90MB): POST the raw bytes to <this server>/api/media with headers " +

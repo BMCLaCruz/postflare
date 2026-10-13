@@ -200,6 +200,8 @@ export async function resetDemo(env: Env): Promise<void> {
       db.prepare("DELETE FROM api_keys WHERE workspace_id = ?").bind(ws),
       db.prepare("DELETE FROM oauth_states WHERE workspace_id = ?").bind(ws),
       db.prepare("DELETE FROM invitations WHERE workspace_id = ?").bind(ws),
+      db.prepare("DELETE FROM playbook_versions WHERE workspace_id = ?").bind(ws),
+      db.prepare("DELETE FROM playbooks WHERE workspace_id = ?").bind(ws),
       // One statement per table: rows come in as a JSON array (D1 caps bound parameters per query at 100).
       db
         .prepare(
@@ -217,9 +219,10 @@ export async function resetDemo(env: Env): Promise<void> {
         .bind(ws, JSON.stringify(media)),
       db
         .prepare(
-          `INSERT INTO posts (id, group_id, account_id, status, scheduled_at, content, media, settings, thread, external_id, external_url, error, attempts, revision, created_at, updated_at, published_at, workspace_id, created_by)
+          `INSERT INTO posts (id, group_id, account_id, status, scheduled_at, content, media, settings, thread, external_id, external_url, error, attempts, revision, created_at, updated_at, published_at, workspace_id, created_by, playbook_id, playbook_version, variant)
            SELECT ${j("id")}, ${j("group_id")}, ${j("account_id")}, ${j("status")}, ${j("scheduled_at")}, ${j("content")}, ${j("media")}, ${j("settings")}, ${j("thread")},
-             ${j("external_id")}, ${j("external_url")}, ${j("error")}, ${j("attempts")}, 0, ${j("created_at")}, ${j("updated_at")}, ${j("published_at")}, ?, NULL
+             ${j("external_id")}, ${j("external_url")}, ${j("error")}, ${j("attempts")}, 0, ${j("created_at")}, ${j("updated_at")}, ${j("published_at")}, ?, NULL,
+             ${j("playbook_id")}, ${j("playbook_version")}, ${j("variant")}
            FROM json_each(?)`,
         )
         .bind(ws, JSON.stringify(posts)),
@@ -274,7 +277,7 @@ function seedMetrics(posts: SeedPost[], t: number) {
     if (p.status !== "published" || !p.published_at || !provider?.postMetrics) continue;
     let last: MetricValues = {};
     for (const at of demoSnapshotTimes(CHECKPOINTS, p.published_at, t)) {
-      last = demoPostMetrics(provider, { content: p.content, published_at: p.published_at }, at);
+      last = demoPostMetrics(provider, { content: p.content, published_at: p.published_at, playbook_id: p.playbook_id }, at);
       snapshots.push([p.id, at, JSON.stringify(last)]);
     }
     latest.push([p.id, JSON.stringify(last), nextCheckpoint(p.published_at, t)]);

@@ -32,12 +32,13 @@ Workspace scope:
 | `posts.write` | create, edit, schedule, publish now, retry, cancel, delete posts |
 | `media.read` | see the media library |
 | `media.write` | upload, import, edit alt text, delete media, create upload links |
+| `playbooks.manage` | create, edit, duplicate and archive the workspace's own playbooks (reading needs `posts.read`) |
 | `apikeys.manage` | create/revoke **own** API keys for this workspace |
 
 ## Built-in roles (`builtin = 1`, cannot be edited/deleted)
 
 Instance: **Admin** = all instance permissions. **Member** = `instance.workspaces.create`.
-Workspace: **Owner** = all workspace permissions. **Admin** = all except `workspace.delete`. **Editor** = accounts.read, accounts.manage, posts.*, media.*, apikeys.manage. **Viewer** = accounts.read, posts.read, media.read.
+Workspace: **Owner** = all workspace permissions. **Admin** = all except `workspace.delete`. **Editor** = accounts.read, accounts.manage, posts.*, media.*, playbooks.manage, apikeys.manage. **Viewer** = accounts.read, posts.read, media.read.
 
 Rules:
 - The instance must always keep at least one active instance Admin; a workspace must always keep at least one Owner. Reject changes that would break this (including deleting/disabling the last one).

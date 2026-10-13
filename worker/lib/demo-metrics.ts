@@ -66,16 +66,35 @@ function growth(age: number): number {
   return 0.85 * (1 - Math.exp(-h / 18)) + 0.15 * Math.min(1, h / (24 * 45));
 }
 
+/**
+ * How much better (or worse) demo posts written with a playbook engage than the account's usual, so the playbook
+ * ranking of the demo has something to show. Made up; unlisted playbooks: 1.
+ */
+export const DEMO_PLAYBOOK_LIFT: Record<string, number> = {
+  "game-clip-hook": 1.9,
+  "app-feature-spotlight": 1.6,
+  "short-video-hook-script": 1.5,
+  "player-feedback-showcase": 1.4,
+  "text-thread": 1.45,
+  "indie-dev-behind-the-scenes": 1.3,
+  "launch-announcement": 1.1,
+  "listicle-carousel": 1.35,
+  "app-update-notes-to-social": 1.05,
+  "download-cta-without-spam": 0.75,
+};
+
 /** Metrics of a demo post at time `t`. */
-export function demoPostMetrics(provider: Provider, post: { content: string; published_at: number }, t: number): MetricValues {
+export function demoPostMetrics(provider: Provider, post: { content: string; published_at: number; playbook_id?: string | null }, t: number): MetricValues {
   const seed = hash(`${provider.id}:${post.content}`);
-  const total = (SCALE[provider.id] ?? 800) * (0.35 + 1.9 * rand(seed, "size"));
+  const lift = (post.playbook_id && DEMO_PLAYBOOK_LIFT[post.playbook_id]) || 1;
+  const total = (SCALE[provider.id] ?? 800) * (0.35 + 1.9 * rand(seed, "size")) * Math.sqrt(lift);
   const g = growth(t - post.published_at);
   const out: MetricValues = {};
   for (const k of provider.metrics?.post ?? []) {
     const rate = RATE[k];
     if (rate === undefined) continue;
-    out[k] = Math.round(total * rate * (k === "views" || k === "impressions" || k === "reach" ? 1 : 0.5 + rand(seed, k)) * g);
+    const exposure = k === "views" || k === "impressions" || k === "reach";
+    out[k] = Math.round(total * rate * (exposure ? 1 : (0.5 + rand(seed, k)) * lift) * g);
   }
   return out;
 }

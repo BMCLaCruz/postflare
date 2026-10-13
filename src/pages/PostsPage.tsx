@@ -10,6 +10,7 @@ import { api } from "../lib/api";
 import { useApp } from "../lib/app";
 import { cn, truncate } from "../lib/format";
 import { getMedia } from "../lib/mediaCache";
+import { usePlaybookList } from "../lib/playbooks";
 import { useSession } from "../lib/session";
 import { formatDateTime, relativeTime } from "../lib/time";
 import type { PostDTO, PostStatus } from "../lib/types";
@@ -31,6 +32,8 @@ export function PostsPage() {
   const [params, setParams] = useSearchParams();
   const status = (params.get("status") ?? "") as "" | PostStatus;
   const accountId = params.get("account") ?? "";
+  const playbookId = params.get("playbook") ?? "";
+  const playbooks = usePlaybookList();
   const [q, setQ] = useState("");
   const { accounts, accountMap, providerMap, tz } = useApp();
   const composer = useComposer();
@@ -59,6 +62,7 @@ export function PostsPage() {
     const needle = q.trim().toLowerCase();
     return (posts.data ?? []).filter((p) => {
       if (status && p.status !== status && !(status === "scheduled" && p.status === "publishing")) return false;
+      if (playbookId && (playbookId === "none" ? !!p.playbookId : playbookId === "any" ? !p.playbookId : p.playbookId !== playbookId)) return false;
       if (!needle) return true;
       const a = accountMap.get(p.accountId);
       return (
@@ -68,7 +72,13 @@ export function PostsPage() {
         p.thread.some((t) => t.content.toLowerCase().includes(needle))
       );
     });
-  }, [posts.data, status, q, accountMap]);
+  }, [posts.data, status, q, accountMap, playbookId]);
+  // Playbooks used by these posts (plus the selected one), for the filter.
+  const usedPlaybooks = useMemo(() => {
+    const ids = new Set((posts.data ?? []).map((p) => p.playbookId).filter((x): x is string => !!x));
+    if (playbookId && playbookId !== "none" && playbookId !== "any") ids.add(playbookId);
+    return [...ids].map((id) => ({ id, name: playbooks.data?.find((p) => p.id === id)?.name ?? id })).sort((a, b) => a.name.localeCompare(b.name));
+  }, [posts.data, playbooks.data, playbookId]);
 
   return (
     <>
@@ -116,6 +126,18 @@ export function PostsPage() {
             <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-zinc-400" />
             <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search posts…" className="pl-9" aria-label="Search posts" />
           </div>
+          {(usedPlaybooks.length > 0 || playbookId) && (
+            <Select value={playbookId} onChange={(e) => setParam("playbook", e.target.value)} className="w-44" aria-label="Filter by playbook">
+              <option value="">Any playbook</option>
+              <option value="any">With a playbook</option>
+              <option value="none">Without a playbook</option>
+              {usedPlaybooks.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </Select>
+          )}
           {accounts.length > 0 && (
             <Select value={accountId} onChange={(e) => setParam("account", e.target.value)} className="w-44" aria-label="Filter by account">
               <option value="">All accounts</option>

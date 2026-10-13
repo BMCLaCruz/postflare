@@ -1,3 +1,4 @@
+import { PlaybookRanking } from "../components/playbooks/PlaybookRanking";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router";
 import { AlertTriangle, BarChart3, ExternalLink, FileText, Hourglass, ImageIcon, Info, PenSquare, Table2, Users, Zap } from "lucide-react";
@@ -168,6 +169,7 @@ export function AnalyticsPage() {
                 <Breakdown title="By account" rows={s.byAccount} kind="account" providerMap={providerMap} accounts={accounts} />
               </div>
               <TopPosts query={query} queryKey={queryKey} sort={sort} onSort={(v) => setParam({ sort: v === "views" ? null : v })} />
+              <PlaybookRanking compact accountId={accountId || undefined} />
             </>
           )}
         </div>

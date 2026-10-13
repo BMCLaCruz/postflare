@@ -3,6 +3,7 @@ import { accountOptions, accounts, platforms } from "./commands/accounts.js";
 import { analytics, analyticsRefresh, analyticsTop } from "./commands/analytics.js";
 import { login, logout, whoami, workspaces } from "./commands/auth.js";
 import { mediaAlias, mediaImport, mediaList, mediaRm, mediaUpload } from "./commands/media.js";
+import { playbooks, playbooksSearch, playbooksShow, playbooksStats } from "./commands/playbooks.js";
 import { post, posts, postsCancel, postsEdit, postsResolve, postsRetry, postsRm, postsShow } from "./commands/posts.js";
 import { skillInstall } from "./commands/skill.js";
 import { uploadLink } from "./commands/uploadlink.js";
@@ -37,6 +38,10 @@ export const COMMANDS: Command[] = [
   analytics,
   analyticsTop,
   analyticsRefresh,
+  playbooks,
+  playbooksSearch,
+  playbooksShow,
+  playbooksStats,
   uploadLink,
   skillInstall,
   version,
@@ -47,6 +52,7 @@ const GROUPS: Array<[string, string[]]> = [
   ["Accounts & platforms", ["accounts", "accounts options", "platforms"]],
   ["Media", ["media upload", "media list", "media import", "media rm", "upload-link"]],
   ["Posts", ["post", "posts", "posts show", "posts edit", "posts cancel", "posts retry", "posts resolve", "posts rm"]],
+  ["Playbooks", ["playbooks", "playbooks search", "playbooks show", "playbooks stats"]],
   ["Analytics", ["analytics", "analytics top", "analytics refresh"]],
 ];
 
@@ -77,6 +83,8 @@ export function mainHelp(): string {
     "  postflare accounts",
     "  postflare post -a bluesky -a x --text \"Hello\" --at \"tomorrow 9:00\"",
     "  postflare post -a tiktok -m clip.mp4 --set privacy_level=SELF_ONLY --now",
+    "  postflare playbooks search launch --platform x",
+    "  postflare post -a x --text-file post.txt --playbook launch-announcement@1 --now",
     "  postflare analytics --range 7d",
     "",
     "Help for a command: postflare <command> --help",

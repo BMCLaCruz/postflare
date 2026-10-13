@@ -142,7 +142,7 @@ describe("demo login", () => {
     expect(by("failed")).toHaveLength(1);
     expect(by("failed")[0].error).toMatch(/duplicate content/);
     const now = Date.now();
-    expect(by("published").every((p) => p.publishedAt < now && p.publishedAt > now - 11 * 864e5 && p.externalUrl.startsWith("https://example.com/demo/"))).toBe(true);
+    expect(by("published").every((p) => p.publishedAt < now && p.publishedAt > now - 81 * 864e5 && p.externalUrl.startsWith("https://example.com/demo/"))).toBe(true);
     expect(by("scheduled").every((p) => p.scheduledAt > now && p.scheduledAt < now + 15 * 864e5)).toBe(true);
     // A multi-account group and follow-ups (thread / first comment).
     const groups = new Map<string, number>();
@@ -154,6 +154,14 @@ describe("demo login", () => {
     expect(detail.logs.map((l: any) => l.message).join("\n")).toMatch(/Simulated publish — demo workspace, nothing was sent/);
     // No workflows for demo posts.
     expect(await one("SELECT id FROM posts WHERE workspace_id = 'ws_demo' AND workflow_id IS NOT NULL")).toBeNull();
+    // Playbook attribution (some A/B variants), so the ranking has something to show.
+    const attributed = by("published").filter((p) => p.playbookId);
+    expect(attributed.length).toBeGreaterThanOrEqual(25);
+    expect(attributed.some((p) => p.variant === "A") && attributed.some((p) => p.variant === "B")).toBe(true);
+    const stats = (await call(ON, demo, "/api/playbooks/stats")).json;
+    expect(stats.playbooks.length).toBeGreaterThanOrEqual(8);
+    expect(stats.playbooks.some((p: any) => p.confidence !== "insufficient" && p.lift > 0)).toBe(true);
+    expect(stats.baseline.posts).toBeGreaterThanOrEqual(5);
   });
 
   it("seeds analytics, and refreshes them without calling any platform", async () => {

@@ -10,5 +10,7 @@ declare module "cloudflare:test" {
     SECURITY_DB: D1Database;
     /** Own instance for publishing safety, token refresh, D1 budget and media lifecycle tests. */
     PUBLISH_DB: D1Database;
+    /** Own instance for the playbook tests (library, attribution, ranking, D1 query counts). */
+    PLAYBOOKS_DB: D1Database;
   }
 }
