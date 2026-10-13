@@ -4,10 +4,22 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Minor and patch updates arrive as one weekly PR; major versions are upgraded by hand
+    # (they usually need code changes, e.g. vitest-pool-workers follows vitest majors).
     groups:
-      cloudflare:
-        patterns: ["wrangler", "@cloudflare/*"]
+      minor-and-patch:
+        update-types: ["minor", "patch"]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+    commit-message:
+      prefix: "chore(deps)"
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "ci"
