@@ -7,6 +7,8 @@ export const PLAYBOOK_GOALS: readonly PlaybookGoal[] = ["engagement", "reach", "
 export const PLAYBOOK_FORMATS: readonly PlaybookFormat[] = ["text", "thread", "image", "carousel", "video"];
 /** Body sections of a built-in playbook, in this order (custom playbooks may deviate). */
 export const PLAYBOOK_SECTIONS = ["When to use", "Structure", "Platform notes", "Hooks", "Examples", "Avoid", "Checklist"] as const;
+/** Optional last section: links backing the playbook's claims (every built-in has one). */
+export const SOURCES_SECTION = "Sources";
 
 /** Platform groups usable in `platforms` next to provider ids. */
 export const PLATFORM_GROUPS: Record<string, { label: string; providers: string[] }> = {
@@ -128,7 +130,9 @@ export function parsePlaybook(markdown: string, strict = true): { meta: Playbook
   if (!body.trim()) errors.push("body is empty");
   if (strict) {
     const titles = sectionsOf(body).map((s) => s.title);
-    if (titles.join("|") !== PLAYBOOK_SECTIONS.join("|")) errors.push(`sections must be exactly: ${PLAYBOOK_SECTIONS.join(", ")} (got ${titles.join(", ") || "none"})`);
+    const core = titles[titles.length - 1] === SOURCES_SECTION ? titles.slice(0, -1) : titles;
+    if (core.join("|") !== PLAYBOOK_SECTIONS.join("|"))
+      errors.push(`sections must be exactly: ${PLAYBOOK_SECTIONS.join(", ")}, optionally followed by ${SOURCES_SECTION} (got ${titles.join(", ") || "none"})`);
     if (!checklistOf(body).length) errors.push("the Checklist section has no items");
   }
   return { meta, body, errors };

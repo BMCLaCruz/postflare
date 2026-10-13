@@ -1,6 +1,6 @@
 ---
 id: before-after
-version: 1
+version: 2
 name: Before and after transformation
 summary: An honest before/after with the same framing on both sides, so the change speaks for itself without hype.
 goal: engagement
@@ -26,13 +26,13 @@ Skip it when the "after" is a mockup that is not shipped yet, or when the differ
 6. **Soft close.** A question about their own before/after, or what you will try next. No hard sell.
 
 ## Platform notes
-- **TikTok / Reels / Shorts:** 9:16 vertical. Show the after for a split second at 0:00, then the before, then the reveal; the first 1–2 seconds decide. Put "Before" and "After" as on-screen text, not only in the caption. TikTok caption up to 2,200 characters, 3–5 hashtags. Shorts title ≤ 100 characters.
-- **Instagram:** carousel is the natural format (slide 1 the after or a split, slide 2 the before full size, slide 3 the method). Caption fold at ~125 characters, so the delta goes first. 3–5 relevant hashtags, alt text describing both images.
-- **X:** 280 characters. Attach a single split image or two images side by side (X shows 2 images as a pair). Keep the method for a follow-up reply.
-- **Bluesky:** 300 graphemes, up to 4 images; add alt text, the community expects it.
-- **Threads:** 500 characters, one topic tag.
-- **LinkedIn:** metric before/afters do best here; lead with the number in the first two lines before "…see more" (~210 characters).
-- **Pinterest:** title ≤ 100, description ≤ 500; vertical 2:3 split pin with the method in text. The destination link can be the case study or store page.
+- **TikTok / Reels / Shorts:** 9:16 vertical. Show the after for a split second at 0:00, then the before, then the reveal; land the hook within the first 3 seconds (Instagram's view rate and TikTok's ad guidance both measure the opening 3 s). Put "Before" and "After" as on-screen text, not only in the caption, and keep it inside each platform's safe zone. TikTok captions via the posting API max 2,200 characters; Shorts title ≤ 100 characters.
+- **Instagram:** carousel is the natural format (slide 1 the after or a split, slide 2 the before full size, slide 3 the method); in Buffer's 4M-post analysis carousels earned 12% more engagement than Reels, while Reels reached 36% more people. Use 4:5 (1080×1350); API-published images must be between 4:5 and 1.91:1. Only the first line or so of the caption shows before "more" (~125 characters rule of thumb; unverified: test it), so the delta goes first. Max 5 hashtags, alt text describing both images.
+- **X:** 280 characters. Attach a single split image or two images (up to 4 per post). Keep the method for a follow-up reply.
+- **Bluesky:** 300 graphemes, up to 4 images; alt text is part of every image record, so write a real one.
+- **Threads:** 500 characters, one topic tag per post.
+- **LinkedIn:** posts up to 3,000 characters. Metric before/afters fit the audience (unverified: test it). Lead with the number in the first line or two; the "…see more" cut is not documented and is observed around 140 characters on mobile and 210 on desktop (unverified: test it).
+- **Pinterest:** title ≤ 100 characters (only ~40 may show in feed), description ≤ 800; vertical 2:3 (1000×1500) split pin with the method in text. The destination link can be the case study or store page.
 
 ## Hooks
 - **Delta in one line:** "{metric} went from {before} to {after} in {time}." — a specific number is its own hook.
@@ -97,4 +97,18 @@ We cut the start screen to one button. Sessions started went up, sessions finish
 - [ ] At least one honest caveat is included.
 - [ ] Any user's photo or data is used with their permission.
 - [ ] Alt text describes both sides for image posts.
-- [ ] Length fits each platform (X 280, Bluesky 300, Threads 500).
+- [ ] Length fits each platform (X 280, Bluesky 300, Threads 500, LinkedIn 3,000, Pinterest description 800).
+- [ ] Instagram uses ≤ 5 hashtags; Threads one topic tag.
+
+## Sources
+- [Data shows Instagram Reels are best for reach, but not engagement — Buffer, 2024](https://buffer.com/resources/instagram-reach-engagement-analysis/) — carousels +12% engagement vs Reels; Reels +36% reach (4M posts).
+- [Helping creators of all sizes break through — Instagram Creators, 2025](https://creators.instagram.com/blog/helping-creators-of-all-sizes-break-through) — hook in the first 3 s, view rate.
+- [Creative best practices for performance ads — TikTok for Business, 2025](https://ads.tiktok.com/resources/help/article/creative-best-practices) — 3 s proposition, 9:16, safe zone.
+- [IG User Media reference — Meta for Developers, 2026](https://developers.facebook.com/docs/instagram-platform/instagram-graph-api/reference/ig-user/media) — API image ratio 4:5 to 1.91:1, carousel max 10.
+- [Instagram is implementing new limits on hashtag use — Social Media Today, 2025](https://www.socialmediatoday.com/news/instagrams-implementing-new-limits-on-hashtag-use/808309/) — 5-hashtag cap.
+- [app.bsky.feed.post lexicon — Bluesky AT Protocol, 2026](https://github.com/bluesky-social/atproto/blob/main/lexicons/app/bsky/feed/post.json) — post text max 300 graphemes.
+- [app.bsky.embed.images lexicon — Bluesky AT Protocol, 2026](https://github.com/bluesky-social/atproto/blob/main/lexicons/app/bsky/embed/images.json) — max 4 images, alt field required.
+- [Threads API: Posts — Meta for Developers, 2026](https://developers.facebook.com/docs/threads/posts) — 500-character limit, one topic tag per post.
+- [Post and share updates — LinkedIn Help, 2026](https://www.linkedin.com/help/linkedin/answer/a528176) — 3,000-character post limit.
+- [Pinterest product specs — Pinterest Business Help, 2026](https://help.pinterest.com/en/business/article/pinterest-product-specs) — 2:3 at 1000×1500, title 100, description 800.
+- [Counting characters — X Developer Platform, 2026](https://docs.x.com/fundamentals/counting-characters) — 280-character limit, URLs count 23.

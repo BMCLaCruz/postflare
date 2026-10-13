@@ -1,6 +1,6 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { PLAYBOOK_SECTIONS, checklistOf, matchesPlatform, parsePlaybook, sectionsOf, serializePlaybook, splitFrontmatter } from "../shared/playbooks";
+import { PLAYBOOK_SECTIONS, SOURCES_SECTION, checklistOf, matchesPlatform, parsePlaybook, sectionsOf, serializePlaybook, splitFrontmatter } from "../shared/playbooks";
 import {
   STATS_MAX_POSTS,
   agentPrompt,
@@ -35,7 +35,9 @@ describe("built-in playbooks", () => {
   it("have every required section in order, a checklist, hooks and examples", () => {
     for (const p of builtinPlaybooks()) {
       const sections = sectionsOf(p.body);
-      expect(sections.map((s) => s.title), p.id).toEqual([...PLAYBOOK_SECTIONS]);
+      expect(sections.map((s) => s.title), p.id).toEqual([...PLAYBOOK_SECTIONS, SOURCES_SECTION]);
+      // Built-ins cite what backs their claims.
+      expect(sections.at(-1)!.content.match(/https?:\/\//g)?.length ?? 0, `${p.id}: sources`).toBeGreaterThanOrEqual(3);
       for (const s of sections) expect(s.content.length, `${p.id}: ${s.title}`).toBeGreaterThan(40);
       expect(checklistOf(p.body).length, p.id).toBeGreaterThanOrEqual(5);
       expect(p.summary.length, p.id).toBeLessThanOrEqual(160);
@@ -68,7 +70,7 @@ describe("built-in playbooks", () => {
       { id: "acc_pin", provider: "pinterest", name: "Pins", username: null },
     ]);
     expect(dto.prompt).toContain('playbookId "launch-announcement"');
-    expect(dto.prompt).toContain("pf post --playbook launch-announcement@1");
+    expect(dto.prompt).toContain("pf post --playbook launch-announcement@2");
     expect(dto.prompt).toContain("acc_x");
     expect(dto.prompt).toContain("<playbook>");
     expect(dto.checklist.length).toBeGreaterThan(0);

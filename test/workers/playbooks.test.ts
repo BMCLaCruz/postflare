@@ -157,11 +157,11 @@ describe("library", () => {
   it("returns a playbook with the agent prompt for this workspace's accounts", async () => {
     const res = await call(viewer, "/api/playbooks/short-video-hook-script");
     expect(res.status, res.text).toBe(200);
-    expect(res.json).toMatchObject({ id: "short-video-hook-script", builtin: true, version: 1, versions: [1] });
+    expect(res.json).toMatchObject({ id: "short-video-hook-script", builtin: true, version: 2, versions: [2] });
     expect(res.json.prompt).toContain("acc_pb_tt"); // TikTok matches short-video
     expect(res.json.prompt).not.toContain("acc_pb_b"); // other workspace
     expect(res.json.prompt).toContain('playbookId "short-video-hook-script"');
-    expect((await call(viewer, "/api/playbooks/short-video-hook-script?version=2")).status).toBe(404);
+    expect((await call(viewer, "/api/playbooks/short-video-hook-script?version=3")).status).toBe(404);
     expect((await call(viewer, "/api/playbooks/nope")).status).toBe(404);
   });
 });
@@ -200,7 +200,7 @@ describe("custom playbooks", () => {
     expect((await call(owner, "/api/playbooks/how-to-tip", { method: "DELETE" })).status).toBe(409);
     const copy = await call(owner, "/api/playbooks/how-to-tip/duplicate", { body: {} });
     expect(copy.status, copy.text).toBe(201);
-    expect(copy.json).toMatchObject({ slug: "how-to-tip-custom", basedOn: "how-to-tip@1", builtin: false, version: 1 });
+    expect(copy.json).toMatchObject({ slug: "how-to-tip-custom", basedOn: "how-to-tip@2", builtin: false, version: 1 });
     const again = await call(owner, "/api/playbooks/how-to-tip/duplicate", { body: {} });
     expect(again.json.slug).toBe("how-to-tip-custom-2");
   });
@@ -219,7 +219,7 @@ describe("custom playbooks", () => {
     it("stores built-in and custom playbooks (by id or slug) with version and variant", async () => {
       const a = await call(owner, "/api/posts", { body: draft({ playbookId: "text-thread", variant: " A " }) });
       expect(a.status, a.text).toBe(201);
-      expect(a.json[0]).toMatchObject({ playbookId: "text-thread", playbookVersion: 1, variant: "A" });
+      expect(a.json[0]).toMatchObject({ playbookId: "text-thread", playbookVersion: 2, variant: "A" });
       const b = await call(owner, "/api/posts", { body: draft({ playbookId: "weekly-devlog", playbookVersion: 1 }) });
       expect(b.json[0]).toMatchObject({ playbookId: id, playbookVersion: 1, variant: null });
       const c = await call(owner, "/api/posts", { body: draft({ playbookId: id }) });

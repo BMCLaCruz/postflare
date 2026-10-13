@@ -1,6 +1,6 @@
 ---
 id: indie-dev-behind-the-scenes
-version: 1
+version: 2
 name: Indie dev behind the scenes
 summary: Share work-in-progress, bugs, design decisions and tools so people follow the person building the app, not just the app.
 goal: followers
@@ -11,7 +11,7 @@ inputs: [app or game name, the specific thing being worked on, a WIP screenshot 
 ---
 
 ## When to use
-Use for the steady, everyday posts between launches: a work-in-progress screen, a bug that turned out funny, a design choice with trade-offs, the tool stack, a before/after of a redesign. People follow people; an indie account that only posts ads gains few followers, while one that shows the work earns an audience that later installs, beta-tests and shares. Good cadence: 2–3 per week. Skip anything under NDA, unreleased platform features under Apple/Google beta terms, and any user data.
+Use for the steady, everyday posts between launches: a work-in-progress screen, a bug that turned out funny, a design choice with trade-offs, the tool stack, a before/after of a redesign. People follow people: consumers rank authenticity and relatability as the brand traits they value most (Sprout Social Index 2025), and candid self-disclosure tends to make people more liked. An account that shows the work can earn an audience that later installs, beta-tests and shares. Good cadence: 2–3 per week (unverified: test it). Skip anything under NDA, unreleased platform features covered by Apple/Google beta terms (check the current developer agreement), and any user data.
 
 ## Structure
 1. **Pick one moment**, not a weekly recap: one bug, one decision, one before/after.
@@ -22,15 +22,15 @@ Use for the steady, everyday posts between launches: a work-in-progress screen, 
 6. **No download CTA** in most of these. Mention the app name naturally; a pinned post or bio does the selling.
 
 ## Platform notes
-- **X:** 280 chars; the dev community is active under #indiedev, #gamedev, #buildinpublic, #iOSDev (one or two, not all). Use a Postflare thread for the longer story: post 1 is the hook + visual, follow-ups carry the details. #ScreenshotSaturday on Saturdays is a long-running ritual for games. Links (devlog, TestFlight) in a reply, never the main post.
-- **Bluesky:** 300 graphemes; a large and friendly gamedev and indie-app community. Threads of 2–4 posts work well. Alt text matters to this audience.
-- **Mastodon:** 500 chars, use CamelCase hashtags (#IndieDev, #GameDev, #SwiftUI) for screen readers; content warnings for flashing visuals. Devs there value technical detail over marketing tone.
-- **Threads:** 500 chars, one topic tag ("Indie Dev" or "Game Dev").
-- **TikTok / Reels / Shorts:** 9:16. Hook on screen in the first 1–2 seconds ("This bug made my plants fly"). Face-to-camera with screen-recording cutaways works; 15–45 seconds. 3–5 hashtags.
-- **LinkedIn:** 3,000 chars, fold after ~210 chars. Lessons learned and decision trade-offs fit here; first 2 lines must stand alone. Links in the first comment via a follow-up.
-- **Instagram:** carousel "before / after / why" (up to 10 frames; Postflare supports 10+). Caption fold at ~125 chars. Alt text on every frame.
-- **Reddit:** r/gamedev, r/iOSProgramming, r/indiegames, r/SideProject each have their own rules (some only allow self-promo in weekly threads; r/gamedev wants discussion, not showcases). Title-first, give the technical detail, disclose it's your app, and reply to comments.
-- **TestFlight / beta:** a public TestFlight link is a good occasional follow-up ("want to try the WIP? 200 spots"). Apple caps external testers at 10,000 per app; state that it's a beta.
+- **X:** 280 chars; the dev community uses #indiedev, #gamedev, #buildinpublic, #iOSDev (one or two, not all). Use a Postflare thread for the longer story: post 1 is the hook + visual, follow-ups carry the details. #ScreenshotSaturday is a long-running weekly hashtag where indie game devs share progress. Links (devlog, TestFlight) go in a reply to keep the hook clean; X says links are not deboosted (company claim, unverified: test it), and via the API any post with a URL costs $0.20 vs $0.015.
+- **Bluesky:** 300 graphemes; an active gamedev and indie-app community (unverified: test it). Threads of 2–4 posts work well. Alt text matters to this audience.
+- **Mastodon:** 500 chars by default; use CamelCase hashtags (#IndieDev, #GameDev, #SwiftUI) so screen readers can split the words; use a content warning (it collapses the post) for flashing visuals. Devs there value technical detail over marketing tone.
+- **Threads:** 500 chars, exactly one topic tag per post ("Indie Dev" or "Game Dev").
+- **TikTok / Reels / Shorts:** 9:16. Hook on screen in the first 1–2 seconds ("This bug made my plants fly"). Face-to-camera with screen-recording cutaways; 15–45 seconds (unverified: test it). A few specific hashtags; Instagram caps posts and Reels at 5.
+- **LinkedIn:** 3,000 chars; the "…see more" fold lands around 140–210 chars depending on device. Lessons learned and decision trade-offs fit here; first 2 lines must stand alone. Links in the first comment via a follow-up (common practice, unverified: test it).
+- **Instagram:** carousel "before / after / why" (up to 10 frames via the publishing API). Caption truncates after roughly 125 chars. Max 5 hashtags. Alt text on every frame.
+- **Reddit:** r/gamedev, r/iOSProgramming, r/indiegames, r/SideProject each have their own rules; some confine self-promotion to weekly threads, and r/gamedev is an audience of developers, not players. Read the sidebar and wiki before posting. Title-first, give the technical detail, disclose it's your app, and reply to comments.
+- **TestFlight / beta:** a public TestFlight link is a good occasional follow-up ("want to try the WIP? 200 spots"). Apple allows up to 10,000 external testers, public links included; the build must pass TestFlight App Review first, and beta access can't be given in exchange for any compensation (App Review Guideline 2.2). State that it's a beta.
 
 ## Hooks
 - **The dumb bug:** "Spent {time} fixing a bug caused by {tiny cause}." — relatable to every developer, and funny to non-developers.
@@ -81,6 +81,17 @@ A feels fair, B makes me want one more try. Which would make you hit retry?
 - [ ] Visual attached and checked for secrets, personal data and NDA material.
 - [ ] Alt text written for every image.
 - [ ] Ends with a specific question or a takeaway others can use.
-- [ ] No hard download CTA; any link (devlog, TestFlight) sits in a follow-up.
+- [ ] No hard download CTA; any link (devlog, TestFlight) sits in a follow-up, at most one per post.
 - [ ] At most 1–2 community hashtags on X, CamelCase on Mastodon.
 - [ ] Subreddit rules read before any Reddit post, and the dev role disclosed.
+
+## Sources
+- [The days of trend chasing are over (Sprout Social Index 2025) — Sprout Social, 2025](https://sproutsocial.com/insights/press/the-days-of-trend-chasing-are-over-new-research-from-sprout-social-reveals-a-third-of-consumers-think-jumping-on-viral-trends-is-embarrassing-for-brands/) — authenticity and relatability are the brand traits consumers value most.
+- [Self-Disclosure and Liking: A Meta-Analytic Review — Collins & Miller, Psychological Bulletin, 1994](https://labs.psych.ucsb.edu/collins/nancy/UCSB_Close_Relationships_Lab/Publications_files/Collins%20and%20Miller,%201994.pdf) — people who disclose more tend to be liked more.
+- [TestFlight — Apple Developer, n.d.](https://developer.apple.com/testflight/) — up to 10,000 external testers, public links, App Review for external builds.
+- [App Review Guidelines — Apple Developer, 2026](https://developer.apple.com/app-store/review/guidelines/) — guideline 2.2: no compensation for TestFlight access.
+- [Screenshot Saturday — GameLuster, 2021](https://gameluster.com/tag/screenshot-saturday/) — indie devs share weekly progress under #ScreenshotSaturday.
+- [Publishing posts — Mastodon documentation, n.d.](https://docs.joinmastodon.org/user/posting/) — default 500-character limit, content warnings collapse posts.
+- [Accessible hashtags — CUNY Accessibility Guide, n.d.](https://guides.cuny.edu/accessibility/hashtags) — screen readers need CamelCase to separate hashtag words.
+- [Instagram will now let you share 20 photos per post — 9to5Mac, 2024](https://9to5mac.com/2024/08/08/instagram-will-now-let-you-share-20-photos-per-post/) — carousel limit raised from 10 to 20.
+- [Instagram implements new limits on hashtag use — Social Media Today, 2025](https://www.socialmediatoday.com/news/instagram-implements-new-limits-on-hashtag-use/808309/) — 5 hashtags per post and Reel.
