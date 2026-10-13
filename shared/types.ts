@@ -1,0 +1,559 @@
+// Types shared by the worker and the web app.
+
+export type FieldType =
+  | "text"
+  | "textarea"
+  | "password"
+  | "number"
+  | "select"
+  | "checkbox"
+  | "url"
+  | "tags"
+  | "datetime";
+
+export interface FieldOption {
+  value: string;
+  label: string;
+}
+
+export interface FieldDef {
+  key: string;
+  label: string;
+  type: FieldType;
+  required?: boolean;
+  placeholder?: string;
+  help?: string;
+  /** Static choices for `select`. */
+  options?: FieldOption[];
+  /** Choices are loaded per account from `GET /api/accounts/:id/options/:key`. */
+  dynamicOptions?: boolean;
+  default?: string | number | boolean | string[];
+  maxLength?: number;
+  /** Only show (and validate) the field when another field has a given value. */
+  showIf?: { key: string; equals: string | boolean | number };
+}
+
+export type ProviderCategory = "social" | "video" | "community" | "blog" | "messaging" | "newsletter";
+
+export interface ProviderCapabilities {
+  /** Max characters of the main post text. */
+  maxLength: number;
+  text: "required" | "optional" | "none";
+  media: {
+    /** Max images per post (0 = images not supported). */
+    images: number;
+    /** Max videos per post (0 = videos not supported). */
+    videos: number;
+    /** Images and videos can be combined in one post. */
+    mixed: boolean;
+    /** At least one media item is required (Instagram, TikTok, YouTube, Pinterest...). */
+    required: boolean;
+  };
+  /** Follow-up items are supported (reply chain or comments). */
+  thread: boolean;
+  /** UI label for follow-ups, e.g. "Thread replies" or "First comment". */
+  threadLabel?: string;
+}
+
+export interface ProviderInfo {
+  id: string;
+  name: string;
+  /** Brand hex color without '#'. */
+  color: string;
+  /** simple-icons slug used for the logo, if any. */
+  icon?: string;
+  category: ProviderCategory;
+  auth: "oauth2" | "credentials";
+  /** Developer-app fields (client id / secret...) configured once per platform. Empty when none needed. */
+  appFields: FieldDef[];
+  /** Fields asked when connecting an account with `credentials` auth. */
+  credentialFields: FieldDef[];
+  /** Per-post settings. */
+  settingsFields: FieldDef[];
+  capabilities: ProviderCapabilities;
+  /** Where to create the developer app. */
+  docsUrl?: string;
+  /** Markdown shown in the composer next to this platform's settings (legal notices, platform requirements). */
+  composerNotice?: string;
+  /** Markdown setup steps shown on the Platforms page. `{{redirectUri}}` and `{{baseUrl}}` are substituted. */
+  setupNotes?: string;
+  /** Which analytics the platform provides (both false when none). */
+  analytics: ProviderAnalytics;
+}
+
+export type PostStatus = "draft" | "scheduled" | "publishing" | "published" | "failed" | "cancelled";
+
+export interface ThreadItem {
+  content: string;
+  media: string[];
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Analytics (worker/lib/metrics.ts, worker/routes/analytics.ts)
+
+/** Normalized metric keys. Platforms fill the ones they offer; everything else goes into `extra`. */
+export type MetricKey =
+  | "impressions"
+  | "reach"
+  | "views"
+  | "likes"
+  | "comments"
+  | "shares"
+  | "saves"
+  | "clicks"
+  | "replies"
+  | "reposts"
+  | "quotes"
+  | "followers"
+  | "following"
+  | "posts";
+
+/** Metric values of a post or an account at one point in time. Missing key = the platform does not report it. */
+export type MetricValues = Partial<Record<MetricKey, number>> & {
+  /** Platform-specific numbers (e.g. Reddit upvote_ratio, YouTube favorites, Instagram profile_visits). */
+  extra?: Record<string, number>;
+};
+
+/** The keys that count as engagements (interactions with a post). */
+export const ENGAGEMENT_KEYS = ["likes", "comments", "shares", "saves", "replies", "reposts", "quotes", "clicks"] as const satisfies readonly MetricKey[];
+
+/** likes + comments + shares + saves + replies + reposts + quotes + clicks (missing keys count as 0). */
+export function engagements(m: MetricValues | null | undefined): number {
+  if (!m) return 0;
+  let n = 0;
+  for (const k of ENGAGEMENT_KEYS) n += typeof m[k] === "number" ? m[k]! : 0;
+  return n;
+}
+
+/**
+ * What engagement rate is measured against: views, else impressions, else reach (null when the platform reports none
+ * of them, e.g. Bluesky: such posts are left out of engagement rates).
+ */
+export function exposure(m: MetricValues | null | undefined): number | null {
+  if (!m) return null;
+  return m.views ?? m.impressions ?? m.reach ?? null;
+}
+
+/** ProviderInfo.analytics */
+export interface ProviderAnalytics {
+  /** Per-post metrics are collected. */
+  post: boolean;
+  /** Account metrics (followers...) are collected daily. */
+  account: boolean;
+  /** Keys the platform reports (post and account). */
+  metrics: MetricKey[];
+}
+
+/**
+ * Analytics collection state of an account (AccountDTO.metricsStatus). Independent of the publishing `status`: an
+ * account can publish fine while analytics need a reconnect (the token predates the analytics permissions).
+ * - pending: not collected yet. ok: last collection worked.
+ * - reconnect_required: the token lacks the analytics permissions; reconnect the account to grant them.
+ * - not_supported: the platform (or this account type) offers no analytics. error: the last collection failed.
+ */
+export type MetricsStatus = "pending" | "ok" | "reconnect_required" | "not_supported" | "error";
+
+export interface AccountMetricsStatusDTO {
+  status: MetricsStatus;
+  message: string | null;
+  /** Last collection attempt (ms). */
+  checkedAt: number | null;
+  /** Latest account metrics (followers...), null when none collected. */
+  metrics: MetricValues | null;
+}
+
+export interface AccountDTO {
+  id: string;
+  provider: string;
+  externalId: string;
+  name: string;
+  username: string | null;
+  avatarUrl: string | null;
+  profileUrl: string | null;
+  status: "active" | "disabled" | "reconnect";
+  statusMessage: string | null;
+  expiresAt: number | null;
+  createdAt: number;
+  /** Analytics collection state. */
+  metricsStatus: AccountMetricsStatusDTO;
+}
+
+export interface MediaDTO {
+  id: string;
+  filename: string;
+  mime: string;
+  size: number;
+  kind: "image" | "video";
+  width: number | null;
+  height: number | null;
+  duration: number | null;
+  alt: string | null;
+  url: string;
+  createdAt: number;
+}
+
+export interface PostDTO {
+  id: string;
+  groupId: string;
+  accountId: string;
+  status: PostStatus;
+  scheduledAt: number | null;
+  content: string;
+  media: string[];
+  settings: Record<string, unknown>;
+  thread: ThreadItem[];
+  externalId: string | null;
+  externalUrl: string | null;
+  error: string | null;
+  attempts: number;
+  createdAt: number;
+  updatedAt: number;
+  publishedAt: number | null;
+}
+
+export interface PostLogDTO {
+  id: number;
+  level: "info" | "warn" | "error";
+  message: string;
+  createdAt: number;
+}
+
+/** Body of POST /api/posts. One entry per target account; all share a group id. */
+export interface CreatePostsInput {
+  /** "now" publishes immediately, a ms timestamp or ISO date schedules, null saves drafts. */
+  scheduledAt: number | string | null;
+  posts: Array<{
+    accountId: string;
+    content: string;
+    media?: string[];
+    settings?: Record<string, unknown>;
+    thread?: ThreadItem[];
+  }>;
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Users, workspaces and roles (docs/workspaces-spec.md)
+
+export type InstancePermission =
+  | "instance.platforms.manage"
+  | "instance.users.manage"
+  | "instance.settings.manage"
+  | "instance.workspaces.create";
+
+export type WorkspacePermission =
+  | "workspace.manage"
+  | "workspace.delete"
+  | "members.manage"
+  | "accounts.read"
+  | "accounts.manage"
+  | "posts.read"
+  | "posts.write"
+  | "media.read"
+  | "media.write"
+  | "apikeys.manage";
+
+export type PermissionKey = InstancePermission | WorkspacePermission;
+
+export type RoleScope = "instance" | "workspace";
+
+/** GET /api/permissions: the permission catalog. */
+export interface PermissionInfo {
+  key: PermissionKey;
+  scope: RoleScope;
+  /** Short UI label, e.g. "Write posts". */
+  label: string;
+  description: string;
+}
+
+export interface RoleRef {
+  id: string;
+  name: string;
+}
+
+/** GET /api/roles */
+export interface RoleDTO {
+  id: string;
+  scope: RoleScope;
+  name: string;
+  description: string | null;
+  permissions: PermissionKey[];
+  /** Built-in roles cannot be edited or deleted. */
+  builtin: boolean;
+  createdAt: number;
+  /** Users (instance roles) or memberships (workspace roles) using this role. */
+  assigned: number;
+}
+
+/** Body of POST /api/roles (PATCH takes the same fields minus `scope`, all optional). */
+export interface RoleInput {
+  scope: RoleScope;
+  name: string;
+  description?: string | null;
+  permissions: PermissionKey[];
+}
+
+export type UserStatus = "active" | "disabled";
+
+/** A workspace as seen by the current user (GET /api/me `workspaces`). */
+export interface MeWorkspace {
+  id: string;
+  name: string;
+  /** The user's membership role. Instance admins who are not members get Owner with `viaAdmin: true`. */
+  role: RoleRef;
+  /** Effective workspace permissions (all of them for instance admins). */
+  permissions: WorkspacePermission[];
+  /** Listed only because the user is an instance admin (not a member). */
+  viaAdmin?: true;
+  /** Sandboxed live-demo workspace: publishing is simulated, no accounts can be connected, no media uploaded. */
+  demo?: true;
+}
+
+/** GET /api/me */
+export interface MeDTO {
+  /** `demo`: the shared live-demo visitor (read-only profile, no API keys, demo workspace only). */
+  user: { id: string; name: string; email: string; role: RoleRef; demo?: true };
+  instancePermissions: InstancePermission[];
+  workspaces: MeWorkspace[];
+  /** Workspace used for scoped requests without an `X-Workspace-Id` header; null when the user has none. */
+  currentWorkspaceId: string | null;
+}
+
+/** GET /api/workspaces, POST /api/workspaces, PATCH /api/workspaces/:id */
+export interface WorkspaceDTO extends MeWorkspace {
+  createdAt: number;
+  memberCount: number;
+}
+
+/** GET /api/workspaces/:id/members */
+export interface MemberDTO {
+  userId: string;
+  name: string;
+  email: string;
+  status: UserStatus;
+  role: RoleRef;
+  joinedAt: number;
+  lastLoginAt: number | null;
+}
+
+/** GET /api/users (instance admins) */
+export interface UserDTO {
+  id: string;
+  name: string;
+  email: string;
+  status: UserStatus;
+  role: RoleRef;
+  workspaces: Array<{ id: string; name: string; role: RoleRef }>;
+  createdAt: number;
+  lastLoginAt: number | null;
+}
+
+/** Body of POST /api/invitations */
+export interface CreateInvitationInput {
+  /** Optional: when set, only this email can accept. */
+  email?: string | null;
+  /** Instance role of a new user (forced to Member for non-admins). */
+  instanceRoleId: string;
+  /** Existing workspace to join, or null/omitted to create a new workspace for the invitee (admins only). */
+  workspaceId?: string | null;
+  /** Required with `workspaceId`. */
+  workspaceRoleId?: string | null;
+  /** Name of the workspace created on acceptance when `workspaceId` is null. */
+  newWorkspaceName?: string | null;
+}
+
+/** Response of POST /api/invitations. The url (with its token) is only returned here. */
+export interface CreatedInvitationDTO {
+  id: string;
+  url: string;
+  expiresAt: number;
+}
+
+/** GET /api/invitations (pending only) */
+export interface InvitationDTO {
+  id: string;
+  email: string | null;
+  instanceRole: RoleRef;
+  workspaceId: string | null;
+  workspaceName: string | null;
+  workspaceRole: RoleRef | null;
+  newWorkspaceName: string | null;
+  invitedBy: { id: string; name: string } | null;
+  createdAt: number;
+  expiresAt: number;
+}
+
+/** GET /api/invitations/lookup/:token (public) */
+export interface InvitationLookupDTO {
+  email: string | null;
+  /** Existing workspace the invitee joins (null when a new workspace is created). */
+  workspaceName: string | null;
+  workspaceRole: RoleRef | null;
+  /** Workspace created for the invitee (null when joining an existing one). */
+  newWorkspaceName: string | null;
+  /** Name of the inviter. */
+  invitedBy: string;
+  expired: boolean;
+  accepted: boolean;
+}
+
+/** Body of POST /api/invitations/accept (name/email/password ignored when a signed-in user accepts). */
+export interface AcceptInvitationInput {
+  token: string;
+  name?: string;
+  email?: string;
+  password?: string;
+}
+
+/** GET /api/auth/status */
+export interface AuthStatusDTO {
+  setup: boolean;
+  authenticated: boolean;
+  /** Present (true) when the instance runs the public live demo (DEMO_MODE). */
+  demo?: true;
+  /** Present (true) before setup when the deployment has a SETUP_TOKEN secret: the setup form must send it. */
+  setupToken?: true;
+}
+
+/** Body of POST /api/auth/setup */
+export interface SetupInput {
+  name: string;
+  email: string;
+  password: string;
+  workspaceName?: string;
+  /** Required when the deployment sets the SETUP_TOKEN secret. */
+  setupToken?: string;
+}
+
+/** GET /api/keys: own keys in the current workspace (all keys of the workspace for instance admins). */
+export interface ApiKeyDTO {
+  id: string;
+  name: string;
+  prefix: string;
+  createdAt: number;
+  lastUsedAt: number | null;
+  userId: string | null;
+  userName: string | null;
+}
+
+/** Response of POST /api/keys (the token is only shown once). */
+export interface CreatedApiKeyDTO {
+  id: string;
+  token: string;
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Analytics API
+
+/** Totals over a range of published posts. Engagement rate = engagements / exposure of the posts that report one. */
+export interface AnalyticsTotals {
+  /** Posts published in the range. */
+  posts: number;
+  /** Posts that have metrics. */
+  postsWithMetrics: number;
+  views: number;
+  impressions: number;
+  reach: number;
+  engagements: number;
+  likes: number;
+  comments: number;
+  shares: number;
+  /** engagements / exposure (views, else impressions, else reach) over posts reporting an exposure; null if none. */
+  engagementRate: number | null;
+  /** Sum of the latest follower counts of the accounts (at the end of the range). */
+  followers: number | null;
+  /** Followers at the end minus followers at the start of the range (accounts with both values). */
+  followersChange: number | null;
+}
+
+export interface AnalyticsBreakdown extends AnalyticsTotals {
+  /** Provider id (provider breakdown) or account id (account breakdown). */
+  key: string;
+  provider: string;
+  /** Account breakdown only. */
+  accountId?: string;
+  name: string;
+  username?: string | null;
+}
+
+/**
+ * One day of the daily series (day = YYYY-MM-DD in `tz`). The latest metrics of each post count for the day it was
+ * published on (not the days the views happened: platforms only report lifetime totals per post).
+ */
+export interface AnalyticsDay {
+  day: string;
+  /** Posts published that day. */
+  posts: number;
+  /** Exposure of those posts: views, else impressions, else reach (per post). */
+  views: number;
+  engagements: number;
+}
+
+export interface FollowerSeries {
+  accountId: string;
+  provider: string;
+  name: string;
+  /** One point per collected UTC day. */
+  points: Array<{ day: string; followers: number }>;
+}
+
+/** GET /api/analytics/summary */
+export interface AnalyticsSummaryDTO {
+  from: number;
+  to: number;
+  tz: string;
+  totals: AnalyticsTotals;
+  /** The same totals for the period of equal length right before `from`. */
+  previous: AnalyticsTotals;
+  byProvider: AnalyticsBreakdown[];
+  byAccount: AnalyticsBreakdown[];
+  daily: AnalyticsDay[];
+  followers: FollowerSeries[];
+}
+
+/** GET /api/analytics/posts item */
+export interface AnalyticsPostDTO {
+  id: string;
+  groupId: string;
+  accountId: string;
+  provider: string;
+  accountName: string;
+  accountUsername: string | null;
+  /** First 280 characters of the content. */
+  excerpt: string;
+  /** Media ids (thumbnails: /api/media/:id). */
+  media: string[];
+  externalId: string | null;
+  externalUrl: string | null;
+  publishedAt: number;
+  /** Latest metrics, null when none collected yet. */
+  metrics: MetricValues | null;
+  metricsAt: number | null;
+  /** Next scheduled collection, null when collection stopped (older than 90 days, or too many failures). */
+  metricsNextAt: number | null;
+  engagements: number;
+  engagementRate: number | null;
+}
+
+/** GET /api/posts/:id/metrics */
+export interface PostMetricsDTO {
+  postId: string;
+  publishedAt: number | null;
+  metrics: MetricValues | null;
+  metricsAt: number | null;
+  metricsNextAt: number | null;
+  snapshots: Array<{ capturedAt: number; metrics: MetricValues }>;
+}
+
+/** Body of POST /api/analytics/refresh: exactly one of them. */
+export interface AnalyticsRefreshInput {
+  postId?: string;
+  accountId?: string;
+}
+
+/** Response of POST /api/analytics/refresh */
+export interface AnalyticsRefreshDTO {
+  /** postId refresh: the post with its updated metrics. */
+  post?: AnalyticsPostDTO;
+  /** accountId refresh: the account's analytics state, and how many of its posts were refreshed. */
+  account?: { id: string; metricsStatus: AccountMetricsStatusDTO; postsRefreshed: number };
+}

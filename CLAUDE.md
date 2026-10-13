@@ -1,0 +1,11 @@
+# Postflare
+
+Self-hosted social scheduler on Cloudflare Workers (Hono + D1 + R2 + Workflows + Images), React app in `src/`.
+
+- `npm run dev` runs Vite with the Cloudflare plugin (local Worker, D1, R2, Workflows). `npm test` runs vitest (provider tests mock `ctx.fetch`). `npm run typecheck` before committing.
+- Providers live in `worker/providers/<id>.ts` and implement the `Provider` contract in `worker/providers/types.ts`; follow `docs/provider-brief.md`. Always use `ctx.fetch` via `http.ts` helpers, never global fetch, and never buffer media: use `ctx.media.rangeStream` / `stream` / `mediaBody` (zero-copy). Must fit the Workers Free plan: ~10ms CPU and ≤40 fetches per provider call (see "Free plan budget" in the brief, `providers/budget.ts`).
+- Multi-tenant: every request handler must scope accounts/posts/post_logs/media/upload_links/api_keys/oauth_states queries by `workspace_id` (`wsId(c)`; ids of other workspaces → 404, never 403) and guard routes with `requirePermission("posts.write")` / `requireInstancePermission(...)` from `worker/lib/auth.ts` (catalog: `worker/lib/permissions.ts`). Unscoped `getPostRow`/`getAccountRow` are for workflows and cron only. Isolation/permission tests: `test/workers/` (vitest-pool-workers, real D1).
+- Schema changes: add a new `migrations/000N_*.sql`; `worker/lib/migrate.ts` applies it automatically on first request.
+- Publishing runs in `worker/workflow.ts`; every provider call is a retried workflow step, so publish/checkStatus/reply must be safe to retry and must not double-post.
+- `cli/` is the `postflare` CLI (Node 20+, built-ins only, no runtime deps): keep `cli/src/types.ts` in sync with `shared/types.ts` when API shapes change. `npm run cli:build`, `npm run cli:typecheck`; tests in `cli/test` (vitest project "cli"). `skills/postflare/SKILL.md` documents it for agents.
+- `wrangler.jsonc` stays generic (no routes/vars); personal deploy settings go in the git-ignored `wrangler.local.jsonc` (picked by `vite.config.ts`, or `WRANGLER_CONFIG`). `npm run cf-typegen` reads `wrangler.jsonc` only.

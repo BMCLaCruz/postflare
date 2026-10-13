@@ -1,0 +1,281 @@
+import { Hono } from "hono";
+import { forbidInDemoWorkspace, requirePermission, wsId, type AppEnv } from "../lib/auth";
+import { verifySignature } from "../lib/crypto";
+import { mediaDto, safeFilename, type MediaRow } from "../lib/media";
+import { baseUrl } from "../lib/settings";
+import { newId, now } from "../lib/util";
+
+export const mediaRoutes = new Hono<AppEnv>();
+
+/** The demo workspace's media library is fixed (seeded images only): no uploads, edits or deletes. */
+const noDemo = forbidInDemoWorkspace("Changing media");
+
+/** Max single-request upload; bigger files use the multipart endpoints (Workers cap request bodies at 100MB). */
+export const SINGLE_UPLOAD_MAX = 90 * 1024 * 1024;
+export const PART_SIZE = 50 * 1024 * 1024;
+const MAX_FILE = 5 * 1024 * 1024 * 1024;
+
+const ALLOWED = /^(image\/(jpeg|png|gif|webp|heic|heif|avif)|video\/(mp4|quicktime|webm|x-m4v|mpeg))$/;
+
+function kindOf(mime: string): "image" | "video" {
+  return mime.startsWith("video/") ? "video" : "image";
+}
+
+export interface Meta {
+  filename: string;
+  mime: string;
+  size: number;
+  width?: number | null;
+  height?: number | null;
+  duration?: number | null;
+  alt?: string | null;
+}
+
+export function checkMeta(m: Meta): string | null {
+  if (!m.filename) return "filename is required";
+  if (!ALLOWED.test(m.mime)) return `Unsupported file type ${m.mime}`;
+  if (!(m.size > 0) || m.size > MAX_FILE) return "Invalid file size";
+  return null;
+}
+
+export interface MediaOwner {
+  workspaceId: string;
+  /** User id (null for media uploaded through an upload link whose creator is unknown). */
+  userId: string | null;
+}
+
+export async function insertMedia(
+  env: Env,
+  id: string,
+  key: string,
+  m: Meta,
+  status: "ready" | "uploading",
+  uploadId: string | null,
+  owner: MediaOwner,
+) {
+  await env.DB.prepare(
+    `INSERT INTO media (id, r2_key, filename, mime, size, kind, width, height, duration, alt, status, upload_id, created_at, workspace_id, created_by)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  )
+    .bind(id, key, m.filename, m.mime, m.size, kindOf(m.mime), m.width ?? null, m.height ?? null, m.duration ?? null, m.alt ?? null, status, uploadId, now(), owner.workspaceId, owner.userId)
+    .run();
+}
+
+/** DTO of a media item of the workspace, or null when it is not there. */
+export async function dto(c: { env: Env; req: { url: string } }, workspaceId: string, id: string) {
+  const row = await c.env.DB.prepare("SELECT * FROM media WHERE id = ? AND workspace_id = ?").bind(id, workspaceId).first<MediaRow>();
+  return row ? mediaDto(c.env, await baseUrl(c.env, c.req.url), row) : null;
+}
+
+const owner = (c: { var: AppEnv["Variables"] }): MediaOwner => ({ workspaceId: c.var.workspace!.id, userId: c.var.user.id });
+
+mediaRoutes.get("/media", requirePermission("media.read"), async (c) => {
+  const limit = Math.min(Number(c.req.query("limit")) || 60, 200);
+  const before = Number(c.req.query("before")) || Number.MAX_SAFE_INTEGER;
+  const { results } = await c.env.DB.prepare(
+    "SELECT * FROM media WHERE workspace_id = ? AND status = 'ready' AND created_at < ? ORDER BY created_at DESC LIMIT ?",
+  )
+    .bind(wsId(c), before, limit)
+    .all<MediaRow>();
+  const base = await baseUrl(c.env, c.req.url);
+  return c.json(await Promise.all(results.map((r) => mediaDto(c.env, base, r))));
+});
+
+/** Single request upload. Raw body; metadata in headers. */
+mediaRoutes.post("/media", requirePermission("media.write"), noDemo, async (c) => {
+  const meta: Meta = {
+    filename: safeDecode(c.req.header("x-filename") ?? ""),
+    mime: (c.req.header("content-type") ?? "").split(";")[0],
+    size: Number(c.req.header("content-length") ?? 0),
+    width: num(c.req.header("x-width")),
+    height: num(c.req.header("x-height")),
+    duration: num(c.req.header("x-duration")),
+  };
+  const err = checkMeta(meta);
+  if (err) return c.json({ error: err }, 400);
+  if (meta.size > SINGLE_UPLOAD_MAX) return c.json({ error: "File too large for a single upload, use multipart" }, 413);
+  const id = newId("med_");
+  const key = `${id}/${safeFilename(meta.filename)}`;
+  await c.env.MEDIA.put(key, c.req.raw.body, { httpMetadata: { contentType: meta.mime } });
+  await insertMedia(c.env, id, key, meta, "ready", null, owner(c));
+  return c.json(await dto(c, wsId(c), id));
+});
+
+/** Import a file from a URL (handy for the API / MCP). */
+mediaRoutes.post("/media/from-url", requirePermission("media.write"), noDemo, async (c) => {
+  const { url, filename, alt } = await c.req.json<{ url: string; filename?: string; alt?: string }>();
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return c.json({ error: "Invalid url" }, 400);
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return c.json({ error: "Invalid url" }, 400);
+  const res = await fetch(parsed.toString(), { redirect: "follow" });
+  if (!res.ok || !res.body) return c.json({ error: `Download failed: ${res.status}` }, 400);
+  const length = res.headers.get("content-length");
+  const meta: Meta = {
+    filename: typeof filename === "string" && filename ? filename : safeDecode(parsed.pathname.split("/").pop() || "file"),
+    mime: (res.headers.get("content-type") ?? "").split(";")[0],
+    size: Number(length ?? 1),
+    alt: typeof alt === "string" ? alt : null,
+  };
+  const err = checkMeta(meta);
+  if (err) {
+    await res.body.cancel();
+    return c.json({ error: err }, 400);
+  }
+  // R2 needs a known length for streams; buffer when the server did not send one, within the Worker's memory.
+  const body = length ? res.body : await readAtMost(res.body, SINGLE_UPLOAD_MAX);
+  if (!body) return c.json({ error: `The server did not send a Content-Length and the file is over ${SINGLE_UPLOAD_MAX / 1024 / 1024}MB` }, 413);
+  const id = newId("med_");
+  const key = `${id}/${safeFilename(meta.filename)}`;
+  const obj = await c.env.MEDIA.put(key, body, { httpMetadata: { contentType: meta.mime } });
+  await insertMedia(c.env, id, key, { ...meta, size: obj?.size ?? meta.size }, "ready", null, owner(c));
+  return c.json(await dto(c, wsId(c), id));
+});
+
+mediaRoutes.post("/media/multipart", requirePermission("media.write"), noDemo, async (c) => {
+  const meta = await c.req.json<Meta>();
+  const err = checkMeta(meta);
+  if (err) return c.json({ error: err }, 400);
+  const id = newId("med_");
+  const key = `${id}/${safeFilename(meta.filename)}`;
+  const upload = await c.env.MEDIA.createMultipartUpload(key, { httpMetadata: { contentType: meta.mime } });
+  await insertMedia(c.env, id, key, meta, "uploading", upload.uploadId, owner(c));
+  return c.json({ id, partSize: PART_SIZE, parts: Math.ceil(meta.size / PART_SIZE) });
+});
+
+export async function multipart(env: Env, workspaceId: string, id: string) {
+  const row = await env.DB.prepare("SELECT r2_key, upload_id FROM media WHERE id = ? AND workspace_id = ? AND status = 'uploading'")
+    .bind(id, workspaceId)
+    .first<{ r2_key: string; upload_id: string }>();
+  return row ? env.MEDIA.resumeMultipartUpload(row.r2_key, row.upload_id) : null;
+}
+
+mediaRoutes.put("/media/multipart/:id/:part", requirePermission("media.write"), noDemo, async (c) => {
+  const upload = await multipart(c.env, wsId(c), c.req.param("id"));
+  if (!upload) return c.json({ error: "Upload not found" }, 404);
+  if (!c.req.raw.body) return c.json({ error: "Empty part" }, 400);
+  const part = await upload.uploadPart(Number(c.req.param("part")), c.req.raw.body);
+  return c.json(part);
+});
+
+mediaRoutes.post("/media/multipart/:id/complete", requirePermission("media.write"), noDemo, async (c) => {
+  const id = c.req.param("id");
+  const upload = await multipart(c.env, wsId(c), id);
+  if (!upload) return c.json({ error: "Upload not found" }, 404);
+  const { parts } = await c.req.json<{ parts: R2UploadedPart[] }>();
+  const obj = await upload.complete(parts.sort((a, b) => a.partNumber - b.partNumber));
+  await c.env.DB.prepare("UPDATE media SET status = 'ready', upload_id = NULL, size = ? WHERE id = ? AND workspace_id = ?")
+    .bind(obj.size, id, wsId(c))
+    .run();
+  return c.json(await dto(c, wsId(c), id));
+});
+
+mediaRoutes.patch("/media/:id", requirePermission("media.write"), noDemo, async (c) => {
+  const { alt } = await c.req.json<{ alt: string | null }>();
+  await c.env.DB.prepare("UPDATE media SET alt = ? WHERE id = ? AND workspace_id = ?").bind(typeof alt === "string" && alt ? alt.slice(0, 5000) : null, c.req.param("id"), wsId(c)).run();
+  const item = await dto(c, wsId(c), c.req.param("id"));
+  return item ? c.json(item) : c.json({ error: "Not found" }, 404);
+});
+
+mediaRoutes.delete("/media/:id", requirePermission("media.write"), noDemo, async (c) => {
+  const row = await c.env.DB.prepare("SELECT r2_key, upload_id, status FROM media WHERE id = ? AND workspace_id = ?")
+    .bind(c.req.param("id"), wsId(c))
+    .first<{ r2_key: string; upload_id: string | null; status: string }>();
+  if (!row) return c.json({ error: "Not found" }, 404);
+  if (row.status === "uploading" && row.upload_id) {
+    await c.env.MEDIA.resumeMultipartUpload(row.r2_key, row.upload_id).abort().catch(() => {});
+  } else {
+    await c.env.MEDIA.delete(row.r2_key);
+  }
+  await c.env.DB.prepare("DELETE FROM media WHERE id = ? AND workspace_id = ?").bind(c.req.param("id"), wsId(c)).run();
+  return c.json({ ok: true });
+});
+
+/** decodeURIComponent that keeps malformed input as is (instead of throwing a 500). */
+export function safeDecode(v: string): string {
+  try {
+    return decodeURIComponent(v);
+  } catch {
+    return v;
+  }
+}
+
+/** Reads a stream into memory, or returns null (and cancels it) once it exceeds `max` bytes. */
+async function readAtMost(stream: ReadableStream<Uint8Array>, max: number): Promise<Uint8Array | null> {
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > max) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out;
+}
+
+export function num(v: string | undefined): number | null {
+  const n = Number(v);
+  return v && Number.isFinite(n) ? n : null;
+}
+
+/** Public media: /m/:id/:signature/:filename — platforms download attachments from here. */
+export const publicMedia = new Hono<AppEnv>();
+
+publicMedia.on(["GET", "HEAD"], "/:id/:sig/:name?", async (c) => {
+  const id = c.req.param("id");
+  if (!(await verifySignature(c.env, `media:${id}`, c.req.param("sig")))) return c.text("Not found", 404);
+  const row = await c.env.DB.prepare("SELECT r2_key, mime FROM media WHERE id = ? AND status = 'ready'")
+    .bind(id)
+    .first<{ r2_key: string; mime: string }>();
+  if (!row) return c.text("Not found", 404);
+
+  const headers = new Headers({
+    "content-type": row.mime,
+    "accept-ranges": "bytes",
+    "cache-control": "public, max-age=31536000, immutable",
+  });
+  if (c.req.method === "HEAD") {
+    const head = await c.env.MEDIA.head(row.r2_key);
+    if (!head) return c.text("Not found", 404);
+    headers.set("content-length", String(head.size));
+    headers.set("etag", head.httpEtag);
+    return new Response(null, { headers });
+  }
+  let obj: R2Object | R2ObjectBody | null;
+  try {
+    obj = await c.env.MEDIA.get(row.r2_key, { range: c.req.raw.headers, onlyIf: c.req.raw.headers });
+  } catch (err) {
+    // R2 rejects ranges past the end of the object.
+    if (!c.req.header("range")) throw err;
+    const head = await c.env.MEDIA.head(row.r2_key);
+    return new Response(null, { status: 416, headers: head ? { "content-range": `bytes */${head.size}` } : {} });
+  }
+  if (!obj) return c.text("Not found", 404);
+  headers.set("etag", obj.httpEtag);
+  if (!("body" in obj)) return new Response(null, { status: 304, headers });
+  const range = obj.range as { offset?: number; length?: number; suffix?: number } | undefined;
+  if (range && c.req.header("range")) {
+    // Clamp: the requested range may extend past the end of the object.
+    const offset = range.suffix !== undefined ? Math.max(obj.size - range.suffix, 0) : range.offset ?? 0;
+    const length = Math.min(range.suffix ?? range.length ?? obj.size - offset, obj.size - offset);
+    headers.set("content-range", `bytes ${offset}-${offset + length - 1}/${obj.size}`);
+    headers.set("content-length", String(length));
+    return new Response(obj.body, { status: 206, headers });
+  }
+  headers.set("content-length", String(obj.size));
+  return new Response(obj.body, { headers });
+});

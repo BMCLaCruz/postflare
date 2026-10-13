@@ -1,0 +1,44 @@
+// Personal deployment config. Copy to wrangler.local.jsonc (git-ignored) and edit:
+//   cp wrangler.local.example.jsonc wrangler.local.jsonc
+// When wrangler.local.jsonc exists, `npm run dev` / `npm run build` / `npm run deploy` use it instead of
+// wrangler.jsonc (or point WRANGLER_CONFIG at any other file). It is a full config, not a patch: keep it in sync with
+// wrangler.jsonc when that changes. Keep the name, binding names, database_name, bucket_name and workflow name as they
+// are unless you know what you are doing: existing Cloudflare resources are matched by these names.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "postflare",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+
+  // Serve only on your own domain (the zone must be on your Cloudflare account). Remove these two lines to keep the
+  // *.workers.dev URL and preview URLs as well.
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [{ "pattern": "social.example.com", "custom_domain": true }],
+
+  "vars": {
+    // Public URL used for OAuth redirects, media links and the CLI hints. Locks the Settings field when set.
+    "PUBLIC_URL": "https://social.example.com",
+    // "true" hosts the public, sandboxed live demo at /demo. Leave it out unless you really want a public demo.
+    "DEMO_MODE": "false"
+  },
+
+  "assets": {
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/", "/demo", "/api/*", "/oauth/*", "/m/*", "/u/*", "/mcp", "/mcp/*"]
+  },
+  "d1_databases": [
+    { "binding": "DB", "database_name": "postflare", "migrations_dir": "migrations" }
+  ],
+  "r2_buckets": [
+    { "binding": "MEDIA", "bucket_name": "postflare-media" }
+  ],
+  "workflows": [
+    { "name": "postflare-publish", "binding": "PUBLISH_WORKFLOW", "class_name": "PublishWorkflow" }
+  ],
+  "images": { "binding": "IMAGES" },
+  "triggers": { "crons": ["*/15 * * * *"] }
+}

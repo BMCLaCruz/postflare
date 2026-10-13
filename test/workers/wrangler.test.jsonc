@@ -1,0 +1,16 @@
+// Bindings for the worker integration tests (vitest.workers.config.ts): wrangler.jsonc minus assets/routes/images.
+{
+  "name": "postflare-test",
+  "main": "../../worker/index.ts",
+  "compatibility_date": "2026-03-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "d1_databases": [
+    { "binding": "DB", "database_name": "postflare", "database_id": "test" },
+    { "binding": "LEGACY_DB", "database_name": "postflare-legacy", "database_id": "legacy" },
+    { "binding": "DEMO_DB", "database_name": "postflare-demo", "database_id": "demo" },
+    { "binding": "ANALYTICS_DB", "database_name": "postflare-analytics", "database_id": "analytics" },
+    { "binding": "SECURITY_DB", "database_name": "postflare-security", "database_id": "security" }
+  ],
+  "r2_buckets": [{ "binding": "MEDIA", "bucket_name": "postflare-media" }],
+  "workflows": [{ "name": "postflare-publish", "binding": "PUBLISH_WORKFLOW", "class_name": "PublishWorkflow" }]
+}

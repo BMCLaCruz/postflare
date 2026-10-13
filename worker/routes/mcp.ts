@@ -1,0 +1,495 @@
+import { Hono } from "hono";
+import {
+  engagements,
+  exposure,
+  type AccountDTO,
+  type AnalyticsBreakdown,
+  type AnalyticsPostDTO,
+  type AnalyticsSummaryDTO,
+  type AnalyticsTotals,
+  type MetricValues,
+} from "../../shared/types";
+import { apiKeyUser, type AppEnv } from "../lib/auth";
+
+/**
+ * Minimal MCP server (Streamable HTTP, JSON responses) so AI agents can schedule posts.
+ * Authenticate with an API key: `Authorization: Bearer pf_...`. The key is bound to one workspace and acts with its
+ * user's permissions there. Every tool is a thin wrapper over the REST API, called in-process with the same key,
+ * so workspace scoping and permission checks are the REST API's.
+ */
+export function mcpRoutes(api: { fetch: (req: Request, env: Env, ctx: ExecutionContext) => Response | Promise<Response> }) {
+  const mcp = new Hono<AppEnv>();
+
+  const call = async (c: any, method: string, path: string, body?: unknown): Promise<any> => {
+    const req = new Request(new URL(`/api${path}`, c.req.url), {
+      method,
+      headers: { authorization: c.req.header("authorization") ?? "", "content-type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const res = await api.fetch(req, c.env, c.executionCtx);
+    const data = await res.json().catch(() => null);
+    if (!res.ok) throw new Error((data as any)?.error ?? `HTTP ${res.status}`);
+    return data;
+  };
+
+  /**
+   * One URL path segment from a tool argument. Without encoding, an id like "../keys" or "x#" (e.g. from a prompt
+   * injection) would reach other REST routes than the tool's (DELETE /api/workspaces/..., POST /api/keys...).
+   */
+  const seg = (v: unknown) => {
+    const s = String(v ?? "");
+    if (!s || s === "." || s === "..") throw new Error(`Invalid id: ${s}`);
+    return encodeURIComponent(s);
+  };
+
+  const toMs = (v: unknown) => {
+    if (v === "now" || v === null || v === undefined) return v ?? null;
+    const ms = Date.parse(String(v));
+    // NaN would serialize to null and silently create a draft.
+    if (!Number.isFinite(ms)) throw new Error(`Invalid scheduledAt: ${String(v)} (use an ISO date, "now" or null)`);
+    return ms;
+  };
+
+  /** from/to of analytics tools: ISO date, ms timestamp or relative ("7d", "12h", "30m" ago). */
+  const when = (v: unknown, name: string): number | undefined => {
+    if (v === undefined || v === null || v === "") return undefined;
+    const s = String(v).trim();
+    const rel = /^(\d+(?:\.\d+)?)\s*(m|h|d|w)$/i.exec(s);
+    if (rel) return Date.now() - Number(rel[1]) * { m: 60_000, h: 3_600_000, d: 86_400_000, w: 604_800_000 }[rel[2].toLowerCase() as "m"];
+    const ms = /^\d{10,}$/.test(s) ? Number(s) : Date.parse(s);
+    if (!Number.isFinite(ms)) throw new Error(`Invalid ${name}: ${s} (use an ISO date or a relative time like "7d")`);
+    return ms;
+  };
+
+  const analyticsQuery = (a: any) => {
+    const q = new URLSearchParams();
+    const from = when(a.from, "from");
+    const to = when(a.to, "to");
+    if (from !== undefined) q.set("from", String(from));
+    if (to !== undefined) q.set("to", String(to));
+    if (a.accountId) q.set("accountId", a.accountId);
+    if (a.provider) q.set("provider", a.provider);
+    return q;
+  };
+
+  const tools: Record<string, { description: string; inputSchema: object; run: (c: any, a: any) => Promise<unknown> }> = {
+    list_platforms: {
+      description:
+        "List supported platforms with their capabilities (max length, media limits, threads) and per-post settings fields.",
+      inputSchema: { type: "object", properties: {} },
+      run: async (c) =>
+        (await call(c, "GET", "/providers")).map((p: any) => ({
+          id: p.id,
+          name: p.name,
+          configured: p.configured,
+          capabilities: p.capabilities,
+          settingsFields: p.settingsFields,
+        })),
+    },
+    list_accounts: {
+      description:
+        "List connected social accounts. Use the account id when creating posts. `status` is the publishing state; " +
+        "`analytics` is the analytics collection state (ok, pending, reconnect_required, not_supported, error) and `followers` the latest follower count.",
+      inputSchema: { type: "object", properties: {} },
+      run: async (c) => ((await call(c, "GET", "/accounts")) as any[]).map(compactAccount),
+    },
+    get_account_options: {
+      description: "Load choices for a dynamic settings field of an account (e.g. Pinterest boards, subreddits, Discord channels).",
+      inputSchema: {
+        type: "object",
+        properties: { accountId: { type: "string" }, key: { type: "string" }, settings: { type: "object" } },
+        required: ["accountId", "key"],
+      },
+      run: (c, a) =>
+        call(c, "GET", `/accounts/${seg(a.accountId)}/options/${seg(a.key)}?settings=${encodeURIComponent(JSON.stringify(a.settings ?? {}))}`),
+    },
+    upload_media_from_url: {
+      description: "Import an image or video from a public URL into the media library. Returns the media id to attach to posts.",
+      inputSchema: {
+        type: "object",
+        properties: { url: { type: "string" }, filename: { type: "string" }, alt: { type: "string" } },
+        required: ["url"],
+      },
+      run: (c, a) => call(c, "POST", "/media/from-url", a),
+    },
+    create_upload_link: {
+      description:
+        "Create a one-time upload link for media that is not at a public URL (e.g. files the user attached in chat or has on their phone). " +
+        "Either give `pageUrl` to the user (they open it and pick photos/videos), or, if you can run code with network access, " +
+        "PUT the raw bytes to `putUrl` with headers Content-Type and X-Filename (max 90MB per request). " +
+        "Then call get_upload_link to get the media ids.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          note: { type: "string", description: "Shown on the upload page, e.g. what to upload." },
+          expiresMinutes: { type: "number", description: "Default 120." },
+        },
+      },
+      run: (c, a) => call(c, "POST", "/upload-links", a),
+    },
+    get_upload_link: {
+      description: "List the media uploaded through an upload link (ids to attach to posts).",
+      inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+      run: (c, a) => call(c, "GET", `/upload-links/${seg(a.id)}`),
+    },
+    list_media: {
+      description: "List the media library (newest first).",
+      inputSchema: { type: "object", properties: { limit: { type: "number" } } },
+      run: (c, a) => call(c, "GET", `/media?limit=${encodeURIComponent(String(a.limit ?? 30))}`),
+    },
+    create_post: {
+      description:
+        "Create a post on one or more accounts. `scheduledAt` is an ISO date, \"now\" to publish immediately, or null for a draft. Per-account `content`, `settings`, `media` and `thread` override the shared values.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          scheduledAt: { type: ["string", "null"] },
+          content: { type: "string" },
+          media: { type: "array", items: { type: "string" } },
+          thread: {
+            type: "array",
+            items: { type: "object", properties: { content: { type: "string" }, media: { type: "array", items: { type: "string" } } } },
+          },
+          accounts: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                accountId: { type: "string" },
+                content: { type: "string" },
+                media: { type: "array", items: { type: "string" } },
+                settings: { type: "object" },
+                thread: { type: "array", items: { type: "object" } },
+              },
+              required: ["accountId"],
+            },
+          },
+        },
+        required: ["accounts"],
+      },
+      run: (c, a) =>
+        call(c, "POST", "/posts", {
+          scheduledAt: toMs(a.scheduledAt),
+          posts: a.accounts.map((x: any) => ({
+            accountId: x.accountId,
+            content: x.content ?? a.content ?? "",
+            media: x.media ?? a.media ?? [],
+            settings: x.settings ?? {},
+            thread: x.thread ?? a.thread ?? [],
+          })),
+        }),
+    },
+    list_posts: {
+      description: "List posts, optionally filtered by ISO date range, status (comma separated) or account.",
+      inputSchema: {
+        type: "object",
+        properties: { from: { type: "string" }, to: { type: "string" }, status: { type: "string" }, accountId: { type: "string" } },
+      },
+      run: (c, a) => {
+        const q = new URLSearchParams();
+        if (a.from) q.set("from", String(Date.parse(a.from)));
+        if (a.to) q.set("to", String(Date.parse(a.to)));
+        if (a.status) q.set("status", a.status);
+        if (a.accountId) q.set("accountId", a.accountId);
+        return call(c, "GET", `/posts?${q}`);
+      },
+    },
+    get_post: {
+      description: "Get a post with its publishing log.",
+      inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+      run: (c, a) => call(c, "GET", `/posts/${seg(a.id)}`),
+    },
+    update_post: {
+      description: "Edit a draft, scheduled or failed post. `scheduledAt`: ISO date, \"now\", or null for draft.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          content: { type: "string" },
+          media: { type: "array", items: { type: "string" } },
+          settings: { type: "object" },
+          thread: { type: "array", items: { type: "object" } },
+          scheduledAt: { type: ["string", "null"] },
+        },
+        required: ["id"],
+      },
+      run: (c, { id, scheduledAt, ...rest }) =>
+        call(c, "PATCH", `/posts/${seg(id)}`, { ...rest, ...(scheduledAt !== undefined ? { scheduledAt: toMs(scheduledAt) } : {}) }),
+    },
+    cancel_post: {
+      description: "Cancel a scheduled post.",
+      inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+      run: (c, a) => call(c, "POST", `/posts/${seg(a.id)}/cancel`),
+    },
+    retry_post: {
+      description: "Retry a failed post now.",
+      inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+      run: (c, a) => call(c, "POST", `/posts/${seg(a.id)}/retry`),
+    },
+    get_analytics_summary: {
+      description:
+        "Analytics of the posts PUBLISHED in a range (default: last 30 days): totals (views, impressions, reach, engagements, " +
+        "engagement rate in %), change vs the previous period of equal length, per platform, per account, posts per day and follower growth. " +
+        "`from`/`to`: ISO date or relative (\"7d\", \"30d\", \"12h\" = that long ago). A post's metrics count for the day it was published.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          from: { type: "string", description: "ISO date or relative like \"7d\" (default 30d)." },
+          to: { type: "string", description: "ISO date or relative (default now)." },
+          accountId: { type: "string" },
+          provider: { type: "string", description: "Platform id, e.g. instagram_standalone, tiktok, youtube." },
+        },
+      },
+      run: async (c, a) => compactSummary(await call(c, "GET", `/analytics/summary?${analyticsQuery(a)}`)),
+    },
+    get_top_posts: {
+      description:
+        "Published posts of a range with their latest metrics, best first. `sort`: views (views, else impressions, else reach), " +
+        "engagements, engagementRate or publishedAt (newest first). `limit` ≤ 50 (default 10).",
+      inputSchema: {
+        type: "object",
+        properties: {
+          from: { type: "string", description: "ISO date or relative like \"7d\" (default 30d)." },
+          to: { type: "string" },
+          accountId: { type: "string" },
+          provider: { type: "string" },
+          sort: { type: "string", enum: ["views", "engagements", "engagementRate", "publishedAt"] },
+          limit: { type: "number" },
+        },
+      },
+      run: async (c, a) => {
+        const q = analyticsQuery(a);
+        q.set("sort", a.sort ?? "views");
+        q.set("limit", String(Math.min(Math.max(Number(a.limit) || 10, 1), 50)));
+        return ((await call(c, "GET", `/analytics/posts?${q}`)) as any[]).map(compactPost);
+      },
+    },
+    get_post_metrics: {
+      description: "Latest metrics of a published post and the series of snapshots collected over time (~1h, 24h, 3d, 7d, 30d, then weekly).",
+      inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+      run: async (c, a) => {
+        const m = await call(c, "GET", `/posts/${seg(a.id)}/metrics`);
+        const rate = rateOf(m.metrics);
+        return drop({
+          postId: m.postId,
+          publishedAt: iso(m.publishedAt),
+          metrics: m.metrics ?? null,
+          engagements: m.metrics ? engagements(m.metrics) : undefined,
+          engagementRatePct: rate,
+          metricsAt: iso(m.metricsAt),
+          nextCollectionAt: iso(m.metricsNextAt),
+          snapshots: m.snapshots.map((s: any) => ({ at: iso(s.capturedAt), ...s.metrics })),
+        });
+      },
+    },
+    refresh_metrics: {
+      description:
+        "Collect metrics now instead of waiting for the next scheduled collection: either one published post (`postId`) or an account " +
+        "(`accountId`: its follower metrics and its due posts). Repeated refreshes within a minute return the stored values.",
+      inputSchema: { type: "object", properties: { postId: { type: "string" }, accountId: { type: "string" } } },
+      run: async (c, a) => {
+        if (!!a.postId === !!a.accountId) throw new Error("Give either postId or accountId");
+        const r = await call(c, "POST", "/analytics/refresh", a.postId ? { postId: a.postId } : { accountId: a.accountId });
+        if (r.post) return { post: compactPost(r.post) };
+        return {
+          account: drop({
+            id: r.account.id,
+            analytics: r.account.metricsStatus.status,
+            message: r.account.metricsStatus.message ?? undefined,
+            metrics: r.account.metricsStatus.metrics ?? undefined,
+            postsRefreshed: r.account.postsRefreshed,
+          }),
+        };
+      },
+    },
+    delete_post: {
+      description: "Delete a post from Postflare (does not delete it from the platform).",
+      inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+      run: (c, a) => call(c, "DELETE", `/posts/${seg(a.id)}`),
+    },
+  };
+
+  mcp.get("/", (c) => c.json({ error: "Use POST (MCP Streamable HTTP)" }, 405));
+
+  mcp.post("/", async (c) => {
+    if (!(await apiKeyUser(c.env, c.req.header("authorization")))) {
+      return c.json({ jsonrpc: "2.0", id: null, error: { code: -32001, message: "Unauthorized: use an API key" } }, 401);
+    }
+    let payload: unknown;
+    try {
+      payload = await c.req.json();
+    } catch {
+      return c.json({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } }, 400);
+    }
+    const handle = async (msg: any) => {
+      if (!msg || typeof msg !== "object") return { jsonrpc: "2.0", id: null, error: { code: -32600, message: "Invalid request" } };
+      const reply = (result: unknown) => ({ jsonrpc: "2.0", id: msg.id, result });
+      const fail = (code: number, message: string) => ({ jsonrpc: "2.0", id: msg.id, error: { code, message } });
+      if (msg.id === undefined || msg.method === undefined) return null; // notification or client response
+      switch (msg.method) {
+        case "initialize":
+          return reply({
+            protocolVersion: msg.params?.protocolVersion ?? "2025-06-18",
+            capabilities: { tools: {} },
+            serverInfo: { name: "postflare", version: "1.0.0" },
+            instructions:
+              "Schedule social posts and read their analytics. This API key works in one Postflare workspace: you only see and change its accounts, posts and media, " +
+              "and only what the key's user is allowed to (tools return a permission error otherwise). Typical flow: list_accounts -> attach media -> create_post. Check list_platforms for limits and required settings. " +
+              "Media from a public URL: upload_media_from_url. Files attached in chat or on the user's device: create_upload_link " +
+              "(user opens pageUrl, or your code sandbox PUTs bytes to putUrl), then get_upload_link. " +
+              "Local files from a terminal agent (up to 90MB): POST the raw bytes to <this server>/api/media with headers " +
+              "`Authorization: Bearer <same API key>`, `Content-Type: <mime>`, `X-Filename: <name>` (optionally X-Width/X-Height/X-Duration), " +
+              "e.g. `curl --data-binary @clip.mp4 -H 'Content-Type: video/mp4' -H 'X-Filename: clip.mp4' -H 'Authorization: Bearer pf_...' https://<host>/api/media`; the JSON response has the media id. " +
+              "Analytics: get_analytics_summary (KPIs, change vs previous period, per platform/account, followers), get_top_posts, " +
+              "get_post_metrics, refresh_metrics. Metrics are collected ~1h, 24h, 3d, 7d and 30d after publishing; accounts whose " +
+              "`analytics` is reconnect_required must be reconnected in the app to grant analytics permissions.",
+          });
+        case "ping":
+          return reply({});
+        case "tools/list":
+          return reply({
+            tools: Object.entries(tools).map(([name, t]) => ({ name, description: t.description, inputSchema: t.inputSchema })),
+          });
+        case "tools/call": {
+          const tool = tools[msg.params?.name];
+          if (!tool) return fail(-32602, `Unknown tool ${msg.params?.name}`);
+          try {
+            const result = await tool.run(c, msg.params.arguments ?? {});
+            return reply({ content: [{ type: "text", text: JSON.stringify(result, null, 2) }] });
+          } catch (err) {
+            return reply({ content: [{ type: "text", text: (err as Error).message }], isError: true });
+          }
+        }
+        default:
+          return fail(-32601, `Method not found: ${msg.method}`);
+      }
+    };
+    if (Array.isArray(payload)) {
+      const out = (await Promise.all(payload.map(handle))).filter(Boolean);
+      return out.length ? c.json(out) : c.body(null, 202);
+    }
+    const out = await handle(payload);
+    return out ? c.json(out) : c.body(null, 202);
+  });
+
+  return mcp;
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Compact, LLM-friendly shapes of the analytics DTOs (ISO dates, rates in %, rounded, no nulls/empty arrays).
+
+const iso = (ms: number | null | undefined) => (typeof ms === "number" ? new Date(ms).toISOString() : undefined);
+const pct = (r: number | null | undefined) => (typeof r === "number" ? Math.round(r * 10000) / 100 : undefined);
+const round = (n: number) => Math.round(n * 100) / 100;
+
+/** Drops undefined/null values and empty arrays. */
+function drop<T extends Record<string, unknown>>(o: T): Partial<T> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(o)) {
+    if (v === undefined || v === null || (Array.isArray(v) && !v.length)) continue;
+    out[k] = v;
+  }
+  return out as Partial<T>;
+}
+
+const rateOf = (m: MetricValues | null | undefined) => {
+  const e = exposure(m);
+  return m && e ? pct(engagements(m) / e) : undefined;
+};
+
+function compactTotals(t: AnalyticsTotals) {
+  return drop({
+    posts: t.posts,
+    postsWithMetrics: t.postsWithMetrics,
+    views: t.views || undefined,
+    impressions: t.impressions || undefined,
+    reach: t.reach || undefined,
+    engagements: t.engagements,
+    likes: t.likes || undefined,
+    comments: t.comments || undefined,
+    shares: t.shares || undefined,
+    engagementRatePct: pct(t.engagementRate),
+    followers: t.followers,
+    followersChange: t.followersChange,
+  });
+}
+
+/** Change of each total vs the previous period: absolute and % (when the previous value is not 0). */
+function deltas(cur: AnalyticsTotals, prev: AnalyticsTotals) {
+  const out: Record<string, string> = {};
+  for (const k of ["posts", "views", "impressions", "reach", "engagements", "followers"] as const) {
+    const a = cur[k] ?? 0;
+    const b = prev[k] ?? 0;
+    if (!a && !b) continue;
+    const d = a - b;
+    out[k] = `${d >= 0 ? "+" : ""}${d}${b ? ` (${d >= 0 ? "+" : ""}${round((d / b) * 100)}%)` : ""}`;
+  }
+  if (cur.engagementRate !== null && prev.engagementRate !== null) {
+    const d = pct(cur.engagementRate - prev.engagementRate)!;
+    out.engagementRatePct = `${d >= 0 ? "+" : ""}${d} pts`;
+  }
+  return out;
+}
+
+function compactBreakdown(b: AnalyticsBreakdown) {
+  return drop({
+    ...(b.accountId ? { accountId: b.accountId, name: b.name, username: b.username ?? undefined, provider: b.provider } : { provider: b.provider, name: b.name }),
+    ...compactTotals(b),
+  });
+}
+
+function compactSummary(s: AnalyticsSummaryDTO) {
+  return drop({
+    range: { from: iso(s.from), to: iso(s.to), tz: s.tz },
+    totals: compactTotals(s.totals),
+    previousPeriod: compactTotals(s.previous),
+    change: deltas(s.totals, s.previous),
+    byProvider: s.byProvider.map(compactBreakdown),
+    byAccount: s.byAccount.map(compactBreakdown),
+    // Only the days something was published (the rest are all zeros).
+    daily: s.daily.filter((d) => d.posts > 0),
+    followers: s.followers.map((f) => {
+      const first = f.points[0]?.followers;
+      const last = f.points[f.points.length - 1]?.followers;
+      return { accountId: f.accountId, name: f.name, provider: f.provider, start: first, end: last, change: last - first, days: f.points.length };
+    }),
+  });
+}
+
+function compactPost(p: AnalyticsPostDTO) {
+  const m = p.metrics ?? {};
+  const { extra: _extra, ...values } = m;
+  const nonZero = Object.fromEntries(Object.entries(values).filter(([, v]) => typeof v === "number" && v !== 0));
+  const excerpt = Array.from(p.excerpt.replace(/\s+/g, " ").trim());
+  return drop({
+    id: p.id,
+    accountId: p.accountId,
+    account: p.accountUsername ? `${p.accountName} (@${p.accountUsername.replace(/^@/, "")})` : p.accountName,
+    provider: p.provider,
+    publishedAt: iso(p.publishedAt),
+    excerpt: excerpt.length > 140 ? excerpt.slice(0, 139).join("") + "…" : excerpt.join(""),
+    url: p.externalUrl ?? undefined,
+    views: exposure(p.metrics) ?? undefined,
+    engagements: p.metrics ? p.engagements : undefined,
+    engagementRatePct: pct(p.engagementRate),
+    metrics: p.metrics ? nonZero : undefined,
+    metricsAt: iso(p.metricsAt),
+    note: p.metrics ? undefined : "no metrics collected yet",
+  });
+}
+
+function compactAccount(a: AccountDTO) {
+  const ms = a.metricsStatus;
+  return drop({
+    id: a.id,
+    provider: a.provider,
+    name: a.name,
+    username: a.username,
+    status: a.status,
+    statusMessage: a.statusMessage,
+    profileUrl: a.profileUrl,
+    followers: ms?.metrics?.followers,
+    analytics: ms?.status,
+    analyticsMessage: ms && (ms.status === "reconnect_required" || ms.status === "error") ? ms.message : undefined,
+  });
+}

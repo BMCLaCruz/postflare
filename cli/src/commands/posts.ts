@@ -1,0 +1,312 @@
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { list, str, type Parsed } from "../args.js";
+import type { Command, Ctx } from "../context.js";
+import { parseFuture, parseTime } from "../dates.js";
+import { CliError, UsageError } from "../errors.js";
+import { c, eprintln, fmtDate, fmtNum, fmtPct, fmtStatus, fmtWhen, println, printJson, table, truncate } from "../format.js";
+import { readStdin } from "../io.js";
+import { accountLabel, buildSettings, missingSettings, resolveAccounts, type Target } from "../resolve.js";
+import { exposure, type AccountDTO, type CreatePostsInput, type PostDTO, type PostMetricsDTO, type ThreadItem } from "../types.js";
+import { uploadAll } from "./media.js";
+
+// ---------------------------------------------------------------------------------------------------------------
+// Shared option handling
+
+const TEXT_OPTIONS = {
+  text: { type: "string", short: "t", arg: "<text>", description: "Post text (\"-\" reads stdin)" },
+  "text-file": { type: "string", arg: "<path>", description: "Read the post text from a file (\"-\" = stdin)" },
+} as const;
+
+const WHEN_OPTIONS = {
+  at: { type: "string", arg: "<when>", description: "Schedule: \"2026-10-14 09:00\", \"tomorrow 9:00\", \"mon 18:00\", \"in 2h\", ISO (local time)" },
+  now: { type: "boolean", description: "Publish immediately" },
+  draft: { type: "boolean", description: "Save as a draft (not scheduled)" },
+} as const;
+
+/** Text from --text / --text-file / piped stdin; undefined when none was given. */
+async function readText(ctx: Ctx, values: Parsed["values"], implicitStdin: boolean): Promise<string | undefined> {
+  const read = ctx.deps.readStdin ?? readStdin;
+  const text = str(values.text);
+  const file = str(values["text-file"]);
+  if (text !== undefined && file !== undefined) throw new UsageError("Use either --text or --text-file");
+  if (text === "-" || file === "-") return ((await read(false)) ?? "").replace(/\n$/, "");
+  if (text !== undefined) return text;
+  if (file !== undefined) {
+    try {
+      return readFileSync(file, "utf8").replace(/\n$/, "");
+    } catch {
+      throw new UsageError(`Cannot read ${file}`);
+    }
+  }
+  if (!implicitStdin) return undefined;
+  const piped = await read(true);
+  return piped === null ? undefined : piped.replace(/\n$/, "");
+}
+
+/** --at / --now / --draft → scheduledAt (undefined when none given). */
+function readWhen(ctx: Ctx, values: Parsed["values"]): CreatePostsInput["scheduledAt"] | undefined {
+  const at = str(values.at);
+  const n = [at !== undefined, !!values.now, !!values.draft].filter(Boolean).length;
+  if (n > 1) throw new UsageError("Use only one of --at, --now and --draft");
+  if (values.now) return "now";
+  if (values.draft) return null;
+  if (at !== undefined) return parseFuture(at, { now: ctx.now });
+  return undefined;
+}
+
+/** --media values: media ids as is, local paths uploaded first. */
+async function resolveMedia(ctx: Ctx, items: string[], alt?: string): Promise<string[]> {
+  const ids: string[] = [];
+  for (const item of items.flatMap((s) => s.split(",")).map((s) => s.trim()).filter(Boolean)) {
+    if (existsSync(item) && statSync(item).isFile()) ids.push((await uploadAll(ctx, [item], alt))[0].id);
+    else if (/^med_[\w-]+$/.test(item)) ids.push(item);
+    else throw new UsageError(`--media ${item}: not a file or a media id (med_...)`);
+  }
+  return ids;
+}
+
+async function targetsFor(ctx: Ctx, accounts: AccountDTO[]): Promise<Target[]> {
+  return Promise.all(accounts.map(async (account) => ({ account, provider: await ctx.provider(account.provider) })));
+}
+
+function whenLabel(p: PostDTO): string {
+  if (p.status === "published") return fmtWhen(p.publishedAt);
+  if (p.status === "draft") return c.gray("draft");
+  return fmtWhen(p.scheduledAt);
+}
+
+function postsTable(posts: PostDTO[], accounts: AccountDTO[]): string {
+  const byId = new Map(accounts.map((a) => [a.id, a]));
+  return table(
+    [{ header: "ID" }, { header: "STATUS" }, { header: "WHEN" }, { header: "ACCOUNT" }, { header: "TEXT", flex: true }],
+    posts.map((p) => {
+      const a = byId.get(p.accountId);
+      return [p.id, fmtStatus(p.status), whenLabel(p), a ? `${a.provider} ${a.username ? `@${a.username.replace(/^@/, "")}` : a.name}` : p.accountId, truncate(p.content || (p.media.length ? `[${p.media.length} media]` : ""), 60)];
+    }),
+  );
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// post
+
+export const post: Command = {
+  name: "post",
+  summary: "Create a post on one or more accounts: schedule it, publish it now, or save a draft.",
+  description: [
+    "Accounts (--account, repeatable or comma separated): an account id, @username, a platform id when you have one",
+    "account there (e.g. bluesky), an account name, or platform:@username.",
+    "Text: --text, --text-file, or piped on stdin. Media: ids (med_...) or local files (uploaded first).",
+    "Settings: --set key=value applies to every selected platform that has the setting; --set <platform>.key=value or",
+    "--set <accountId>.key=value targets one. Defaults of each platform's settings are filled in like in the app.",
+    "List settings with: postflare platforms <id>. Exactly one of --at, --now or --draft is required.",
+  ].join("\n"),
+  options: {
+    account: { type: "string", short: "a", multiple: true, arg: "<selector>", description: "Target account(s)" },
+    ...TEXT_OPTIONS,
+    media: { type: "string", short: "m", multiple: true, arg: "<id|path>", description: "Attach media (local files are uploaded)" },
+    alt: { type: "string", arg: "<text>", description: "Alt text for files uploaded by --media" },
+    ...WHEN_OPTIONS,
+    set: { type: "string", multiple: true, arg: "<key=value>", description: "Platform setting, e.g. tiktok.privacy_level=SELF_ONLY" },
+    thread: { type: "string", multiple: true, arg: "<text>", description: "Follow-up (thread reply / first comment), in order" },
+    "dry-run": { type: "boolean", description: "Only validate (files given to --media are still uploaded)" },
+  },
+  max: 0,
+  examples: [
+    "postflare post -a bluesky -a x --text \"Shipping v2 today 🚀\" --at \"tomorrow 9:00\"",
+    "postflare post -a instagram_standalone -a tiktok -m reel.mp4 --text-file caption.txt --at \"fri 18:00\" \\\n      --set tiktok.privacy_level=PUBLIC_TO_EVERYONE",
+    "postflare post -a x --text \"1/ A thread\" --thread \"2/ more\" --thread \"3/ end\" --now",
+    "postflare post -a youtube -m video.mp4 --set title=\"Launch\" --set privacy=public --draft",
+    "echo \"Hello\" | postflare post -a @me --now --dry-run",
+  ],
+  async run(ctx, { values }) {
+    const all = await ctx.accounts();
+    const accounts = resolveAccounts(list(values.account), all);
+    const scheduledAt = readWhen(ctx, values);
+    if (scheduledAt === undefined) throw new UsageError("Say when: --at <when>, --now or --draft", "post");
+    const targets = await targetsFor(ctx, accounts);
+    const content = (await readText(ctx, values, true)) ?? "";
+    const settings = buildSettings(targets, list(values.set));
+    const threadTexts = list(values.thread);
+    const thread: ThreadItem[] = threadTexts.map((t) => ({ content: t, media: [] }));
+    if (thread.length) {
+      const without = targets.filter((t) => !t.provider.capabilities.thread);
+      if (without.length === targets.length) throw new UsageError(`${without.map((t) => t.provider.name).join(", ")}: follow-ups (--thread) are not supported`);
+      for (const t of without) eprintln(c.yellow(`! ${t.provider.name} does not support follow-ups: --thread is ignored for ${accountLabel(t.account)}`));
+    }
+    if (scheduledAt !== null) {
+      const missing = missingSettings(targets, settings);
+      if (missing.length) throw new CliError(`Missing settings:\n  ${missing.join("\n  ")}`);
+    }
+    const media = await resolveMedia(ctx, list(values.media), str(values.alt));
+    const body: CreatePostsInput = {
+      scheduledAt,
+      posts: targets.map((t) => ({
+        accountId: t.account.id,
+        content,
+        media,
+        settings: settings.get(t.account.id) ?? {},
+        thread: t.provider.capabilities.thread ? thread : [],
+      })),
+    };
+
+    if (values["dry-run"]) {
+      const { errors } = await ctx.api.post<{ errors: string[] }>("/posts/validate", body);
+      if (ctx.json) printJson({ ok: !errors.length, errors, request: body });
+      else if (!errors.length) {
+        println(`${c.green("✓")} Valid for ${targets.map((t) => `${t.provider.name} ${accountLabel(t.account)}`).join(", ")}`);
+        println(c.gray(`  ${scheduledAt === null ? "draft" : scheduledAt === "now" ? "would publish now" : `would be scheduled for ${fmtDate(scheduledAt)}`}`));
+      }
+      if (errors.length) {
+        if (!ctx.json) throw new CliError(`Validation failed:\n  ${errors.join("\n  ")}`);
+        process.exitCode = 1;
+      }
+      return;
+    }
+
+    const created = await ctx.api.post<PostDTO[]>("/posts", body);
+    if (ctx.json) return printJson(created);
+    const what = scheduledAt === null ? "Saved draft" : scheduledAt === "now" ? "Publishing now" : `Scheduled for ${fmtDate(scheduledAt)}`;
+    println(`${c.green("✓")} ${what}: ${created.length} post${created.length > 1 ? "s" : ""}`);
+    println(postsTable(created, all));
+    println(c.gray(`Check: postflare posts show ${created[0].id}`));
+  },
+};
+
+// ---------------------------------------------------------------------------------------------------------------
+// posts
+
+export const posts: Command = {
+  name: "posts",
+  summary: "List posts (newest first). Subcommands: show, edit, cancel, retry, rm.",
+  options: {
+    status: { type: "string", arg: "<list>", description: "Comma separated: draft,scheduled,publishing,published,failed,cancelled" },
+    upcoming: { type: "boolean", description: "Scheduled posts, soonest first" },
+    from: { type: "string", arg: "<when>", description: "From (scheduled/created time): \"7d\", \"2026-10-01\", \"yesterday\"..." },
+    to: { type: "string", arg: "<when>", description: "Until" },
+    account: { type: "string", short: "a", multiple: true, arg: "<selector>", description: "Only these accounts" },
+    limit: { type: "string", arg: "<n>", description: "Max posts (default 50)" },
+  },
+  max: 0,
+  examples: ["postflare posts --upcoming", "postflare posts --status failed", "postflare posts -a tiktok --from 7d --json"],
+  async run(ctx, { values }) {
+    const all = await ctx.accounts();
+    const selected = list(values.account).length ? resolveAccounts(list(values.account), all) : null;
+    const opt = { now: ctx.now, relativePast: true, defaultClock: [0, 0] as [number, number] };
+    const limit = Math.min(Number(str(values.limit)) || 50, 1000);
+    let rows = await ctx.api.get<PostDTO[]>("/posts", {
+      status: values.upcoming ? "scheduled" : str(values.status),
+      from: str(values.from) ? parseTime(str(values.from)!, opt) : values.upcoming ? ctx.now.getTime() - 60 * 60 * 1000 : undefined,
+      to: str(values.to) ? parseTime(str(values.to)!, opt) : undefined,
+      accountId: selected?.length === 1 ? selected[0].id : undefined,
+      order: values.upcoming ? "asc" : "desc",
+      limit: selected && selected.length > 1 ? 1000 : limit,
+    });
+    if (selected) rows = rows.filter((p) => selected.some((a) => a.id === p.accountId)).slice(0, limit);
+    if (ctx.json) return printJson(rows);
+    if (!rows.length) return println("No posts.");
+    println(postsTable(rows, all));
+  },
+};
+
+export const postsShow: Command = {
+  name: "posts show",
+  args: "<id>",
+  summary: "Show a post with its publishing log and, once published, its metrics.",
+  min: 1,
+  max: 1,
+  async run(ctx, { positionals }) {
+    const p = await ctx.api.get<PostDTO>(`/posts/${encodeURIComponent(positionals[0])}`);
+    const metrics = p.status === "published" ? await ctx.api.get<PostMetricsDTO>(`/posts/${p.id}/metrics`).catch(() => null) : null;
+    if (ctx.json) return printJson({ ...p, metrics });
+    const a = (await ctx.accounts().catch(() => [] as AccountDTO[])).find((x) => x.id === p.accountId);
+    println(`${c.bold(p.id)}  ${fmtStatus(p.status)}  ${a ? `${a.provider} ${accountLabel(a)}` : p.accountId}`);
+    if (p.status === "published") println(`Published: ${fmtWhen(p.publishedAt)}${p.externalUrl ? `  ${c.cyan(p.externalUrl)}` : ""}`);
+    else if (p.scheduledAt) println(`Scheduled: ${fmtWhen(p.scheduledAt)}`);
+    if (p.error) println(c.red(`Error: ${p.error}`));
+    println(c.gray(`Group ${p.groupId} · created ${fmtDate(p.createdAt)} · attempts ${p.attempts}`));
+    println("");
+    println(p.content || c.gray("(no text)"));
+    if (p.media.length) println(`\nMedia: ${p.media.join(", ")}`);
+    const settings = Object.entries(p.settings).filter(([, v]) => v !== "" && v !== null && v !== undefined && !(Array.isArray(v) && !v.length));
+    if (settings.length) println(`Settings: ${settings.map(([k, v]) => `${k}=${Array.isArray(v) ? v.join(",") : String(v)}`).join("  ")}`);
+    p.thread.forEach((t, i) => println(`Follow-up ${i + 1}: ${truncate(t.content, 200)}${t.media.length ? ` [${t.media.join(", ")}]` : ""}`));
+    if (p.logs?.length) {
+      println("\nLog:");
+      for (const l of p.logs) println(`  ${c.gray(fmtDate(l.createdAt))}  ${l.level === "error" ? c.red(l.message) : l.level === "warn" ? c.yellow(l.message) : l.message}`);
+    }
+    if (metrics) {
+      println("\nMetrics:");
+      if (!metrics.metrics) println(c.gray(`  not collected yet${metrics.metricsNextAt ? ` (next: ${fmtWhen(metrics.metricsNextAt)})` : ""}`));
+      else {
+        const m = metrics.metrics;
+        const { extra, ...rest } = m;
+        println("  " + Object.entries(rest).map(([k, v]) => `${k} ${c.bold(fmtNum(v))}`).join("  "));
+        const exp = exposure(m);
+        const eng = ["likes", "comments", "shares", "saves", "replies", "reposts", "quotes", "clicks"].reduce((n, k) => n + (m[k] ?? 0), 0);
+        if (exp) println(`  engagement rate ${c.bold(fmtPct(eng / exp))}`);
+        if (extra && Object.keys(extra).length) println(c.gray("  " + Object.entries(extra).map(([k, v]) => `${k} ${fmtNum(v)}`).join("  ")));
+        println(c.gray(`  collected ${fmtDate(metrics.metricsAt)}${metrics.metricsNextAt ? `, next ${fmtDate(metrics.metricsNextAt)}` : ""} · ${metrics.snapshots.length} snapshots`));
+      }
+    }
+  },
+};
+
+export const postsEdit: Command = {
+  name: "posts edit",
+  args: "<id>",
+  summary: "Edit a draft, scheduled, failed or cancelled post (text, time, settings, media, follow-ups).",
+  description: "Changing the time reschedules; --draft unschedules. --media and --thread replace the current lists; --set merges.",
+  options: {
+    ...TEXT_OPTIONS,
+    ...WHEN_OPTIONS,
+    set: { type: "string", multiple: true, arg: "<key=value>", description: "Change a setting" },
+    media: { type: "string", short: "m", multiple: true, arg: "<id|path>", description: "Replace the media" },
+    "no-media": { type: "boolean", description: "Remove all media" },
+    thread: { type: "string", multiple: true, arg: "<text>", description: "Replace the follow-ups" },
+    "no-thread": { type: "boolean", description: "Remove the follow-ups" },
+  },
+  min: 1,
+  max: 1,
+  examples: ["postflare posts edit pst_abc --at \"tomorrow 18:00\"", "postflare posts edit pst_abc --text \"Fixed typo\" --set privacy=public"],
+  async run(ctx, { values, positionals }) {
+    const current = await ctx.api.get<PostDTO>(`/posts/${encodeURIComponent(positionals[0])}`);
+    const body: Record<string, unknown> = {};
+    const content = await readText(ctx, values, false);
+    if (content !== undefined) body.content = content;
+    const when = readWhen(ctx, values);
+    if (when !== undefined) body.scheduledAt = when;
+    if (list(values.set).length) {
+      const account = (await ctx.accounts()).find((a) => a.id === current.accountId);
+      if (!account) throw new CliError(`Account ${current.accountId} not found`);
+      const target = { account, provider: await ctx.provider(account.provider) };
+      body.settings = buildSettings([target], list(values.set), new Map([[account.id, current.settings]])).get(account.id);
+    }
+    if (values["no-media"]) body.media = [];
+    else if (list(values.media).length) body.media = await resolveMedia(ctx, list(values.media));
+    if (values["no-thread"]) body.thread = [];
+    else if (list(values.thread).length) body.thread = list(values.thread).map((t) => ({ content: t, media: [] }));
+    if (!Object.keys(body).length) throw new UsageError("Nothing to change: give --text, --at/--now/--draft, --set, --media or --thread", "posts edit");
+    const updated = await ctx.api.patch<PostDTO>(`/posts/${current.id}`, body);
+    if (ctx.json) return printJson(updated);
+    println(`${c.green("✓")} Updated ${updated.id}: ${fmtStatus(updated.status)} ${updated.status === "scheduled" ? fmtWhen(updated.scheduledAt) : ""}`);
+  },
+};
+
+function simple(name: string, summary: string, method: "POST" | "DELETE", path: (id: string) => string, done: string): Command {
+  return {
+    name,
+    args: "<ids...>",
+    summary,
+    min: 1,
+    async run(ctx, { positionals }) {
+      const out: unknown[] = [];
+      for (const id of positionals) out.push(await ctx.api.request(method, path(encodeURIComponent(id))));
+      if (ctx.json) return printJson(out.length === 1 ? out[0] : out);
+      println(`${c.green("✓")} ${done}: ${positionals.join(", ")}`);
+    },
+  };
+}
+
+export const postsCancel = simple("posts cancel", "Cancel scheduled posts (they stay in the list as cancelled).", "POST", (id) => `/posts/${id}/cancel`, "Cancelled");
+export const postsRetry = simple("posts retry", "Retry failed or cancelled posts now.", "POST", (id) => `/posts/${id}/retry`, "Retrying");
+export const postsRm = simple("posts rm", "Delete posts from Postflare (published posts stay on the platforms).", "DELETE", (id) => `/posts/${id}`, "Deleted");
