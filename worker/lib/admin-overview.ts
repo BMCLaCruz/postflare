@@ -45,9 +45,9 @@ export const D1_WRITES = {
 const DEFAULT_STEPS_PER_POST = 6;
 
 export const CRONS: Array<{ name: AdminCronDTO["name"]; schedule: string; everyMs: number }> = [
-  { name: "frequent", schedule: "*/15 * * * *", everyMs: 15 * 60 * 1000 },
-  { name: "metrics", schedule: "7,22,37,52 * * * *", everyMs: 15 * 60 * 1000 },
-  { name: "daily", schedule: "0 3 * * *", everyMs: DAY },
+  { name: "frequent", schedule: "every 15 min (:00)", everyMs: 15 * 60 * 1000 },
+  { name: "metrics", schedule: "every 15 min (:05)", everyMs: 15 * 60 * 1000 },
+  { name: "daily", schedule: "daily 03:10 UTC", everyMs: DAY },
 ];
 
 export function quotaLevel(used: number, limit: number): QuotaLevel {

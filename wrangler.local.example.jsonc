@@ -40,5 +40,5 @@
     { "name": "postflare-publish", "binding": "PUBLISH_WORKFLOW", "class_name": "PublishWorkflow" }
   ],
   "images": { "binding": "IMAGES" },
-  "triggers": { "crons": ["*/15 * * * *", "7,22,37,52 * * * *", "0 3 * * *"] }
+  "triggers": { "crons": ["*/5 * * * *"] }
 }

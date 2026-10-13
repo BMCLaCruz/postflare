@@ -1,6 +1,6 @@
 import { createExecutionContext, createScheduledController, env, waitOnExecutionContext } from "cloudflare:test";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import worker, { DAILY_CRON, FREQUENT_CRON, METRICS_CRON } from "../../worker/index";
+import worker, { cronJob, DAILY_CRON, FREQUENT_CRON, METRICS_CRON, TICK_CRON } from "../../worker/index";
 import { REFRESHES_PER_TICK, refreshExpiringAccounts } from "../../worker/lib/accounts";
 import { encryptJson, hashPassword } from "../../worker/lib/crypto";
 import { sweepMedia } from "../../worker/lib/media-lifecycle";
@@ -521,6 +521,16 @@ describe("D1 queries per invocation (Free plan: 50)", () => {
     expect(count.sql.some((s) => s.includes("metrics_next_at")), "metrics collected").toBe(true);
     await run("DELETE FROM posts WHERE id LIKE 'p_tick_%'");
     await run("DELETE FROM accounts WHERE id LIKE 'acc_tick_%'");
+  });
+
+  it("the single */5 trigger picks the job from the tick's UTC time", () => {
+    const at = (h: number, m: number) => Date.UTC(2026, 9, 13, h, m);
+    expect([0, 15, 30, 45].map((m) => cronJob(TICK_CRON, at(12, m)))).toEqual(["frequent", "frequent", "frequent", "frequent"]);
+    expect([5, 20, 35, 50].map((m) => cronJob(TICK_CRON, at(12, m)))).toEqual(["metrics", "metrics", "metrics", "metrics"]);
+    expect(cronJob(TICK_CRON, at(3, 10))).toBe("daily");
+    expect([10, 25, 40, 55].map((m) => cronJob(TICK_CRON, at(12, m)))).toEqual([null, null, null, null]);
+    // Older multi-trigger configs keep working.
+    expect([FREQUENT_CRON, METRICS_CRON, DAILY_CRON].map((c) => cronJob(c, at(12, 1)))).toEqual(["frequent", "metrics", "daily"]);
   });
 
   it("the daily cron runs the cleanups and the media sweep, not the publishing jobs", async () => {

@@ -98,11 +98,29 @@ app.route("/m", publicMedia);
 app.route("/u", uploadLinkPublic);
 app.route("/mcp", mcpRoutes(app));
 
-/** Cron triggers (wrangler.jsonc `triggers.crons`; mirror changes in wrangler.local.jsonc). */
+/**
+ * The one cron trigger (wrangler.jsonc `triggers.crons`; mirror changes in wrangler.local.jsonc). Free accounts get only
+ * 5 cron triggers shared by all their Workers, so Postflare uses one and picks the job from the tick's UTC time:
+ * :00/:15/:30/:45 publishing + refresh, :05/:20/:35/:50 analytics (its own invocation, so its own 50-query budget),
+ * 03:10 daily cleanups. The other ticks do nothing.
+ */
+export const TICK_CRON = "*/5 * * * *";
+/** Older configs with one trigger per job still work: these expressions map straight to their job. */
 export const FREQUENT_CRON = "*/15 * * * *";
 export const DAILY_CRON = "0 3 * * *";
-/** Analytics collection gets its own trigger (and its own 50-query budget), offset from the publishing tick. */
 export const METRICS_CRON = "7,22,37,52 * * * *";
+
+export type CronJob = "frequent" | "metrics" | "daily";
+
+export function cronJob(cron: string, scheduledTime: number): CronJob | null {
+  if (cron === DAILY_CRON) return "daily";
+  if (cron === METRICS_CRON) return "metrics";
+  if (cron !== TICK_CRON) return "frequent"; // FREQUENT_CRON, or an unknown expression
+  const d = new Date(scheduledTime);
+  const m = d.getUTCMinutes();
+  if (d.getUTCHours() === 3 && m === 10) return "daily";
+  return m % 15 === 0 ? "frequent" : m % 15 === 5 ? "metrics" : null;
+}
 
 /**
  * Every 15 minutes: publishing safety nets, token refreshes, analytics, the demo. Kept small: one invocation may run
@@ -159,8 +177,9 @@ async function recordCronRun(env: Env, name: string, started: number) {
 export default {
   fetch: app.fetch,
   async scheduled(event, env, ctx) {
+    const job = cronJob(event.cron, event.scheduledTime);
+    if (!job) return;
     await ensureSchema(env.DB);
-    // Unknown expressions (an old single-cron config, tests) run the frequent jobs.
-    ctx.waitUntil(event.cron === DAILY_CRON ? dailyJobs(env) : event.cron === METRICS_CRON ? metricsJobs(env) : frequentJobs(env));
+    ctx.waitUntil(job === "daily" ? dailyJobs(env) : job === "metrics" ? metricsJobs(env) : frequentJobs(env));
   },
 } satisfies ExportedHandler<Env>;
