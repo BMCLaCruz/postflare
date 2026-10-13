@@ -51,15 +51,21 @@ workspace with sample data that never publishes anything, reset daily).
   Free plan's CPU and subrequest limits.
 - Secrets (platform tokens, app credentials) are encrypted at rest with AES-GCM.
 
-## Deploy
+## Installing
 
-### One click
-Use the button above. Cloudflare creates the D1 database, R2 bucket, Workflow and Images binding for you. The database
-schema is applied automatically on the first request.
+There are two ways to install Postflare; both deploy to your own Cloudflare account (the Workers Free plan is enough).
+
+### One click (Deploy to Cloudflare button)
+Use the button above. Cloudflare creates the Worker, D1 database, R2 bucket, Workflow and Images binding, and a copy
+of this repository in your GitHub (or GitLab) account, connected to **Workers Builds**: every push to its production
+branch is deployed. The database schema is applied automatically on the first request. To update later, see
+[Updating](#updating).
 
 ### From your machine
 ```bash
-npm install
+git clone --branch v0.1.0 https://github.com/FerdiKT/postflare.git   # or the latest release tag
+cd postflare
+npm ci
 npx wrangler login
 npm run deploy
 ```
@@ -74,6 +80,7 @@ Optional settings:
   With this secret set, the setup form asks for it. `npx wrangler secret put SETUP_TOKEN`
 - `PUBLIC_URL` (var): your public URL if you use a custom domain. It can also be changed in Settings.
 - `DEMO_MODE` (var): `"true"` hosts the public live demo. Off by default.
+- `UPDATE_CHECK` (var): `"false"` turns off the daily check for new releases (one request a day to the GitHub API).
 
 ### Custom domain / personal config
 
@@ -97,6 +104,63 @@ deploys that file (through `.wrangler/deploy/config.json`). Check what will be d
 **Runs on the Workers Free plan.** Media is piped from R2 to the platforms without passing through JavaScript
 (measured: ~3ms CPU to stream 100MB), every provider call stays under 40 outgoing requests, and long uploads resume
 across Workflow steps. Free plan quotas (requests, D1, R2, Workflows) are plenty for a personal scheduler.
+
+## Updating
+
+Updating Postflare means deploying the new code: **database migrations are applied automatically** on the first
+request (they are additive), there is no separate migrate step. Instance admins see new releases in **Admin → Instance
+settings** (and a badge in the sidebar); the instance checks GitHub once a day (`UPDATE_CHECK = "false"` turns it off,
+`UPDATE_REPO` follows another repository).
+
+Before updating:
+- Read the [release notes](https://github.com/FerdiKT/postflare/releases) of every version you skip, for breaking
+  changes and manual steps (new secrets or vars, `wrangler.jsonc` changes).
+- Note a D1 restore point, in case you need to go back:
+  `npx wrangler d1 time-travel info DB` prints a bookmark;
+  `npx wrangler d1 time-travel restore DB --bookmark <bookmark>` restores it (add `-c wrangler.local.jsonc` if you use one).
+
+### Installed from your machine
+```bash
+git fetch --tags
+git checkout v0.2.0        # the release you want (or: git switch main && git pull, for the latest code)
+npm ci
+npm run deploy
+```
+If you have a `wrangler.local.jsonc`, compare it with the new `wrangler.jsonc` (new bindings, crons...) before
+deploying: it is a full config, not a patch.
+
+### Installed with the Deploy to Cloudflare button
+Your copy of the repository includes the [**Postflare update**](.github/workflows/postflare-update.yml) workflow.
+Every week (or when you run it from your repository's **Actions** tab) it compares your `package.json` version with the
+latest Postflare release and, when there is a newer one, opens a pull request that updates your code to it. **Merging
+the pull request deploys the update** through Workers Builds.
+
+- One-time setup in your copy: **Settings → Actions → General → Workflow permissions → Allow GitHub Actions to create and
+  approve pull requests**. Without it the workflow pushes the branch and opens an issue with a link to create the pull
+  request yourself.
+- The pull request never touches your `wrangler.jsonc` (Cloudflare wrote your resource names/ids into it),
+  `wrangler.local*.jsonc`, `.dev.vars*` or `.github/workflows/`. When the new release changed `wrangler.jsonc`, the pull
+  request shows the upstream diff so you can apply new bindings or crons by hand; changed workflow files are listed too
+  (the Actions token cannot update them).
+- Files you added yourself are kept; files removed upstream are removed.
+- GitHub pauses scheduled workflows in repositories without activity for 60 days: run it by hand then, or re-enable it.
+- Without the workflow (or on GitLab), update by hand: copy the files of the new release over your copy except the ones
+  above, commit and push. The script the workflow runs does exactly that from the root of your copy:
+  `bash scripts/postflare-update.sh check` and `bash scripts/postflare-update.sh apply v0.2.0`.
+
+## Versioning & releases
+
+- Postflare follows [semantic versioning](https://semver.org). Server releases are tagged `v<version>` and listed on the
+  [releases page](https://github.com/FerdiKT/postflare/releases) with their notes; all changes are in
+  [CHANGELOG.md](CHANGELOG.md). Before 1.0, minor versions (0.x.0) may contain breaking changes: they are called out in
+  the release notes with upgrade steps.
+- The running version is shown in Admin → Instance settings and served at `GET /api/version`
+  (`{ "version", "commit", "apiVersion" }`, public).
+- The [`postflare` CLI](cli/README.md) is versioned and released separately (tags `cli-v<version>`, published to npm,
+  [cli/CHANGELOG.md](cli/CHANGELOG.md)). `apiVersion` only changes on breaking REST API changes; the CLI checks it and
+  warns when it is too old or too new for your server. `postflare version` shows both versions.
+- Releases are automated with release-please from [Conventional Commits](CONTRIBUTING.md#commit-messages); see
+  [docs/RELEASING.md](docs/RELEASING.md).
 
 ## Connecting platforms
 

@@ -9,6 +9,7 @@
 ## Checklist
 
 - [ ] `npm run typecheck`, `npm test`, `npm run cli:build` and `npx vite build` pass
+- [ ] PR title follows Conventional Commits (`feat: ...`, `fix(scope): ...`, `feat!: ...` for breaking changes; see CONTRIBUTING.md)
 - [ ] Tests for new behavior (provider tests mock the API; API changes have a `test/workers/` test)
 - [ ] Queries scoped by `workspace_id` and routes guarded by permissions
 - [ ] Providers stay within the Free plan budget and are safe to retry (see docs/provider-brief.md)

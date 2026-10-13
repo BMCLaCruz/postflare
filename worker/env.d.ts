@@ -7,4 +7,8 @@ interface Env {
   SETUP_TOKEN?: string;
   /** "true" turns on the public live demo (GET /demo, POST /api/auth/demo, sandboxed demo workspace). Off by default. */
   DEMO_MODE?: string;
+  /** "false" turns off the daily check for new Postflare releases on GitHub (one request a day). On by default. */
+  UPDATE_CHECK?: string;
+  /** GitHub repository (owner/name) whose releases the update check reads. Default: FerdiKT/postflare. */
+  UPDATE_REPO?: string;
 }

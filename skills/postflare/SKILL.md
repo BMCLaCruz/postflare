@@ -16,7 +16,8 @@ postflare whoami
 ```
 "Not logged in" → ask the user to run `postflare login --url https://<their-postflare>` (it prompts for the API key from
 Postflare → Profile → API keys). Never ask them to paste the key into the chat. Check the permissions line: posting
-needs `posts.write`, uploading `media.write`.
+needs `posts.write`, uploading `media.write`. A `warning:` on stderr about the server's API version means the CLI and
+the server are out of step: relay its suggestion (update the CLI or the server); `postflare version` shows both.
 
 ## 2. Learn the targets before writing
 

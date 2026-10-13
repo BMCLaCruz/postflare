@@ -3,6 +3,7 @@ import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router";
 import {
   AlertTriangle,
   ArrowRight,
+  ArrowUpCircle,
   BarChart3,
   Building2,
   CalendarDays,
@@ -30,6 +31,7 @@ import {
 import { useApp } from "../lib/app";
 import { cn } from "../lib/format";
 import { needsEmail, useSession } from "../lib/session";
+import { useUpdateStatus } from "../lib/updates";
 import type { InstancePermission, WorkspacePermission } from "../lib/types";
 import { useComposer } from "../pages/composer/ComposerProvider";
 import { CreateWorkspaceDialog } from "./Gate";
@@ -213,6 +215,7 @@ function Sidebar({ onCompose, onLogout }: { onCompose?: () => void; onLogout: ()
   const reconnect = accounts.filter((a) => a.status === "reconnect").length;
   const nav = workspace ? NAV.filter((n) => !n.permission || can(n.permission)) : [];
   const admin = ADMIN_NAV.filter((n) => n.instance && canInstance(n.instance));
+  const { data: update } = useUpdateStatus();
 
   return (
     <div className="flex h-full flex-col">
@@ -254,11 +257,36 @@ function Sidebar({ onCompose, onLogout }: { onCompose?: () => void; onLogout: ()
           <>
             <p className="px-3 pb-1 pt-5 text-[11px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">Admin</p>
             {admin.map((item) => (
-              <NavItemLink key={item.to} item={item} />
+              <NavItemLink
+                key={item.to}
+                item={item}
+                badge={
+                  item.to === "/admin/settings" &&
+                  update?.updateAvailable && <span className="size-2 rounded-full bg-brand-500" title={`Postflare v${update.latest} is available`} />
+                }
+              />
             ))}
           </>
         )}
       </nav>
+      {update && (
+        // Instance admins: running version, and a nudge when a newer release exists.
+        <div className="px-3 pb-2">
+          {update.updateAvailable ? (
+            <Link
+              to="/admin/settings#updating"
+              className="flex items-center gap-2 rounded-lg bg-brand-50 px-3 py-2 text-xs font-medium text-brand-800 ring-1 ring-brand-200 transition hover:bg-brand-100 dark:bg-brand-950/40 dark:text-brand-200 dark:ring-brand-900 dark:hover:bg-brand-950/70"
+            >
+              <ArrowUpCircle className="size-4 shrink-0" />
+              <span className="flex-1">Update available: v{update.latest}</span>
+            </Link>
+          ) : (
+            <Link to="/admin/settings#about" className="block px-3 text-[11px] text-zinc-400 hover:text-zinc-600 dark:text-zinc-500 dark:hover:text-zinc-300">
+              Postflare v{update.current}
+            </Link>
+          )}
+        </div>
+      )}
       <div className="flex items-center gap-1 border-t border-zinc-200 p-3 dark:border-zinc-800">
         <NavLink
           to="/profile"

@@ -557,3 +557,28 @@ export interface AnalyticsRefreshDTO {
   /** accountId refresh: the account's analytics state, and how many of its posts were refreshed. */
   account?: { id: string; metricsStatus: AccountMetricsStatusDTO; postsRefreshed: number };
 }
+
+/** GET /api/version (public). `apiVersion` changes only on breaking REST API changes. */
+export interface VersionDTO {
+  version: string;
+  commit: string;
+  apiVersion: number;
+}
+
+/** GET /api/updates (instance admins): the running version and the newest server release on GitHub. */
+export interface UpdateStatusDTO {
+  current: string;
+  commit: string;
+  latest: string | null;
+  updateAvailable: boolean;
+  /** Release notes of `latest`. */
+  url: string | null;
+  publishedAt: number | null;
+  checkedAt: number | null;
+  /** Last check failed (rate limit, network...); `latest` is then the last known value. */
+  error: string | null;
+  /** False with UPDATE_CHECK="false". */
+  enabled: boolean;
+  /** GitHub repository checked (owner/name, UPDATE_REPO). */
+  repo: string;
+}

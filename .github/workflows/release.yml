@@ -1,0 +1,84 @@
+# Releases (upstream repository only): release-please keeps one release PR per component open (server `v*`, CLI
+# `cli-v*`) from Conventional Commits on main; merging it tags, creates the GitHub release and, for the CLI, publishes
+# to npm with Trusted Publishing (OIDC, no token). See docs/RELEASING.md.
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    if: github.repository == 'FerdiKT/postflare'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    outputs:
+      server_release: ${{ steps.release.outputs.release_created }}
+      server_tag: ${{ steps.release.outputs.tag_name }}
+      cli_release: ${{ steps.release.outputs['cli--release_created'] }}
+      cli_tag: ${{ steps.release.outputs['cli--tag_name'] }}
+    steps:
+      - id: release
+        uses: googleapis/release-please-action@v4
+        with:
+          # Optional PAT / GitHub App token so CI runs on release PRs (PRs opened with GITHUB_TOKEN trigger no workflows).
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+      # GitHub marks every new release "Latest", CLI releases included. Keep "Latest" on the newest server release so
+      # the Releases page and /releases/latest point at the server (instances' update check ignores cli-v* anyway).
+      - name: Keep the newest server release marked Latest
+        if: steps.release.outputs['cli--release_created'] == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          tag="$(gh release list --repo "$REPO" --exclude-drafts --exclude-pre-releases --limit 100 --json tagName --jq '.[].tagName' \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed 's/^v//' | sort -t. -k1,1n -k2,2n -k3,3n | tail -n 1)"
+          if [ -n "$tag" ]; then
+            gh release edit "v$tag" --repo "$REPO" --latest
+          else
+            echo "No server release yet."
+          fi
+
+  publish-cli:
+    needs: release-please
+    if: needs.release-please.outputs.cli_release == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write # npm Trusted Publishing (OIDC) and provenance
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.release-please.outputs.cli_tag }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      # Trusted Publishing needs npm 11.5.1 or newer (Node 22 ships npm 10).
+      - run: npm install -g npm@latest
+      - run: npm --version
+      - run: npm ci
+      - name: Typecheck and test the CLI
+        run: |
+          npm run cli:typecheck
+          npx vitest run --project cli
+      - run: npm run cli:build
+      - name: Publish to npm
+        working-directory: cli
+        run: npm publish --provenance --access public

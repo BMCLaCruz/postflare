@@ -1,8 +1,11 @@
 import { createExecutionContext, env } from "cloudflare:test";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import worker from "../../worker/index";
 import { throttleIp } from "../../worker/lib/auth";
+import { UPDATE_SETTING, updateCheckCron } from "../../worker/lib/updates";
 import { MAX_LINK_FILES } from "../../worker/routes/uploadLinks";
+import pkg from "../../package.json";
+import { API_VERSION } from "../../shared/version";
 import { ORIGIN, sessionCookie, type CallOptions, type Client } from "./helpers";
 
 // Hardening from the security audit: CSRF on every /api mutation, SETUP_TOKEN, security headers, MCP path
@@ -196,6 +199,72 @@ describe("public media", () => {
     const bad = sig.slice(0, -1) + (sig.endsWith("A") ? "B" : "A");
     expect((await call(null, `/m/${id}/${bad}/${name}`)).status).toBe(404);
     expect((await call(null, `/m/${id}/${sig.slice(0, 15)}/${name}`)).status).toBe(404);
+  });
+});
+
+describe("version and updates", () => {
+  const release = (tag: string, extra: object = {}) => ({ tag_name: tag, html_url: `https://github.com/FerdiKT/postflare/releases/tag/${tag}`, draft: false, prerelease: false, published_at: "2026-10-01T00:00:00Z", ...extra });
+  const setStored = (value: object | null) =>
+    value
+      ? E.DB.prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(UPDATE_SETTING, JSON.stringify(value)).run()
+      : E.DB.prepare("DELETE FROM settings WHERE key = ?").bind(UPDATE_SETTING).run();
+  afterEach(() => vi.restoreAllMocks());
+
+  it("GET /api/version is public and reports the build version and API version", async () => {
+    const res = await call(null, "/api/version");
+    expect(res.status).toBe(200);
+    expect(res.json).toEqual({ version: pkg.version, commit: expect.any(String), apiVersion: API_VERSION });
+    expect(res.json.commit).toMatch(/^([0-9a-f]{7}|dev)$/);
+  });
+
+  it("GET /api/updates is for instance admins only", async () => {
+    expect((await call(null, "/api/updates")).status).toBe(401);
+    // API keys never carry instance permissions.
+    expect((await call({ key }, "/api/updates")).status).toBe(403);
+    expect((await call({ key }, "/api/updates/check", { body: {} })).status).toBe(403);
+    await setStored(null);
+    const res = await call(owner, "/api/updates");
+    expect(res.status).toBe(200);
+    expect(res.json).toMatchObject({ current: pkg.version, latest: null, updateAvailable: false, checkedAt: null, enabled: true, repo: "FerdiKT/postflare" });
+  });
+
+  it("the check picks the highest v* release (ignoring cli-v*, drafts and prereleases) and is rate limited", async () => {
+    await setStored(null);
+    const releases = [release("cli-v9.0.0"), release("v99.1.0", { prerelease: true }), release("v99.2.0", { draft: true }), release("v99.0.0"), release("v98.5.0"), release("v99.0.0-rc.1")];
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => Response.json(releases));
+    const res = await call(owner, "/api/updates/check", { body: {} });
+    expect(res.status).toBe(200);
+    expect(res.json).toMatchObject({ latest: "99.0.0", updateAvailable: true, url: "https://github.com/FerdiKT/postflare/releases/tag/v99.0.0", error: null });
+    expect(spy).toHaveBeenCalledTimes(1);
+    const [url, init] = spy.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://api.github.com/repos/FerdiKT/postflare/releases?per_page=30");
+    expect((init.headers as Record<string, string>)["user-agent"]).toMatch(/^postflare\//);
+    // A second check within a minute returns the stored result without asking GitHub again.
+    expect((await call(owner, "/api/updates/check", { body: {} })).json.latest).toBe("99.0.0");
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect((await call(owner, "/api/updates")).json).toMatchObject({ latest: "99.0.0", updateAvailable: true });
+  });
+
+  it("the cron checks at most once a day, ignores 404 (no public releases yet) and can be turned off", async () => {
+    let status = 404;
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response("{}", { status }));
+    await setStored(null);
+    await updateCheckCron({ ...E, UPDATE_CHECK: "false" } as Env);
+    expect(spy).not.toHaveBeenCalled();
+    await updateCheckCron(E);
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect((await call(owner, "/api/updates")).json).toMatchObject({ latest: null, updateAvailable: false, error: null, checkedAt: expect.any(Number) });
+    await updateCheckCron(E);
+    expect(spy).toHaveBeenCalledTimes(1);
+    // Rate limited by GitHub: the last known release is kept and the error reported.
+    await setStored({ latestVersion: "99.0.0", url: "https://example.com/r", publishedAt: null, checkedAt: Date.now() - 25 * 60 * 60 * 1000 });
+    status = 403;
+    await updateCheckCron(E);
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect((await call(owner, "/api/updates")).json).toMatchObject({ latest: "99.0.0", updateAvailable: true, error: "GitHub answered 403" });
+    // Same version as the running one: no update.
+    await setStored({ latestVersion: pkg.version, url: null, publishedAt: null, checkedAt: Date.now() });
+    expect((await call(owner, "/api/updates")).json).toMatchObject({ updateAvailable: false });
   });
 });
 

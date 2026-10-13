@@ -19,7 +19,9 @@ import type {
   RoleInput,
   SetupInput,
   UserDTO,
+  UpdateStatusDTO,
   UserStatus,
+  VersionDTO,
   WorkspaceDTO,
   FieldOption,
   MediaDTO,
@@ -201,6 +203,11 @@ export const api = {
   settings: {
     get: () => get<AppSettings>("/settings"),
     save: (body: { publicUrl?: string; timezone?: string }) => request<{ ok: true }>("PUT", "/settings", body),
+  },
+  version: () => get<VersionDTO>("/version"),
+  updates: {
+    get: () => get<UpdateStatusDTO>("/updates"),
+    check: () => request<UpdateStatusDTO>("POST", "/updates/check"),
   },
   keys: {
     list: () => get<ApiKeyDTO[]>("/keys"),

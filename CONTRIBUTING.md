@@ -50,9 +50,36 @@ Add a new `migrations/000N_*.sql` file; never edit an existing migration. Migrat
 first request. Every query on workspace data (accounts, posts, media, upload links, API keys...) must be scoped by
 `workspace_id`; see the multi-tenant notes in [CLAUDE.md](CLAUDE.md) and the tests in `test/workers/`.
 
+## Commit messages
+
+Releases and changelogs are generated from commit messages ([release-please](docs/RELEASING.md)), so commits on `main`
+(and PR titles: PRs are squash-merged, the title becomes the commit) follow
+[Conventional Commits](https://www.conventionalcommits.org):
+
+```
+<type>(<optional scope>): <summary in the imperative>
+```
+
+| Type | For | Release |
+|---|---|---|
+| `feat` | a user-visible feature | minor |
+| `fix` | a bug fix | patch |
+| `perf` | a performance improvement | patch |
+| `docs` | documentation only | none (listed in the changelog) |
+| `refactor`, `test`, `build`, `ci`, `chore` | everything else | none (hidden from the changelog) |
+
+- Add `!` after the type (`feat!: ...`) or a `BREAKING CHANGE: <what and how to upgrade>` footer for breaking changes
+  (API, config, behaviour self-hosters must act on). Explain the upgrade steps: they end up in the release notes.
+- Scopes are free-form, e.g. `feat(tiktok): ...`, `fix(composer): ...`. Changes under `cli/` are released with the CLI
+  (`feat(cli): ...`); a commit touching both the server and `cli/` appears in both changelogs, so prefer separate
+  commits.
+- Never bump versions or edit `CHANGELOG.md` by hand: release PRs do it.
+
 ## Pull request checklist
 
 - [ ] `npm run typecheck`, `npm test`, `npm run cli:build` and `npx vite build` pass.
+- [ ] PR title is a [Conventional Commit](#commit-messages) (`feat: ...`, `fix(x): ...`, `feat!: ...` if breaking).
+- [ ] Breaking REST API change? Bump `API_VERSION` in `shared/version.ts` and the CLI range in `cli/src/compat.ts`.
 - [ ] New behavior has tests (provider tests mock the platform API; API changes have a `test/workers/` test).
 - [ ] Workspace-scoped queries and permission guards for new routes.
 - [ ] `cli/src/types.ts` updated when `shared/types.ts` API shapes change.

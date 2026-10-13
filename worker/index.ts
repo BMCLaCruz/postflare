@@ -7,6 +7,7 @@ import { ensureSchema } from "./lib/migrate";
 import { recoverStuckPosts, sweepScheduledPosts } from "./lib/posts";
 import { now } from "./lib/util";
 import { collectMetrics } from "./lib/metrics";
+import { updateCheckCron } from "./lib/updates";
 import { accountRoutes } from "./routes/accounts";
 import { analyticsRoutes } from "./routes/analytics";
 import { authRoutes } from "./routes/auth";
@@ -18,6 +19,7 @@ import { oauthRoutes } from "./routes/oauth";
 import { platformRoutes } from "./routes/platforms";
 import { postRoutes } from "./routes/posts";
 import { settingsRoutes } from "./routes/settings";
+import { updateRoutes, versionRoute } from "./routes/updates";
 import { uploadLinkPublic, uploadLinkRoutes } from "./routes/uploadLinks";
 import { userRoutes } from "./routes/users";
 import { changePassword, meRoutes, workspaceRoutes } from "./routes/workspaces";
@@ -29,6 +31,7 @@ api.use("*", sameOriginMutations);
 api.post("/auth/demo", demoLogin);
 api.route("/auth", authRoutes);
 api.route("/invitations", invitationPublicRoutes);
+api.route("/version", versionRoute);
 // Everything below needs a session or an API key; handlers scope by c.var.workspace and check permissions.
 api.use("*", requireAuth);
 api.post("/auth/password", forbidDemoUser, changePassword); // Old path of POST /api/me/password.
@@ -43,6 +46,7 @@ api.route("/", postRoutes);
 api.route("/", analyticsRoutes);
 api.route("/", settingsRoutes);
 api.route("/", uploadLinkRoutes);
+api.route("/", updateRoutes);
 api.notFound((c) => c.json({ error: "Not found" }, 404));
 
 const app = new Hono<AppEnv>();
@@ -99,6 +103,8 @@ export default {
         // Analytics after token refreshes: collection reuses fresh tokens and stays within the tick's fetch budget.
         refreshExpiringAccounts(env).finally(() => collectMetrics(env)),
         demoCron(env),
+        // New Postflare release? At most one GitHub request a day (UPDATE_CHECK="false" turns it off).
+        updateCheckCron(env),
         env.DB.prepare("DELETE FROM oauth_states WHERE created_at < ?").bind(now() - 60 * 60 * 1000).run(),
         env.DB.prepare("DELETE FROM sessions WHERE expires_at < ?").bind(now()).run(),
         env.DB.prepare("DELETE FROM upload_links WHERE expires_at < ?").bind(now() - 7 * 24 * 60 * 60 * 1000).run(),
