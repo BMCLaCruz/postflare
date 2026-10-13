@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { ChevronLeft, ChevronRight, PenSquare } from "lucide-react";
-import { AccountAvatar } from "../components/ProviderLogo";
+import { AccountAvatar, ProviderLogo } from "../components/ProviderLogo";
 import { usePostDrawer } from "../components/posts/PostDrawer";
 import { Button, IconButton } from "../components/ui/Button";
 import { Select } from "../components/ui/Form";
@@ -441,6 +441,8 @@ function Chip({ group, dragged, showText }: { group: Group; dragged: React.RefOb
   const draggable = canWrite && group.posts.every((p) => p.status === "scheduled");
   const accs = group.posts.map((p) => accountMap.get(p.accountId));
   const provider = accs[0] ? providerMap.get(accs[0].provider) : undefined;
+  // Platform logos first: avatars alone don't tell YouTube from Instagram when both use the same profile picture.
+  const providers = [...new Set(accs.map((a) => a?.provider).filter(Boolean) as string[])].map((id) => providerMap.get(id));
   const meta = STATUS_META[status];
   return (
     <button
@@ -467,6 +469,11 @@ function Chip({ group, dragged, showText }: { group: Group; dragged: React.RefOb
       )}
     >
       <span className="absolute inset-y-0 left-0 w-[3px]" style={{ backgroundColor: provider ? `#${provider.color}` : undefined }} />
+      <span className="flex shrink-0 gap-0.5">
+        {providers.slice(0, 3).map((p, i) => (
+          <ProviderLogo key={p?.id ?? i} provider={p} size="xs" />
+        ))}
+      </span>
       <span className="flex shrink-0 -space-x-1.5">
         {accs.slice(0, 3).map((a, i) => (
           <AccountAvatar key={i} account={a} size="xs" showProvider={false} provider={a ? providerMap.get(a.provider) : undefined} className="rounded-full ring-2 ring-white dark:ring-zinc-800" />
