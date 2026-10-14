@@ -92,8 +92,11 @@ export type PublishResult =
   | { status: "pending"; state: Record<string, unknown>; retryAfterSeconds?: number };
 
 export interface MediaAccess {
-  /** Whole object as a stream. */
-  stream(item: MediaItem): Promise<ReadableStream>;
+  /**
+   * Whole object (or a byte range) as R2's own stream. Use this for file parts of `streamingMultipart`: Workers cannot
+   * pipe one fixed-length stream into another, so a `rangeStream` there stalls the upload.
+   */
+  stream(item: MediaItem, range?: { offset: number; length: number }): Promise<ReadableStream>;
   /** Whole object in memory. Avoid for big videos: Workers have 128MB of memory. */
   bytes(item: MediaItem): Promise<ArrayBuffer>;
   /**

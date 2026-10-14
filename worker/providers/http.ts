@@ -24,6 +24,9 @@ export interface RequestOptions extends Omit<RequestInit, "body"> {
   commit?: boolean;
 }
 
+/** No platform call may hang a publish: a stalled request fails after this (Workflow steps time out at 15 min). */
+export const REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
+
 export function withQuery(url: string, query?: RequestOptions["query"]): string {
   if (!query) return url;
   const u = new URL(url);
@@ -51,7 +54,7 @@ export async function request(ctx: HttpContext, url: string, opts: RequestOption
   if (commit && ctx.commit) ctx.commit.sent = true;
   let res: Response;
   try {
-    res = await ctx.fetch(withQuery(url, query), { ...init, headers, body: finalBody });
+    res = await ctx.fetch(withQuery(url, query), { signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS), ...init, headers, body: finalBody });
   } catch (err) {
     const host = new URL(url).host;
     if (commit) throw new ProviderError(`Network error calling ${host} while creating the post: ${(err as Error).message}`, "ambiguous");

@@ -16,7 +16,7 @@ import { AnalyticsTile } from "../components/analytics/AnalyticsTile";
 import { PostRow } from "../components/posts/PostRow";
 import { usePostActions } from "../components/posts/PostDrawer";
 import { Button, IconButton } from "../components/ui/Button";
-import { Card, CardHeader, EmptyState, PageHeader, Skeleton } from "../components/ui/Misc";
+import { Card, CardHeader, EmptyState, PageHeader, Skeleton, StatusBadge } from "../components/ui/Misc";
 import { api } from "../lib/api";
 import { useApp } from "../lib/app";
 import { cn, truncate } from "../lib/format";
@@ -206,9 +206,13 @@ export function DashboardPage() {
                   key={p.id}
                   post={p}
                   meta={
-                    <span title={p.scheduledAt ? formatDateTime(p.scheduledAt, tz) : undefined}>
-                      {p.scheduledAt ? `${formatDateTime(p.scheduledAt, tz, { weekday: "short" })} · ${relativeTime(p.scheduledAt)}` : ""}
-                    </span>
+                    p.status === "publishing" ? (
+                      <StatusBadge status="publishing" />
+                    ) : (
+                      <span title={p.scheduledAt ? formatDateTime(p.scheduledAt, tz) : undefined}>
+                        {p.scheduledAt ? `${formatDateTime(p.scheduledAt, tz, { weekday: "short" })} · ${relativeTime(p.scheduledAt)}` : ""}
+                      </span>
+                    )
                   }
                 />
               ))}

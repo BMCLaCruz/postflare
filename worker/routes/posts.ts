@@ -383,7 +383,8 @@ postRoutes.get("/overview", requirePermission("posts.read"), async (c) => {
     .bind(ws)
     .all<{ status: string; n: number }>();
   const { results: upcoming } = await c.env.DB.prepare(
-    "SELECT * FROM posts WHERE workspace_id = ? AND status = 'scheduled' ORDER BY scheduled_at LIMIT 10",
+    // Posts being published right now stay listed (first) until they have a result.
+    "SELECT * FROM posts WHERE workspace_id = ? AND status IN ('publishing', 'scheduled') ORDER BY status = 'publishing' DESC, scheduled_at LIMIT 10",
   )
     .bind(ws)
     .all<PostRow>();

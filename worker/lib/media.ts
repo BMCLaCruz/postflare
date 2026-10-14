@@ -90,7 +90,7 @@ export function mediaAccess(env: Env): MediaAccess {
     return obj;
   };
   return {
-    stream: async (item) => (await get(item)).body,
+    stream: async (item, range) => (await get(item, range && { offset: range.offset, length: Math.max(0, Math.min(range.length, item.size - range.offset)) })).body,
     bytes: async (item) => (await get(item)).arrayBuffer(),
     rangeStream: async (item, offset, length) => {
       const len = Math.max(0, Math.min(length, item.size - offset));

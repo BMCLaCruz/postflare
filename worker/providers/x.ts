@@ -109,7 +109,7 @@ async function append(ctx: ProviderContext, account: AccountRecord, id: string, 
   const length = Math.min(CHUNK, item.size - offset);
   const mp = streamingMultipart([
     { name: "segment_index", value: String(index) },
-    { name: "media", filename: "chunk", type: "application/octet-stream", size: length, open: () => ctx.media.rangeStream(item, offset, length) },
+    { name: "media", filename: "chunk", type: "application/octet-stream", size: length, open: () => ctx.media.stream(item, { offset, length }) },
   ]);
   await request(ctx, `${API}/media/upload/${id}/append`, { token: token(account), ...streamBody(mp.body, mp.contentType) });
 }

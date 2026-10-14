@@ -95,7 +95,7 @@ export function testContext(fetchFn: typeof fetch, app: Record<string, string> =
     logs,
     log: (level, message) => logs.push(`${level}: ${message}`),
     media: {
-      stream: async (item) => lazyStream(item.size),
+      stream: async (item, range) => lazyStream(range ? Math.max(0, Math.min(range.length, item.size - range.offset)) : item.size),
       bytes: async (item) => bytes(item.size),
       rangeStream: async (item, offset, length) => lazyStream(Math.max(0, Math.min(length, item.size - offset))),
       range: async (item, offset, length) => bytes(Math.max(0, Math.min(length, item.size - offset))),

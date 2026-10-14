@@ -156,7 +156,7 @@ describe("x publish", () => {
     ]);
     const ctx = hollowMedia(testContext(m.fetch, app));
     const ranges: number[][] = [];
-    ctx.media.rangeStream = async (_v, offset, length) => (ranges.push([offset, length]), lazyStream(1));
+    ctx.media.stream = async (_v, r) => (r && ranges.push([r.offset, r.length]), lazyStream(1));
     ctx.media.range = async () => {
       throw new Error("must not copy video bytes into memory");
     };
