@@ -73,7 +73,7 @@ accountRoutes.get("/accounts/:id/options/:key", requirePermission("posts.write")
     const settings = parseJson<Record<string, unknown>>(c.req.query("settings"), {});
     return c.json(await provider.options(ctx, account, c.req.param("key"), settings));
   } catch (err) {
-    return c.json({ error: errorMessage(err) }, err instanceof ProviderError && err.kind === "auth" ? 401 : 400);
+    return c.json({ error: errorMessage(err) }, err instanceof ProviderError && err.kind === "auth" ? 409 : 400);
   }
 });
 

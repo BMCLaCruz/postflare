@@ -327,7 +327,7 @@ postRoutes.post("/posts/:id/comments", requirePermission("posts.write"), forbidI
     return c.json({ externalId: r.externalId, url: r.url ?? null }, 201);
   } catch (err) {
     await logPost(c.env, row.id, "warn", `Comment failed: ${errorMessage(err)}`);
-    return c.json({ error: errorMessage(err) }, err instanceof ProviderError && err.kind === "auth" ? 401 : 502);
+    return c.json({ error: errorMessage(err) }, err instanceof ProviderError && err.kind === "auth" ? 409 : 502);
   }
 });
 

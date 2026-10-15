@@ -857,3 +857,78 @@ describe("GET /api/admin/overview", () => {
     expect((await call(owner, "/api/admin/overview?days=5000")).json.range.days).toBe(90);
   });
 });
+
+describe("comments under published posts and platform auth errors", () => {
+  /** Lends the webhook provider follow-ups (it has none) for the duration of `fn`. */
+  async function withReply(reply: NonNullable<Provider["reply"]>, fn: () => Promise<void>) {
+    const caps = hook.capabilities as { thread: boolean };
+    const before = caps.thread;
+    caps.thread = true;
+    hook.reply = reply;
+    try {
+      await fn();
+    } finally {
+      caps.thread = before;
+      delete hook.reply;
+    }
+  }
+
+  it("publishes the comment under the live post and logs it", async () => {
+    await post("p_cmt", "ws_p", "acc_hook", { status: "published", publishedAt: Date.now() });
+    await run("UPDATE posts SET external_id = 'ext_live', external_data = ? WHERE id = 'p_cmt'", JSON.stringify({ cid: "c1" }));
+    const reply = vi.fn(async () => ({ externalId: "ext_comment", url: "https://example.com/c/1" }));
+    await withReply(reply, async () => {
+      const res = await call(owner, "/api/posts/p_cmt/comments", { body: { content: "  First!  " } });
+      expect(res.status, res.text).toBe(201);
+      expect(res.json).toEqual({ externalId: "ext_comment", url: "https://example.com/c/1" });
+    });
+    expect(reply).toHaveBeenCalledOnce();
+    const [, , target, item] = reply.mock.calls[0] as unknown as [unknown, unknown, any, any];
+    expect(target).toMatchObject({ rootId: "ext_live", parentId: "ext_live", rootData: { cid: "c1" } });
+    expect(item).toMatchObject({ content: "First!", media: [] });
+    expect(await one("SELECT message FROM post_logs WHERE post_id = 'p_cmt' AND message LIKE 'Comment added%'")).toBeTruthy();
+    // The post itself is unchanged.
+    expect(await postRow("p_cmt")).toMatchObject({ status: "published", external_id: "ext_live" });
+  });
+
+  it("refuses posts that aren't live, empty text, platforms without follow-ups, viewers and other workspaces", async () => {
+    await post("p_cmt_sched", "ws_p", "acc_hook", { status: "scheduled" });
+    const reply = vi.fn(async () => ({ externalId: "x" }));
+    await withReply(reply, async () => {
+      expect((await call(owner, "/api/posts/p_cmt_sched/comments", { body: { content: "Hi" } })).status).toBe(409);
+      expect((await call(owner, "/api/posts/p_cmt/comments", { body: { content: "   " } })).status).toBe(400);
+      expect((await call(viewer, "/api/posts/p_cmt/comments", { body: { content: "Hi" } })).status).toBe(403);
+      expect((await call(other, "/api/posts/p_cmt/comments", { body: { content: "Hi" } })).status).toBe(404);
+    });
+    expect(reply).not.toHaveBeenCalled();
+    const unsupported = await call(owner, "/api/posts/p_cmt/comments", { body: { content: "Hi" } });
+    expect(unsupported.status).toBe(400);
+    expect(unsupported.json.error).toMatch(/does not support/);
+  });
+
+  // A 401 makes the web app (and the CLI) treat the Postflare session as expired and sign the user out.
+  it("a platform auth failure is a 409, never a 401", async () => {
+    await withReply(
+      async () => {
+        throw new ProviderError("Token expired, reconnect the account", "auth");
+      },
+      async () => {
+        const res = await call(owner, "/api/posts/p_cmt/comments", { body: { content: "Hi" } });
+        expect(res.status).toBe(409);
+        expect(res.json.error).toMatch(/reconnect/);
+      },
+    );
+    expect(await one("SELECT message FROM post_logs WHERE post_id = 'p_cmt' AND message LIKE 'Comment failed%'")).toBeTruthy();
+
+    hook.options = async () => {
+      throw new ProviderError("Token expired, reconnect the account", "auth");
+    };
+    try {
+      const res = await call(owner, "/api/accounts/acc_hook/options/board?settings=%7B%7D");
+      expect(res.status).toBe(409);
+      expect(res.json.error).toMatch(/reconnect/);
+    } finally {
+      delete hook.options;
+    }
+  });
+});
