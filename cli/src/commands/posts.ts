@@ -200,7 +200,7 @@ export const post: Command = {
 
 export const posts: Command = {
   name: "posts",
-  summary: "List posts (newest first). Subcommands: show, edit, cancel, retry, resolve, rm.",
+  summary: "List posts (newest first). Subcommands: show, edit, cancel, retry, resolve, comment, rm.",
   options: {
     status: { type: "string", arg: "<list>", description: "Comma separated: draft,scheduled,publishing,published,failed,needs_check,cancelled" },
     upcoming: { type: "boolean", description: "Scheduled posts, soonest first" },
@@ -368,6 +368,27 @@ export const postsResolve: Command = {
     const p = await ctx.api.request<PostDTO>("POST", `/posts/${encodeURIComponent(positionals[0])}/resolve`, { body });
     if (ctx.json) return printJson(p);
     println(`${c.green("✓")} ${values.published ? "Marked as published" : "Publishing again"}: ${p.id} ${fmtStatus(p.status)}${p.externalUrl ? `  ${c.cyan(p.externalUrl)}` : ""}`);
+  },
+};
+
+export const postsComment: Command = {
+  name: "posts comment",
+  args: "<id>",
+  summary: "Add a comment (or thread reply) under a published post, right away.",
+  options: {
+    text: { type: "string", short: "t", arg: "<text>", description: "Comment text" },
+  },
+  min: 1,
+  max: 1,
+  examples: ['postflare posts comment pst_abc --text "Answer: DENIED. Her passport expires too soon."'],
+  async run(ctx, { values, positionals }) {
+    const content = str(values.text)?.trim();
+    if (!content) throw new UsageError("--text is required", "posts comment");
+    const r = await ctx.api.request<{ externalId: string; url: string | null }>("POST", `/posts/${encodeURIComponent(positionals[0])}/comments`, {
+      body: { content },
+    });
+    if (ctx.json) return printJson(r);
+    println(`${c.green("✓")} Comment added${r.url ? `: ${c.cyan(r.url)}` : ` (${r.externalId})`}`);
   },
 };
 

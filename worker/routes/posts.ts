@@ -1,14 +1,15 @@
 import { Hono } from "hono";
 import type { CreatePostsInput, ResolvePostInput, ThreadItem } from "../../shared/types";
 import type { Context } from "hono";
-import { requirePermission, wsId, type AppEnv } from "../lib/auth";
-import type { AccountRow } from "../lib/accounts";
+import { forbidInDemoWorkspace, requirePermission, wsId, type AppEnv } from "../lib/auth";
+import { findAccount, freshAccount, providerContext, type AccountRow } from "../lib/accounts";
 import { DEMO_POSTS_PER_DAY, demoPostsLeft, queueDemoPublish, simulateDueDemoPosts } from "../lib/demo";
 import type { MediaRow } from "../lib/media";
 import { normalizeVariant, resolveAttribution } from "../lib/playbooks";
 import { findPost, logPost, logStatement, postDto, startWorkflow, startWorkflows, terminateWorkflow, workflowInstanceId, type PostRow } from "../lib/posts";
-import { newId, now, parseJson } from "../lib/util";
+import { errorMessage, newId, now, parseJson } from "../lib/util";
 import { validatePost } from "../lib/validate";
+import { ProviderError } from "../providers/errors";
 import { getProvider } from "../providers/registry";
 
 export const postRoutes = new Hono<AppEnv>();
@@ -292,6 +293,42 @@ postRoutes.post("/posts/:id/retry", requirePermission("posts.write"), async (c) 
     await logPost(c.env, row.id, "info", "Retry requested");
   }
   return c.json(postDto((await findPost(c.env, wsId(c), row.id))!));
+});
+
+/**
+ * Adds a follow-up (comment / thread reply) under an already published post, published right away. Not part of the
+ * post's thread: it is logged on the post.
+ */
+postRoutes.post("/posts/:id/comments", requirePermission("posts.write"), forbidInDemoWorkspace("Commenting on live posts"), async (c) => {
+  const row = await findPost(c.env, wsId(c), c.req.param("id"));
+  if (!row) return c.json({ error: "Not found" }, 404);
+  if (row.status !== "published" || !row.external_id) return c.json({ error: "Only published posts can get a comment" }, 409);
+  const { content } = await c.req.json<{ content?: string }>().catch(() => ({ content: undefined }));
+  const text = content?.trim();
+  if (!text) return c.json({ error: "content is required" }, 400);
+  const accountRow = await findAccount(c.env, wsId(c), row.account_id);
+  const provider = accountRow && getProvider(accountRow.provider);
+  if (!accountRow || !provider) return c.json({ error: "The post's account no longer exists" }, 409);
+  if (!provider.reply || !provider.capabilities.thread) return c.json({ error: `${provider.name} does not support comments or replies` }, 400);
+  const settings = parseJson<Record<string, unknown>>(row.settings, {});
+  try {
+    const ctx = await providerContext(c.env, provider, { requestUrl: c.req.url });
+    const account = await freshAccount(c.env, provider, ctx, accountRow);
+    const data = parseJson<Record<string, unknown>>(row.external_data, {});
+    const r = await provider.reply(ctx, account, { rootId: row.external_id, parentId: row.external_id, rootData: data, parentData: data }, {
+      id: `${row.id}-c${now()}`,
+      content: text,
+      media: [],
+      settings,
+      scheduledAt: row.scheduled_at ?? now(),
+      createdAt: row.created_at,
+    });
+    await logPost(c.env, row.id, "info", `Comment added${r.url ? `: ${r.url}` : ""}`);
+    return c.json({ externalId: r.externalId, url: r.url ?? null }, 201);
+  } catch (err) {
+    await logPost(c.env, row.id, "warn", `Comment failed: ${errorMessage(err)}`);
+    return c.json({ error: errorMessage(err) }, err instanceof ProviderError && err.kind === "auth" ? 401 : 502);
+  }
 });
 
 /**
