@@ -105,7 +105,7 @@ export const threads: Provider = {
   setupNotes: [
     "1. Create an app at [developers.facebook.com/apps](https://developers.facebook.com/apps) and choose the **Access the Threads API** use case.",
     `2. In the use case settings, enable ${SCOPES.map((s) => `\`${s}\``).join(", ")}.`,
-    "3. Under *Settings*, add `{{redirectUri}}` to the *Redirect Callback URLs* (also fill the uninstall/delete callback URLs, e.g. `{{baseUrl}}`).",
+    "3. Under *Settings*, add `{{redirectUri}}` to the *Redirect Callback URLs* (uninstall callback: `{{baseUrl}}`; delete callback: `{{baseUrl}}/oauth/meta/data-deletion`).",
     "4. While the app is unpublished, add your Threads profile as a *Threads Tester* and accept the invite in Threads (Settings → Account → Website permissions).",
     "5. Copy the **Threads App ID** and **Threads App Secret** (not the Facebook App ID). Tokens last 60 days and are refreshed automatically.",
     "Analytics need `threads_manage_insights`; accounts connected before analytics existed must reconnect.",

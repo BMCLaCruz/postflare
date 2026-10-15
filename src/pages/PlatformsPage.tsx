@@ -247,6 +247,18 @@ function PlatformDetail({ provider: p, accountCount }: { provider: Provider; acc
               <code className="min-w-0 flex-1 truncate rounded-lg bg-zinc-100 px-3 py-2 font-mono text-xs dark:bg-zinc-800">{redirectUri}</code>
               <CopyButton text={redirectUri} />
             </div>
+            {p.dataDeletionUri && (
+              <>
+                <h3 className="mt-4 text-sm font-semibold">Data deletion callback URL</h3>
+                <p className="mt-0.5 text-sm text-zinc-500">
+                  Paste this in your Meta app&rsquo;s <em>Data deletion request URL</em> (choose &ldquo;Data deletion callback URL&rdquo;). Meta calls it when someone removes the app and asks for their data to be deleted; their connected accounts are then removed here.
+                </p>
+                <div className="mt-3 flex items-center gap-2">
+                  <code className="min-w-0 flex-1 truncate rounded-lg bg-zinc-100 px-3 py-2 font-mono text-xs dark:bg-zinc-800">{p.dataDeletionUri}</code>
+                  <CopyButton text={p.dataDeletionUri} />
+                </div>
+              </>
+            )}
           </div>
           <div className="grid gap-6 p-5 xl:grid-cols-2">
             <div className="min-w-0">

@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { sessionUser, workspaceAccess, type AppEnv } from "../lib/auth";
 import { providerContext, saveConnectedAccounts } from "../lib/accounts";
+import { META_PROVIDERS, deletionStatus, handleDataDeletion } from "../lib/meta-deletion";
 import { connectBlocked } from "../lib/settings";
 import { errorMessage, now } from "../lib/util";
 import { getProvider } from "../providers/registry";
@@ -8,6 +9,28 @@ import { getProvider } from "../providers/registry";
 export const oauthRoutes = new Hono<AppEnv>();
 
 const STATE_TTL_MS = 30 * 60 * 1000;
+
+/**
+ * Meta's Data Deletion Request Callback (public: Meta signs the request with the app secret). `meta` checks the
+ * secrets of every configured Meta provider; a provider id only that app's. Responds `{ url, confirmation_code }`.
+ */
+oauthRoutes.post("/:provider/data-deletion", async (c) => {
+  const id = c.req.param("provider");
+  if (id !== "meta" && !(META_PROVIDERS as readonly string[]).includes(id)) return c.json({ error: "Not found" }, 404);
+  const form = await c.req.parseBody().catch(() => ({}) as Record<string, unknown>);
+  const signed = form.signed_request;
+  if (typeof signed !== "string" || !signed) return c.json({ error: "Missing signed_request" }, 400);
+  const res = await handleDataDeletion(c.env, signed, { providers: id === "meta" ? META_PROVIDERS : [id], requestUrl: c.req.url });
+  if (!res.ok) return c.json({ error: res.error }, 400);
+  return c.json({ url: res.url, confirmation_code: res.code });
+});
+
+/** Status of a deletion request, for the public /data-deletion/ page (the confirmation code is the only key). */
+oauthRoutes.get("/meta/data-deletion/status", async (c) => {
+  const record = await deletionStatus(c.env.DB, c.req.query("code") ?? "");
+  if (!record) return c.json({ error: "Not found" }, 404);
+  return c.json({ status: record.status, accounts: record.accounts, requestedAt: record.requested_at, completedAt: record.completed_at });
+});
 
 // Some platforms (Apple-style form_post, TikTok...) may POST the callback.
 oauthRoutes.on(["GET", "POST"], ["/:provider/callback", "/:provider/callback/"], async (c) => {

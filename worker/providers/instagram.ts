@@ -4,6 +4,7 @@ import {
   FB_GRAPH,
   facebookAuthorizeUrl,
   facebookPages,
+  facebookUserId,
   facebookUserToken,
   instagramCapabilities,
   instagramAccountMetrics,
@@ -67,6 +68,7 @@ export const instagram: Provider = {
     "2. Add **Facebook Login for Business** (or Facebook Login) and **Instagram Graph API**; add `{{redirectUri}}` to *Valid OAuth Redirect URIs*.",
     `3. Request the permissions ${SCOPES.map((s) => `\`${s}\``).join(", ")}.`,
     "4. Copy the App ID and App Secret from *App settings → Basic*. One account is added per linked Instagram account.",
+    "In *App settings → Basic*, set the *Data deletion request URL* to the data deletion callback `{{baseUrl}}/oauth/meta/data-deletion` (and the *Privacy policy URL* to `{{baseUrl}}/privacy/`).",
     "Analytics need `instagram_manage_insights` (add it to your Login for Business configuration too); accounts connected before analytics existed must reconnect.",
   ].join("\n"),
   credentialFields: [],
@@ -93,6 +95,7 @@ export const instagram: Provider = {
         "No Instagram professional account was found. Link an Instagram Business/Creator account to a Facebook Page and select that Page.",
         "invalid",
       );
+    const metaUserId = await facebookUserId(ctx, token);
     return linked.map((p) => {
       const ig = p.instagram_business_account!;
       return {
@@ -103,7 +106,7 @@ export const instagram: Provider = {
         profileUrl: ig.username ? `https://www.instagram.com/${ig.username}/` : null,
         credentials: { accessToken: p.access_token },
         expiresAt: null,
-        meta: { pageId: p.id, pageName: p.name },
+        meta: { pageId: p.id, pageName: p.name, metaUserId },
       };
     });
   },

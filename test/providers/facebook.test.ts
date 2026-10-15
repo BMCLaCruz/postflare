@@ -50,11 +50,14 @@ describe("facebook", () => {
       [`GET ${FB_GRAPH}/me/businesses`, { data: [{ id: "BIZ" }] }],
       [`GET ${FB_GRAPH}/BIZ/owned_pages`, { data: [{ id: "PAGE3", name: "Biz page", access_token: "PT3" }, { id: "PAGE1", name: "dup", access_token: "x" }] }],
       [`GET ${FB_GRAPH}/BIZ/client_pages`, json({ error: { message: "no", code: 200 } }, 400)],
+      [`GET ${FB_GRAPH}/me?`, { id: "FBUSER" }],
     ]);
     const ctx = testContext(m.fetch, APP, "facebook");
     const accounts = await facebook.callback!(ctx, { code: "CODE", codeVerifier: "v", params: new URLSearchParams() });
     expect(accounts.map((a) => a.externalId)).toEqual(["PAGE1", "PAGE3"]);
     expect(accounts[0]).toMatchObject({ name: "Page One", username: "pageone", avatarUrl: "https://img/1", credentials: { accessToken: "PT1" }, expiresAt: null });
+    // The Facebook user who logged in: matched by Meta's data deletion callback.
+    expect(accounts[1].meta).toEqual({ pageId: "PAGE3", metaUserId: "FBUSER" });
     const first = new URL(m.requests[0].url);
     expect(first.searchParams.get("code")).toBe("CODE");
     expect(first.searchParams.get("redirect_uri")).toBe("https://pf.example.com/oauth/facebook/callback");

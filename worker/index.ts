@@ -8,6 +8,7 @@ import { recoverStuckPosts, sweepScheduledPosts } from "./lib/posts";
 import { now } from "./lib/util";
 import { CRON_METRICS_LIMITS, collectMetrics, expireMetricsSchedules } from "./lib/metrics";
 import { sweepMedia } from "./lib/media-lifecycle";
+import { pruneDeletionsStatement } from "./lib/meta-deletion";
 import { updateCheckCron } from "./lib/updates";
 import { cronRunStatement, metricsEventsStatement, pruneUsageStatement, type MetricsEvent } from "./lib/usage";
 import { accountRoutes } from "./routes/accounts";
@@ -161,6 +162,8 @@ export async function dailyJobs(env: Env): Promise<void> {
     env.DB.prepare("DELETE FROM upload_links WHERE expires_at < ?").bind(now() - 7 * 24 * 60 * 60 * 1000).run(),
     env.DB.prepare("DELETE FROM settings WHERE (key LIKE 'login_fail:%' OR key LIKE 'demo_login:%') AND json_extract(value, '$.until') < ?").bind(now()).run(),
     env.DB.prepare("DELETE FROM invitations WHERE accepted_at IS NULL AND expires_at < ?").bind(now() - 30 * 24 * 60 * 60 * 1000).run(),
+    // Meta data deletion requests shown on /data-deletion/ (90 days).
+    pruneDeletionsStatement(env.DB, now()).run(),
     // Usage events older than USAGE_RETENTION_DAYS (bounded per run).
     pruneUsageStatement(env.DB, now()).run(),
   ]);

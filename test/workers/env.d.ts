@@ -12,5 +12,7 @@ declare module "cloudflare:test" {
     PUBLISH_DB: D1Database;
     /** Own instance for the playbook tests (library, attribution, ranking, D1 query counts). */
     PLAYBOOKS_DB: D1Database;
+    /** Own instance for the Meta data deletion callback tests (they configure Meta app secrets). */
+    DELETION_DB: D1Database;
   }
 }

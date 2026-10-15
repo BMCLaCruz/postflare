@@ -241,6 +241,15 @@ the pull request deploys the update** through Workers Builds.
    and whitelist the redirect URL shown there (`https://<your-app>/oauth/<platform>/callback`).
 2. **Accounts** page → Connect account.
 
+Meta apps (Facebook Page, Instagram, Threads) also ask for a **data deletion request URL**: use the data deletion
+callback shown on their Platforms page, `https://<your-app>/oauth/meta/data-deletion` (one URL for every Meta product;
+it accepts requests signed with any configured Meta app secret). When someone removes the app in their Facebook,
+Instagram or Threads settings and asks for deletion, Meta calls it and the accounts they connected are removed like
+**Remove** on the Accounts page (tokens, profile data, their posts and metrics). Meta shows them a confirmation code and a
+link to the status page `https://<your-app>/data-deletion/`, which also explains how to delete data by hand. Facebook
+Pages and Instagram (Facebook login) accounts are matched by the Facebook user who connected them, recorded since this
+feature: reconnect older ones once.
+
 Credential-based platforms (Bluesky, Mastodon, Telegram, Nostr, Lemmy, DEV, Hashnode, Medium, WordPress, Listmonk,
 Webhook...) need no developer app.
 

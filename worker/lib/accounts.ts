@@ -4,6 +4,7 @@ import { ProviderError } from "../providers/errors";
 import type { AccountRecord, ConnectedAccount, CredentialsUpdate, Provider, ProviderContext } from "../providers/types";
 import { decryptJson, encryptJson } from "./crypto";
 import { mediaAccess } from "./media";
+import { terminateWorkflow } from "./posts";
 import { metricsStatusDto } from "./metrics";
 import { baseUrl } from "./settings";
 import { newId, now, parseJson } from "./util";
@@ -108,6 +109,29 @@ export async function getAccountRow(env: Env, id: string): Promise<AccountRow | 
 /** An account of the given workspace (null for unknown ids and accounts of other workspaces). */
 export async function findAccount(env: Env, workspaceId: string, id: string): Promise<AccountRow | null> {
   return env.DB.prepare("SELECT * FROM accounts WHERE id = ? AND workspace_id = ?").bind(id, workspaceId).first<AccountRow>();
+}
+
+/**
+ * Remove accounts with everything tied to them: their scheduled workflows are stopped, then their posts, post logs,
+ * post and account metrics and the account rows (tokens, profile data) are deleted. Unscoped: callers check access.
+ * Used by "Remove" on the Accounts page and by the Meta data deletion callback. 2 D1 round trips whatever the count.
+ */
+export async function removeAccounts(env: Env, ids: string[]): Promise<void> {
+  if (!ids.length) return;
+  const list = ids.map(() => "?").join(",");
+  const { results } = await env.DB.prepare(
+    `SELECT workflow_id FROM posts WHERE account_id IN (${list}) AND status = 'scheduled' AND workflow_id IS NOT NULL`,
+  )
+    .bind(...ids)
+    .all<{ workflow_id: string }>();
+  await Promise.all(results.map((r) => terminateWorkflow(env, r.workflow_id)));
+  await env.DB.batch([
+    env.DB.prepare(`DELETE FROM post_logs WHERE post_id IN (SELECT id FROM posts WHERE account_id IN (${list}))`).bind(...ids),
+    env.DB.prepare(`DELETE FROM post_metrics WHERE post_id IN (SELECT id FROM posts WHERE account_id IN (${list}))`).bind(...ids),
+    env.DB.prepare(`DELETE FROM account_metrics WHERE account_id IN (${list})`).bind(...ids),
+    env.DB.prepare(`DELETE FROM posts WHERE account_id IN (${list})`).bind(...ids),
+    env.DB.prepare(`DELETE FROM accounts WHERE id IN (${list})`).bind(...ids),
+  ]);
 }
 
 /** Thrown when a social account is already connected in another workspace (it is never moved silently). */

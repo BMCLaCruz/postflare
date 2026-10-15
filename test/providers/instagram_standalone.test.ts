@@ -31,6 +31,8 @@ describe("instagram (instagram login)", () => {
     const before = Date.now();
     const [a] = await instagramStandalone.callback!(testContext(m.fetch, APP, "instagram_standalone"), { code: "CODE#_", codeVerifier: "v", params: new URLSearchParams() });
     expect(a).toMatchObject({ externalId: "1784", name: "Brand", username: "brand", avatarUrl: "https://pic", credentials: { accessToken: "LONG" } });
+    // App-scoped user id from the token response (no `id` in /me here): matched by Meta's data deletion callback.
+    expect(a.meta).toEqual({ accountType: "BUSINESS", metaUserId: "1" });
     expect(a.expiresAt).toBeGreaterThanOrEqual(before + 5184000 * 1000);
     expect(m.requests[0].form).toMatchObject({ client_id: "IGAPP", client_secret: "IGSECRET", grant_type: "authorization_code", code: "CODE" });
     expect(new URL(m.requests[1].url).searchParams.get("grant_type")).toBe("ig_exchange_token");

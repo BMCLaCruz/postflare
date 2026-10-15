@@ -2,8 +2,11 @@ import type { PostDTO, PostLogDTO, PostStatus, ProviderInfo } from "@shared/type
 
 export type * from "@shared/types";
 
-/** GET /api/providers. `enabled`: new accounts can be connected (false for experimental ones while they are off). */
-export type Provider = ProviderInfo & { configured: boolean; redirectUri: string; enabled: boolean };
+/**
+ * GET /api/providers. `enabled`: new accounts can be connected (false for experimental ones while they are off).
+ * `dataDeletionUri`: Meta apps only, the data deletion callback URL to paste in the Meta dashboard.
+ */
+export type Provider = ProviderInfo & { configured: boolean; redirectUri: string; enabled: boolean; dataDeletionUri?: string };
 
 export interface AuthStatus {
   setup: boolean;

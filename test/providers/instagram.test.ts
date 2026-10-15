@@ -48,6 +48,7 @@ describe("instagram (facebook login)", () => {
         },
       ],
       [`GET ${FB_GRAPH}/me/businesses`, { data: [] }],
+      [`GET ${FB_GRAPH}/me?`, { id: "FBUSER" }],
     ]);
     const accounts = await instagram.callback!(testContext(m.fetch, APP, "instagram"), { code: "C", codeVerifier: "v", params: new URLSearchParams() });
     expect(accounts).toEqual([
@@ -59,7 +60,8 @@ describe("instagram (facebook login)", () => {
         profileUrl: "https://www.instagram.com/brand/",
         credentials: { accessToken: "PT1" },
         expiresAt: null,
-        meta: { pageId: "PG1", pageName: "Page" },
+        // The Facebook user who logged in: matched by Meta's data deletion callback.
+        meta: { pageId: "PG1", pageName: "Page", metaUserId: "FBUSER" },
       },
     ]);
     expect(new URL(m.requests[2].url).searchParams.get("fields")).toContain("instagram_business_account{");

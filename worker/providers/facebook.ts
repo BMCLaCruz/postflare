@@ -6,6 +6,7 @@ import {
   bestEffort,
   facebookAuthorizeUrl,
   facebookPages,
+  facebookUserId,
   facebookUserToken,
   graph,
   graphBatch,
@@ -205,6 +206,7 @@ export const facebook: Provider = {
     `3. Request the permissions ${SCOPES.map((s) => `\`${s}\``).join(", ")} (Advanced Access needs App Review unless you only post to Pages you manage as an app admin/tester).`,
     "4. If you use Login for Business, create a configuration with those permissions and paste its ID below.",
     "5. Copy the App ID and App Secret from *App settings → Basic*. One account is added per Page you select.",
+    "In *App settings → Basic*, set the *Data deletion request URL* to the data deletion callback `{{baseUrl}}/oauth/meta/data-deletion` (and the *Privacy policy URL* to `{{baseUrl}}/privacy/`).",
     "Analytics need `read_insights` and `pages_read_engagement`; Pages connected before analytics existed must reconnect.",
   ].join("\n"),
   credentialFields: [],
@@ -261,6 +263,7 @@ export const facebook: Provider = {
     const pages = await facebookPages<Page>(ctx, token, "id,name,username,access_token,picture.type(large),tasks");
     const usable = pages.filter((p) => p.access_token && (!p.tasks || p.tasks.includes("CREATE_CONTENT")));
     if (!usable.length) throw new ProviderError("No Facebook Page with content permissions was granted. Select at least one Page you manage.", "invalid");
+    const metaUserId = await facebookUserId(ctx, token);
     return usable.map((p) => ({
       externalId: p.id,
       name: p.name,
@@ -270,7 +273,7 @@ export const facebook: Provider = {
       // Page tokens obtained from a long-lived user token do not expire.
       credentials: { accessToken: p.access_token },
       expiresAt: null,
-      meta: { pageId: p.id },
+      meta: { pageId: p.id, metaUserId },
     }));
   },
 

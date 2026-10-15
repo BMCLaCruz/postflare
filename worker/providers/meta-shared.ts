@@ -125,6 +125,15 @@ export async function facebookUserToken(ctx: ProviderContext, code: string): Pro
 }
 
 /**
+ * The app-scoped id of the Facebook user who logged in, kept in the accounts' `meta.metaUserId`: Meta's data deletion
+ * callback identifies the user by it (lib/meta-deletion.ts). Best effort: null when /me fails.
+ */
+export async function facebookUserId(ctx: ProviderContext, userToken: string): Promise<string | null> {
+  const me = await bestEffort(() => graph<{ id?: string }>(ctx, `${FB_GRAPH}/me`, { token: userToken, query: { fields: "id" } }), null);
+  return me?.id ? String(me.id) : null;
+}
+
+/**
  * Every Page the user granted: `/me/accounts`, plus Pages owned by / shared with their Business Manager
  * businesses (those are not always listed by /me/accounts). Deduplicated by id.
  */

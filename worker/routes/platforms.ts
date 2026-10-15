@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { requireInstancePermission, type AppEnv } from "../lib/auth";
 import { encryptJson } from "../lib/crypto";
 import { getAppConfig } from "../lib/accounts";
+import { META_PROVIDERS, dataDeletionUri } from "../lib/meta-deletion";
 import { baseUrl, experimentalEnabled } from "../lib/settings";
 import { now } from "../lib/util";
 import { getProvider, providerInfo, providers, redirectUriFor } from "../providers/registry";
@@ -23,6 +24,8 @@ platformRoutes.get("/providers", async (c) => {
       ...providerInfo(p),
       configured: !p.appFields.some((f) => f.required) || configured.has(p.id),
       redirectUri: redirectUriFor(base, p),
+      // Meta apps also ask for a data deletion callback URL.
+      ...((META_PROVIDERS as readonly string[]).includes(p.id) && { dataDeletionUri: dataDeletionUri(base) }),
       enabled: p.status !== "experimental" || experimental,
     })),
   );

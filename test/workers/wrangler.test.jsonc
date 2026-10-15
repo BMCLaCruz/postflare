@@ -11,7 +11,8 @@
     { "binding": "ANALYTICS_DB", "database_name": "postflare-analytics", "database_id": "analytics" },
     { "binding": "SECURITY_DB", "database_name": "postflare-security", "database_id": "security" },
     { "binding": "PUBLISH_DB", "database_name": "postflare-publish", "database_id": "publish" },
-    { "binding": "PLAYBOOKS_DB", "database_name": "postflare-playbooks", "database_id": "playbooks" }
+    { "binding": "PLAYBOOKS_DB", "database_name": "postflare-playbooks", "database_id": "playbooks" },
+    { "binding": "DELETION_DB", "database_name": "postflare-deletion", "database_id": "deletion" }
   ],
   "r2_buckets": [{ "binding": "MEDIA", "bucket_name": "postflare-media" }],
   "workflows": [{ "name": "postflare-publish", "binding": "PUBLISH_WORKFLOW", "class_name": "PublishWorkflow" }]

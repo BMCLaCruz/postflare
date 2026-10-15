@@ -6,13 +6,13 @@ import {
   findAccount,
   freshAccount,
   providerContext,
+  removeAccounts,
   saveConnectedAccounts,
   type AccountRow,
 } from "../lib/accounts";
 import { pkceChallenge } from "../lib/crypto";
 import { connectBlocked } from "../lib/settings";
 import { demoOptions } from "../lib/demo";
-import { terminateWorkflow } from "../lib/posts";
 import { errorMessage, now, parseJson, randomToken } from "../lib/util";
 import { ProviderError } from "../providers/errors";
 import { getProvider } from "../providers/registry";
@@ -39,20 +39,7 @@ accountRoutes.patch("/accounts/:id", requirePermission("accounts.manage"), async
 accountRoutes.delete("/accounts/:id", requirePermission("accounts.manage"), async (c) => {
   const row = await findAccount(c.env, wsId(c), c.req.param("id"));
   if (!row) return c.json({ error: "Not found" }, 404);
-  const id = row.id;
-  const { results } = await c.env.DB.prepare(
-    "SELECT workflow_id FROM posts WHERE account_id = ? AND status = 'scheduled' AND workflow_id IS NOT NULL",
-  )
-    .bind(id)
-    .all<{ workflow_id: string }>();
-  await Promise.all(results.map((r) => terminateWorkflow(c.env, r.workflow_id)));
-  await c.env.DB.batch([
-    c.env.DB.prepare("DELETE FROM post_logs WHERE post_id IN (SELECT id FROM posts WHERE account_id = ?)").bind(id),
-    c.env.DB.prepare("DELETE FROM post_metrics WHERE post_id IN (SELECT id FROM posts WHERE account_id = ?)").bind(id),
-    c.env.DB.prepare("DELETE FROM account_metrics WHERE account_id = ?").bind(id),
-    c.env.DB.prepare("DELETE FROM posts WHERE account_id = ?").bind(id),
-    c.env.DB.prepare("DELETE FROM accounts WHERE id = ?").bind(id),
-  ]);
+  await removeAccounts(c.env, [row.id]);
   return c.json({ ok: true });
 });
 

@@ -43,10 +43,10 @@ interface Me {
 }
 
 async function me(ctx: ProviderContext, token: string) {
-  return graph<Me>(ctx, `${IG_GRAPH}/me`, { token, query: { fields: "user_id,username,name,profile_picture_url,account_type" } });
+  return graph<Me>(ctx, `${IG_GRAPH}/me`, { token, query: { fields: "user_id,id,username,name,profile_picture_url,account_type" } });
 }
 
-function toAccount(user: Me, token: string, expiresIn?: number): ConnectedAccount {
+function toAccount(user: Me, token: string, expiresIn?: number, scopedId?: string): ConnectedAccount {
   return {
     // user_id is the professional account id used by the publishing endpoints.
     externalId: String(user.user_id ?? user.id),
@@ -58,7 +58,8 @@ function toAccount(user: Me, token: string, expiresIn?: number): ConnectedAccoun
     expiresAt: expiresAt(expiresIn ?? 60 * 24 * 3600),
     // The long-lived token refreshes itself (ig_refresh_token): it must be refreshed before it expires.
     refreshExpiresAt: expiresAt(expiresIn ?? 60 * 24 * 3600),
-    meta: { accountType: user.account_type ?? null },
+    // App-scoped user id (`id` of /me, or the token's user_id): Meta's data deletion callback identifies the user by it.
+    meta: { accountType: user.account_type ?? null, metaUserId: user.id ? String(user.id) : scopedId ?? null },
   };
 }
 
@@ -79,6 +80,7 @@ export const instagramStandalone: Provider = {
     "2. Open *Instagram → API setup with Instagram login*. In *Set up Instagram business login*, add `{{redirectUri}}` as the redirect URL.",
     `3. Request the permissions ${SCOPES.map((s) => `\`${s}\``).join(", ")}.`,
     "4. Copy the **Instagram App ID** and **Instagram App Secret** shown on that page (not the Facebook App ID).",
+    "In the same *Set up Instagram business login* step, set the *Data deletion request URL* to `{{baseUrl}}/oauth/meta/data-deletion` (the deauthorize callback can be `{{baseUrl}}`).",
     "Tokens last 60 days and are refreshed automatically.",
     "Analytics need `instagram_business_manage_insights`; accounts connected before analytics existed must reconnect.",
   ].join("\n"),
@@ -119,7 +121,8 @@ export const instagramStandalone: Provider = {
     const user = await me(ctx, long.access_token);
     if (user.account_type && !PROFESSIONAL.includes(user.account_type))
       ctx.log("warn", `Instagram account type ${user.account_type} may not be allowed to publish; switch to a professional account`);
-    return [toAccount(user, long.access_token, long.expires_in)];
+    const scopedId = short.user_id ?? short.data?.[0]?.user_id;
+    return [toAccount(user, long.access_token, long.expires_in, scopedId === undefined ? undefined : String(scopedId))];
   },
 
   async refresh(ctx, account) {
