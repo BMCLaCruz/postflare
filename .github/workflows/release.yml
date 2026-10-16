@@ -86,4 +86,4 @@ jobs:
       - run: npm run cli:build
       - name: Publish to npm
         working-directory: cli
-        run: npm publish --provenance --access public
+        run: npm publish --provenance --access public --loglevel verbose
