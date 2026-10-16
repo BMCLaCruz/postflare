@@ -377,15 +377,22 @@ export const postsComment: Command = {
   summary: "Add a comment (or thread reply) under a published post, right away.",
   options: {
     text: { type: "string", short: "t", arg: "<text>", description: "Comment text" },
+    "reply-to": { type: "string", arg: "<id|url>", description: "Answer this reply under the post (its id or link, e.g. an X reply) instead of the post itself" },
   },
   min: 1,
   max: 1,
-  examples: ['postflare posts comment pst_abc --text "Answer: DENIED. Her passport expires too soon."'],
+  examples: [
+    'postflare posts comment pst_abc --text "Answer: DENIED. Her passport expires too soon."',
+    'postflare posts comment pst_abc --reply-to https://x.com/someone/status/123 --text "Thanks!"',
+  ],
   async run(ctx, { values, positionals }) {
     const content = str(values.text)?.trim();
     if (!content) throw new UsageError("--text is required", "posts comment");
+    const to = str(values["reply-to"])?.trim();
+    // A link to the reply: its id is the last path segment (x.com/u/status/<id>, bsky…/post/<rkey>, threads…/post/<id>).
+    const replyTo = to && /^https?:\/\//i.test(to) ? new URL(to).pathname.split("/").filter(Boolean).pop() : to;
     const r = await ctx.api.request<{ externalId: string; url: string | null }>("POST", `/posts/${encodeURIComponent(positionals[0])}/comments`, {
-      body: { content },
+      body: { content, ...(replyTo ? { replyTo } : {}) },
     });
     if (ctx.json) return printJson(r);
     println(`${c.green("✓")} Comment added${r.url ? `: ${c.cyan(r.url)}` : ` (${r.externalId})`}`);

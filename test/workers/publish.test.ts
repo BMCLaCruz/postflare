@@ -887,6 +887,12 @@ describe("comments under published posts and platform auth errors", () => {
     expect(target).toMatchObject({ rootId: "ext_live", parentId: "ext_live", rootData: { cid: "c1" } });
     expect(item).toMatchObject({ content: "First!", media: [] });
     expect(await one("SELECT message FROM post_logs WHERE post_id = 'p_cmt' AND message LIKE 'Comment added%'")).toBeTruthy();
+    // Answering someone's reply under the post.
+    await withReply(reply, async () => {
+      expect((await call(owner, "/api/posts/p_cmt/comments", { body: { content: "Thanks!", replyTo: "ext_their_reply" } })).status).toBe(201);
+      expect((await call(owner, "/api/posts/p_cmt/comments", { body: { content: "Thanks!", replyTo: "a b/c" } })).status).toBe(400);
+    });
+    expect((reply.mock.calls[1] as unknown as [unknown, unknown, any])[2]).toMatchObject({ rootId: "ext_live", parentId: "ext_their_reply" });
     // The post itself is unchanged.
     expect(await postRow("p_cmt")).toMatchObject({ status: "published", external_id: "ext_live" });
   });

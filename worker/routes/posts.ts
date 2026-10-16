@@ -297,13 +297,16 @@ postRoutes.post("/posts/:id/retry", requirePermission("posts.write"), async (c) 
 
 /**
  * Adds a follow-up (comment / thread reply) under an already published post, published right away. Not part of the
- * post's thread: it is logged on the post.
+ * post's thread: it is logged on the post. `replyTo`: platform id of a reply under the post (e.g. someone's comment
+ * on X) to answer that instead of the post itself.
  */
 postRoutes.post("/posts/:id/comments", requirePermission("posts.write"), forbidInDemoWorkspace("Commenting on live posts"), async (c) => {
   const row = await findPost(c.env, wsId(c), c.req.param("id"));
   if (!row) return c.json({ error: "Not found" }, 404);
   if (row.status !== "published" || !row.external_id) return c.json({ error: "Only published posts can get a comment" }, 409);
-  const { content } = await c.req.json<{ content?: string }>().catch(() => ({ content: undefined }));
+  const { content, replyTo } = await c.req.json<{ content?: string; replyTo?: string }>().catch(() => ({ content: undefined, replyTo: undefined }));
+  const parentId = replyTo?.trim() || row.external_id;
+  if (!/^[\w.:-]{1,200}$/.test(parentId)) return c.json({ error: "replyTo must be a platform post id" }, 400);
   const text = content?.trim();
   if (!text) return c.json({ error: "content is required" }, 400);
   const accountRow = await findAccount(c.env, wsId(c), row.account_id);
@@ -315,7 +318,7 @@ postRoutes.post("/posts/:id/comments", requirePermission("posts.write"), forbidI
     const ctx = await providerContext(c.env, provider, { requestUrl: c.req.url });
     const account = await freshAccount(c.env, provider, ctx, accountRow);
     const data = parseJson<Record<string, unknown>>(row.external_data, {});
-    const r = await provider.reply(ctx, account, { rootId: row.external_id, parentId: row.external_id, rootData: data, parentData: data }, {
+    const r = await provider.reply(ctx, account, { rootId: row.external_id, parentId, rootData: data, parentData: parentId === row.external_id ? data : undefined }, {
       id: `${row.id}-c${now()}`,
       content: text,
       media: [],
