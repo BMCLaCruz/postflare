@@ -7,6 +7,10 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      publish_cli_tag:
+        description: "Publish this existing CLI tag (e.g. cli-v0.2.0) to npm again, if its publish failed"
+        required: false
 
 permissions: {}
 
@@ -55,7 +59,7 @@ jobs:
 
   publish-cli:
     needs: release-please
-    if: needs.release-please.outputs.cli_release == 'true'
+    if: needs.release-please.outputs.cli_release == 'true' || startsWith(inputs.publish_cli_tag, 'cli-v')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -64,12 +68,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.release-please.outputs.cli_tag }}
+          ref: ${{ inputs.publish_cli_tag || needs.release-please.outputs.cli_tag }}
           persist-credentials: false
+      # No registry-url: setup-node would write an .npmrc with a placeholder NODE_AUTH_TOKEN, which npm then sends instead
+      # of the OIDC token (the publish fails with 404).
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          registry-url: https://registry.npmjs.org
       # Trusted Publishing needs npm 11.5.1 or newer (Node 22 ships npm 10).
       - run: npm install -g npm@latest
       - run: npm --version
