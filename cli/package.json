@@ -1,6 +1,6 @@
 {
   "name": "postflare",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Command line client for Postflare, the self-hosted social media scheduler on Cloudflare: schedule posts, upload media, read analytics.",
   "license": "AGPL-3.0-only",
   "author": "Ferdi",
