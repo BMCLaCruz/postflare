@@ -86,6 +86,22 @@ function useFileDrop(addFiles: (f: File[]) => void) {
   };
 }
 
+/** What attached media is used for, per selected platform (e.g. YouTube: the image becomes the custom thumbnail). */
+export function MediaNotes({ providers }: { providers: Provider[] }) {
+  const notes = providers.filter((p) => p.capabilities.mediaNote);
+  if (!notes.length) return null;
+  return (
+    <div className="space-y-1">
+      {notes.map((p) => (
+        <p key={p.id} className="flex items-start gap-1.5 text-xs text-zinc-500 dark:text-zinc-400">
+          <ProviderLogo provider={p} size="xs" className="mt-px shrink-0 !rounded-full" />
+          <span>{p.capabilities.mediaNote}</span>
+        </p>
+      ))}
+    </div>
+  );
+}
+
 export function ItemEditor({
   item,
   onChange,
@@ -145,6 +161,7 @@ export function ItemEditor({
           </div>
         )}
       </div>
+      <MediaNotes providers={providers} />
 
       {threadLabel && (
         <div className="space-y-3">

@@ -96,7 +96,52 @@ export function demoPostMetrics(provider: Provider, post: { content: string; pub
     const exposure = k === "views" || k === "impressions" || k === "reach";
     out[k] = Math.round(total * rate * (exposure ? 1 : (0.5 + rand(seed, k)) * lift) * g);
   }
+  addWatchMetrics(provider, seed, t - post.published_at, out);
   return out;
+}
+
+/** Labels of the demo traffic sources (YouTube insightTrafficSourceType values) and their base shares. */
+const DEMO_TRAFFIC: Array<[string, number]> = [
+  ["RELATED_VIDEO", 0.34],
+  ["YT_SEARCH", 0.22],
+  ["SUBSCRIBER", 0.16],
+  ["SHORTS", 0.12],
+  ["EXT_URL", 0.07],
+  ["YT_CHANNEL", 0.05],
+  ["PLAYLIST", 0.04],
+];
+
+/**
+ * Watch time keys (and, like the real provider, the retention curve + traffic sources between 7 and 37 days) for
+ * platforms that report them. Analytics-style numbers only appear once a post is a day old (the real data lags).
+ */
+function addWatchMetrics(provider: Provider, seed: number, age: number, out: MetricValues) {
+  const keys = provider.metrics?.post ?? [];
+  if (!keys.includes("avgViewPercentage") || age < DAY) return;
+  const views = out.views ?? 0;
+  const length = 45 + Math.round(rand(seed, "length") * 540); // seconds
+  const pct = 28 + rand(seed, "retention") * 40;
+  out.avgViewPercentage = Math.round(pct * 100) / 100;
+  out.avgViewDurationSeconds = Math.round(length * pct) / 100;
+  if (keys.includes("watchTimeMinutes")) out.watchTimeMinutes = Math.round((views * length * pct) / 100 / 60);
+  if (age < 7 * DAY || age >= 37 * DAY) return;
+  // Retention: a quick drop in the first seconds, then a slow decline; a small bump where viewers rewatch.
+  const drop = 0.15 + rand(seed, "drop") * 0.25;
+  const decay = 0.6 + rand(seed, "decay") * 1.2;
+  const bump = 0.3 + rand(seed, "bump") * 0.5;
+  const retention: Array<[number, number]> = [];
+  for (let i = 1; i <= 100; i++) {
+    const x = i / 100;
+    const y = (1 - drop * (1 - Math.exp(-x * 25))) * Math.exp(-decay * x) + 0.08 * Math.exp(-((x - bump) ** 2) / 0.002);
+    retention.push([x, Math.round(y * 10000) / 10000]);
+  }
+  const weights = DEMO_TRAFFIC.map(([source, share]) => [source, share * (0.5 + rand(seed, source))] as const);
+  const sum = weights.reduce((n, [, w]) => n + w, 0);
+  const trafficSources = weights
+    .map(([source, w]) => ({ source, views: Math.round((views * w) / sum) }))
+    .filter((x) => x.views > 0)
+    .sort((a, b) => b.views - a.views);
+  out.details = { retention, ...(trafficSources.length ? { trafficSources } : {}) };
 }
 
 /** Account metrics of a demo account on the UTC day of `t` (followers grow ~0.3% a day). */

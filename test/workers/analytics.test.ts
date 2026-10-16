@@ -119,6 +119,14 @@ function mockProviders() {
       const ids = url.searchParams.get("id")!.split(",").filter((id) => !id.includes("gone"));
       return Response.json({ items: ids.map((id) => ({ id, statistics: { viewCount: "100", likeCount: "7", commentCount: "2", favoriteCount: "0" } })) });
     }
+    if (url.host === "youtubeanalytics.googleapis.com") {
+      const dims = url.searchParams.get("dimensions") ?? "";
+      const ids = url.searchParams.get("filters")!.replace("video==", "").split(",");
+      const table = (names: string[], rows: unknown[][]) => Response.json({ columnHeaders: names.map((name) => ({ name })), rows });
+      if (dims.includes("elapsedVideoTimeRatio")) return table(["elapsedVideoTimeRatio", "audienceWatchRatio"], Array.from({ length: 100 }, (_, i) => [(i + 1) / 100, 0.9 - i / 200]));
+      if (dims.includes("insightTrafficSourceType")) return table(["insightTrafficSourceType", "views"], [["YT_SEARCH", 30], ["RELATED_VIDEO", 70]]);
+      return table(["estimatedMinutesWatched", "averageViewDuration", "averageViewPercentage", "shares"], ids.length === 1 ? [[321, 95, 47.5, 4]] : []);
+    }
     if (url.pathname === "/youtube/v3/channels") {
       return Response.json({ items: [{ id: url.searchParams.get("id"), statistics: { subscriberCount: "1234", videoCount: "12", viewCount: "99999", hiddenSubscriberCount: false } }] });
     }
@@ -290,7 +298,12 @@ describe("summary math and scoping", () => {
     expect(accounts.find((a) => a.id === "acc_an_hook").metricsStatus).toMatchObject({ status: "not_supported" });
     expect(accounts.find((a) => a.id === "acc_an_yt").metricsStatus).toMatchObject({ status: "pending", metrics: null });
     const providers = (await call(owner, "/api/providers")).json as any[];
-    expect(providers.find((p) => p.id === "youtube").analytics).toEqual({ post: true, account: true, metrics: ["views", "likes", "comments", "followers", "posts"] });
+    expect(providers.find((p) => p.id === "youtube").analytics).toEqual({
+      post: true,
+      account: true,
+      metrics: ["views", "likes", "comments", "shares", "watchTimeMinutes", "avgViewDurationSeconds", "avgViewPercentage", "followers", "posts"],
+    });
+    expect(providers.find((p) => p.id === "youtube").capabilities.mediaNote).toMatch(/custom thumbnail/);
     expect(providers.find((p) => p.id === "webhook").analytics).toEqual({ post: false, account: false, metrics: [] });
   });
 });
@@ -377,6 +390,16 @@ describe("MCP analytics tools", () => {
     expect(data.snapshots.map((s: any) => s.views)).toEqual([400, 1000]);
     expect(data.snapshots[0].at).toBe(new Date(from + DAY + HOUR).toISOString());
     expect((await tool(viewerKey, "get_post_metrics", { id: "pb" })).error).toBe("Not found");
+    expect(data.details).toBeUndefined();
+    // YouTube details (retention, traffic sources) of the latest snapshot that has them.
+    const at = from + 9 * DAY;
+    const details = { retention: [[0.5, 0.42]], trafficSources: [{ source: "YT_SEARCH", views: 12 }] };
+    await run("INSERT INTO post_metrics (post_id, workspace_id, captured_at, metrics) VALUES ('p1', 'ws_an_a', ?, ?)", at, JSON.stringify({ views: 1000, details }));
+    const withDetails = (await tool(viewerKey, "get_post_metrics", { id: "p1" })).data;
+    expect(withDetails.details).toEqual(details);
+    expect(withDetails.detailsAt).toBe(new Date(at).toISOString());
+    expect(withDetails.snapshots.at(-1).details).toBeUndefined();
+    await run("DELETE FROM post_metrics WHERE post_id = 'p1' AND captured_at = ?", at);
   });
 
   it("refresh_metrics needs posts.write and exactly one target", async () => {
@@ -489,6 +512,45 @@ describe("collection", () => {
     expect((await one<any>("SELECT metrics_status FROM accounts WHERE id = 'acc_c_noscope'")).metrics_status).toBe("ok");
   });
 
+  it("YouTube Analytics: watch time in posts.metrics, retention + traffic sources only in the snapshot and the post's metrics DTO", async () => {
+    const t = Date.now();
+    await account("acc_c_yta", "ws_an_b", "youtube", "UC_YTA", { accessToken: "AT" }, { meta: { channelId: "UC_YTA" } });
+    await post("c_week", "ws_an_b", "acc_c_yta", t - 7 * DAY - HOUR, { nextAt: t - 1, externalId: "vid_week" });
+    const m = mockProviders();
+    await collectMetrics(E, { posts: 10, accounts: 0 });
+    // videos.list + watch-time report + traffic sources + retention
+    expect(m.calls.filter((u) => u.includes("vid_week"))).toHaveLength(4);
+    const row = await one<any>("SELECT metrics FROM posts WHERE id = 'c_week'");
+    expect(JSON.parse(row.metrics)).toEqual({
+      views: 100,
+      likes: 7,
+      comments: 2,
+      shares: 4,
+      watchTimeMinutes: 321,
+      avgViewDurationSeconds: 95,
+      avgViewPercentage: 47.5,
+      extra: { favorites: 0 },
+    });
+    const snap = JSON.parse((await one<any>("SELECT metrics FROM post_metrics WHERE post_id = 'c_week'")).metrics);
+    expect(snap.details.retention).toHaveLength(100);
+    expect(snap.details.trafficSources).toEqual([
+      { source: "RELATED_VIDEO", views: 70 },
+      { source: "YT_SEARCH", views: 30 },
+    ]);
+    // A later snapshot without details (e.g. the curve request did not fit): the DTO keeps the latest details.
+    await run("INSERT INTO post_metrics (post_id, workspace_id, captured_at, metrics) VALUES ('c_week', 'ws_an_b', ?, '{\"views\":150}')", t + 2 * HOUR);
+    const dto = (await call(other, "/api/posts/c_week/metrics")).json;
+    expect(dto.metrics.watchTimeMinutes).toBe(321);
+    expect(dto.details.trafficSources[0]).toEqual({ source: "RELATED_VIDEO", views: 70 });
+    expect(dto.details.retention[0]).toEqual([0.01, 0.9]);
+    expect(dto.detailsAt).toBeLessThan(t + HOUR);
+    expect(dto.snapshots.map((s: any) => s.metrics.details)).toEqual([undefined, undefined]);
+    expect(dto.snapshots.map((s: any) => s.metrics.views)).toEqual([100, 150]);
+    // List endpoints never carry the curve.
+    const list = (await call(other, `/api/analytics/posts?from=${t - 30 * DAY}&to=${t + DAY}&limit=200`)).json;
+    expect(list.find((p: any) => p.id === "c_week").metrics.details).toBeUndefined();
+  });
+
   it("manual refresh collects one post now (posts.write)", async () => {
     await run("UPDATE posts SET metrics_at = NULL, metrics = NULL WHERE id = 'c_future'");
     const m = mockProviders();
@@ -507,6 +569,24 @@ describe("collection", () => {
 });
 
 describe("demo workspace", () => {
+  it("demo YouTube posts get watch time from 24h and a retention curve + traffic sources between 7 and 37 days", () => {
+    const yt = getProvider("youtube")!;
+    const p = { content: "demo video", published_at: 0 };
+    const early = demoPostMetrics(yt, p, 2 * HOUR);
+    expect(early.watchTimeMinutes).toBeUndefined();
+    expect(early.details).toBeUndefined();
+    const day3 = demoPostMetrics(yt, p, 3 * DAY);
+    expect(day3.avgViewPercentage).toBeGreaterThan(0);
+    expect(day3.avgViewPercentage).toBeLessThan(100);
+    expect(day3.avgViewDurationSeconds).toBeGreaterThan(0);
+    expect(day3.watchTimeMinutes).toBeGreaterThan(0);
+    expect(day3.details).toBeUndefined();
+    const week = demoPostMetrics(yt, p, 7 * DAY);
+    expect(week.details!.retention).toHaveLength(100);
+    expect(week.details!.trafficSources!.reduce((n, s) => n + s.views, 0)).toBeGreaterThan(0);
+    expect(demoPostMetrics(yt, p, 44 * DAY).details).toBeUndefined();
+  });
+
   it("never calls providers: due demo posts and accounts get generated, growing numbers", async () => {
     const t = Date.now();
     await run("INSERT INTO workspaces (id, name, created_at, updated_at, is_demo) VALUES ('ws_an_demo', 'Demo', ?, ?, 1)", t, t);

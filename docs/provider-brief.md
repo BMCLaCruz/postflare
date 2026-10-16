@@ -29,7 +29,7 @@ Each platform is one file in `worker/providers/<id>.ts` exporting a `Provider` o
 - `appFields` = developer app config (usually `clientFields()`), entered on the Platforms page. Include `docsUrl` (where to create the app) and `setupNotes` — short markdown steps: where to create the app, which products/permissions/scopes to enable, and the redirect URL `{{redirectUri}}` to whitelist. If the platform needs no developer app (credentials auth), `appFields: []`.
 - `credentialFields` for credentials auth (app password, bot token, API key, instance URL...). `connect` must verify the credentials with a real API call and return the account(s).
 - `settingsFields` = per-post options (title, privacy, board, subreddit, channel, post type...). Use `dynamicOptions: true` + `options(ctx, account, key, settings)` for values loaded from the account (boards, channels, playlists, subreddits, flairs, categories). Use `showIf` for conditional fields. Give sensible `default`s. Be complete: cover the useful options Postiz offers for that platform.
-- `capabilities`: accurate max length, media limits, mixed media, required media.
+- `capabilities`: accurate max length, media limits, mixed media, required media; `mediaNote` when attached media has a non-obvious role (YouTube: the image becomes the custom thumbnail). It is shown under the composer's media picker, in MCP `list_platforms` and `postflare platforms <id>`.
 - Brand `color` (hex without #) and `icon` = simple-icons slug (https://simpleicons.org) when one exists. `name` is the display name (e.g. "LinkedIn Page", "Instagram (Facebook login)").
 - `category`: social | video | community | blog | messaging | newsletter.
 - Comment density: match `worker/` — short doc comments on non-obvious things, no noise.
@@ -101,7 +101,10 @@ Optional. The cron collects metrics of published posts (about 1h, 24h, 3d, 7d an
   Mastodon favourites → likes and reblogs → reposts, Reddit score → likes (+ `extra.upvote_ratio`).
   Engagements = likes + comments + shares + saves + replies + reposts + quotes + clicks (`engagements()` in
   `shared/types.ts`); engagement rate is measured against views, else impressions, else reach. Do not double count:
-  never put the same interactions in two keys (e.g. Instagram `total_interactions` goes to `extra`).
+  never put the same interactions in two keys (e.g. Instagram `total_interactions` goes to `extra`). Watch time keys
+  (`watchTimeMinutes`, `avgViewDurationSeconds`, `avgViewPercentage` 0-100) are averages/totals per post, never summed.
+  Structured data (a retention curve, views per traffic source) goes into `details` (`MetricDetails`): it is stored with
+  the snapshot only (not `posts.metrics`) and returned once as `PostMetricsDTO.details` (latest snapshot that has it).
 - Batching: set `metrics.batch` to the API's max ids per request (YouTube 50, X 100, TikTok 20, Reddit 100, Bluesky 25...)
   and fetch the whole batch in one request. For per-post APIs keep `batch` small (≤ 10) and check `fetchesLeft(ctx)`
   (`budget.ts`) before each fetch: items you did not fetch are simply left out of the result (they stay due).

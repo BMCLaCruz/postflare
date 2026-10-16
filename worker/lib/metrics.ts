@@ -172,15 +172,26 @@ interface DuePost {
 const DUE_POST_COLUMNS =
   "p.id, p.workspace_id, p.account_id, p.external_id, p.external_data, p.published_at, p.metrics_fails, p.content, a.provider, COALESCE(w.is_demo, 0) AS is_demo, p.playbook_id";
 
+/**
+ * `posts.metrics` keeps the numbers only: structured `details` (retention curves, traffic sources) stay in the
+ * `post_metrics` snapshot, so list endpoints that return many posts stay small.
+ */
+export function withoutDetails(values: MetricValues): MetricValues {
+  if (!values.details) return values;
+  const { details: _details, ...rest } = values;
+  return rest;
+}
+
 /** Statements that store one post's metrics and plan its next collection. */
 function savePostStatements(db: D1Database, post: Pick<DuePost, "id" | "workspace_id" | "published_at">, values: MetricValues, t: number) {
-  const json = JSON.stringify(values);
   return [
     db.prepare("DELETE FROM post_metrics WHERE post_id = ? AND captured_at > ?").bind(post.id, t - SNAPSHOT_MERGE),
-    db.prepare("INSERT INTO post_metrics (post_id, workspace_id, captured_at, metrics) VALUES (?, ?, ?, ?)").bind(post.id, post.workspace_id, t, json),
+    db
+      .prepare("INSERT INTO post_metrics (post_id, workspace_id, captured_at, metrics) VALUES (?, ?, ?, ?)")
+      .bind(post.id, post.workspace_id, t, JSON.stringify(values)),
     db
       .prepare("UPDATE posts SET metrics = ?, metrics_at = ?, metrics_next_at = ?, metrics_fails = 0 WHERE id = ?")
-      .bind(json, t, nextCheckpoint(post.published_at, t), post.id),
+      .bind(JSON.stringify(withoutDetails(values)), t, nextCheckpoint(post.published_at, t), post.id),
   ];
 }
 

@@ -657,6 +657,7 @@ function AccountTab({
           {cap.media.required && <span className="font-medium text-amber-600 dark:text-amber-400">Media required</span>}
           {cap.text === "required" && <span>Text required</span>}
           {cap.thread && <span>{cap.threadLabel ?? "Follow-ups"} supported</span>}
+          {cap.mediaNote && !override && <span className="basis-full">{cap.mediaNote}</span>}
         </div>
       )}
 

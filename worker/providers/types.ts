@@ -1,6 +1,6 @@
-import type { FieldOption, MetricKey, MetricValues, ProviderInfo } from "../../shared/types";
+import type { FieldOption, MetricDetails, MetricKey, MetricValues, ProviderInfo } from "../../shared/types";
 
-export type { MetricKey, MetricValues };
+export type { MetricDetails, MetricKey, MetricValues };
 
 /** Opaque, encrypted-at-rest secrets of a connected account. */
 export interface Credentials {

@@ -75,7 +75,8 @@ export function mcpRoutes(api: { fetch: (req: Request, env: Env, ctx: ExecutionC
   const tools: Record<string, { description: string; inputSchema: object; run: (c: any, a: any) => Promise<unknown> }> = {
     list_platforms: {
       description:
-        "List supported platforms with their capabilities (max length, media limits, threads) and per-post settings fields.",
+        "List supported platforms with their capabilities (max length, media limits, threads; `mediaNote` explains what media is used for, " +
+        "e.g. YouTube: an image attached next to the video becomes the custom thumbnail) and per-post settings fields (with help texts).",
       inputSchema: { type: "object", properties: {} },
       run: async (c) =>
         (await call(c, "GET", "/providers")).map((p: any) => ({
@@ -290,7 +291,11 @@ export function mcpRoutes(api: { fetch: (req: Request, env: Env, ctx: ExecutionC
       },
     },
     get_post_metrics: {
-      description: "Latest metrics of a published post and the series of snapshots collected over time (~1h, 24h, 3d, 7d, 30d, then weekly).",
+      description:
+        "Latest metrics of a published post and the series of snapshots collected over time (~1h, 24h, 3d, 7d, 30d, then weekly). " +
+        "YouTube adds watchTimeMinutes, avgViewDurationSeconds, avgViewPercentage (0-100) and shares from 24h on (YouTube Analytics lags 1-3 days), " +
+        "and `details` from the 7d/30d snapshots: `retention` = [[elapsed share of the video 0.01..1, audienceWatchRatio], ...] (ratio of viewers still " +
+        "watching, can exceed 1 on rewatches) and `trafficSources` = views per insightTrafficSourceType (YT_SEARCH, RELATED_VIDEO, SHORTS, EXT_URL...).",
       inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
       run: async (c, a) => {
         const m = await call(c, "GET", `/posts/${seg(a.id)}/metrics`);
@@ -304,6 +309,8 @@ export function mcpRoutes(api: { fetch: (req: Request, env: Env, ctx: ExecutionC
           metricsAt: iso(m.metricsAt),
           nextCollectionAt: iso(m.metricsNextAt),
           snapshots: m.snapshots.map((s: any) => ({ at: iso(s.capturedAt), ...s.metrics })),
+          details: m.details ?? undefined,
+          detailsAt: iso(m.detailsAt),
         });
       },
     },

@@ -1,25 +1,47 @@
-import { missingScope, ProviderError } from "./errors";
+import { fetchesLeft } from "./budget";
+import { MetricsUnavailableError, missingScope, ProviderError } from "./errors";
 import { googleAppFields, googleAuthorizeUrl, googleClassify, googleDocsUrl, googleExchangeCode, googleReasons, googleRefresh } from "./google-shared";
 import { request, requestJson } from "./http";
 import { mediaBody } from "./multipart";
-import type { MediaItem, MetricValues, PostMetricsResult, Provider, ProviderContext, PublishPost, PublishResult } from "./types";
+import type { FieldOption } from "../../shared/types";
+import type { MediaItem, MetricDetails, MetricsItem, MetricValues, PostMetricsResult, Provider, ProviderContext, PublishPost, PublishResult } from "./types";
 
 const API = "https://www.googleapis.com/youtube/v3";
 const UPLOAD_API = "https://www.googleapis.com/upload/youtube/v3";
+const ANALYTICS_API = "https://youtubeanalytics.googleapis.com/v2/reports";
 const NAME = "YouTube";
+const DAY = 24 * 60 * 60 * 1000;
 
 const SCOPES = [
   "https://www.googleapis.com/auth/youtube.upload",
   "https://www.googleapis.com/auth/youtube",
   // commentThreads.insert (first comment)
   "https://www.googleapis.com/auth/youtube.force-ssl",
-  // videos.list / channels.list statistics (analytics)
+  // videos.list / channels.list statistics (analytics); also required by YouTube Analytics reports.query
   "https://www.googleapis.com/auth/youtube.readonly",
+  // YouTube Analytics API: watch time, retention, traffic sources
+  "https://www.googleapis.com/auth/yt-analytics.readonly",
 ];
 
 /** videos.list accepts at most 50 ids per request. */
 const METRICS_BATCH = 50;
 const READONLY_SCOPE = "youtube.readonly";
+const ANALYTICS_SCOPE = "yt-analytics.readonly";
+/** YouTube Analytics data lags 1-3 days: only snapshots this long after publishing ask for it. */
+const ANALYTICS_AFTER = DAY;
+/**
+ * Retention curve + traffic sources (one request per video for the curve) only for snapshots in this age window:
+ * the 7d and 30d checkpoints (and manual refreshes in between). Later snapshots keep the earlier details visible
+ * (PostMetricsDTO.details is the latest snapshot that has them).
+ */
+const DETAILS_FROM = 7 * DAY;
+const DETAILS_UNTIL = 37 * DAY;
+/** At most this many retention requests per postMetrics call (the cron collects ≤ 10 posts per tick anyway). */
+const MAX_RETENTION = 10;
+/** Captions are kept in the post settings and the workflow state (≤ 1 MiB per step): ~3 hours of SRT. */
+export const MAX_CAPTIONS = 200_000;
+/** Pages of playlists.list (50 each) searched for a playlist with the new playlist's title. */
+const PLAYLIST_PAGES = 3;
 /** Google reasons of a token that lacks the analytics scope (403). */
 const SCOPE_REASONS = ["insufficientPermissions", "ACCESS_TOKEN_SCOPE_INSUFFICIENT"];
 
@@ -38,7 +60,45 @@ interface UploadState {
   video: MediaItem;
   thumbnail: MediaItem | null;
   playlistId: string | null;
+  /** Playlist to find by title or create (absent in states of older releases). */
+  newPlaylist?: { title: string; privacy: string } | null;
+  /** Caption track to insert after the upload (SRT / WebVTT text). */
+  captions?: { text: string; language: string; name: string } | null;
 }
+
+/** Common BCP-47 codes for the language selects (YouTube accepts any BCP-47 tag through the API). */
+const LANGUAGES: Array<[string, string]> = [
+  ["en", "English"],
+  ["en-US", "English (United States)"],
+  ["en-GB", "English (United Kingdom)"],
+  ["tr", "Turkish"],
+  ["de", "German"],
+  ["es", "Spanish"],
+  ["es-419", "Spanish (Latin America)"],
+  ["fr", "French"],
+  ["pt", "Portuguese"],
+  ["pt-BR", "Portuguese (Brazil)"],
+  ["it", "Italian"],
+  ["nl", "Dutch"],
+  ["pl", "Polish"],
+  ["sv", "Swedish"],
+  ["uk", "Ukrainian"],
+  ["ru", "Russian"],
+  ["ar", "Arabic"],
+  ["hi", "Hindi"],
+  ["id", "Indonesian"],
+  ["vi", "Vietnamese"],
+  ["th", "Thai"],
+  ["ja", "Japanese"],
+  ["ko", "Korean"],
+  ["zh-Hans", "Chinese (Simplified)"],
+  ["zh-Hant", "Chinese (Traditional)"],
+];
+const languageOptions = (empty: string): FieldOption[] => [{ value: "", label: empty }, ...LANGUAGES.map(([value, label]) => ({ value, label: `${label} (${value})` }))];
+const BCP47 = /^[a-zA-Z]{2,3}(-[a-zA-Z0-9]{2,8})*$/;
+
+export const THUMBNAIL_NOTE =
+  "Add an image next to the video to use it as the custom thumbnail (JPEG/PNG, 16:9 e.g. 1280×720, ≤2 MB; larger or other formats are re-encoded to JPEG). Custom thumbnails need a verified channel.";
 
 const reasonMessages: Record<string, string> = {
   invalidTitle: "The title is invalid or too long (max 100 characters).",
@@ -116,6 +176,57 @@ function tagsOf(v: unknown): string[] {
   return list.map((t) => String(typeof t === "object" && t ? ((t as any).label ?? (t as any).value) : t).trim()).filter(Boolean);
 }
 
+/**
+ * `localizations` setting: one translation per line, `lang | title | description` (description optional, `\n` for
+ * a line break). Lines starting with # are ignored.
+ */
+export function parseLocalizations(v: unknown): { items: Array<{ lang: string; title: string; description: string }>; errors: string[] } {
+  const items: Array<{ lang: string; title: string; description: string }> = [];
+  const errors: string[] = [];
+  if (typeof v !== "string") return { items, errors };
+  const seen = new Set<string>();
+  v.split(/\r?\n/).forEach((raw, i) => {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) return;
+    const [lang = "", title = "", ...rest] = line.split("|").map((x) => x.trim());
+    const description = rest.join(" | ").replace(/\\n/g, "\n");
+    const at = `YouTube translations line ${i + 1}`;
+    if (!BCP47.test(lang)) return void errors.push(`${at}: "${lang}" is not a language code (e.g. de, pt-BR)`);
+    if (!title) return void errors.push(`${at}: a title is required ("lang | title | description")`);
+    if (seen.has(lang.toLowerCase())) return void errors.push(`${at}: ${lang} appears twice`);
+    if (Array.from(title).length > 100) errors.push(`${at}: the title is longer than 100 characters`);
+    if (Array.from(description).length > 5000) errors.push(`${at}: the description is longer than 5000 characters`);
+    if (/[<>]/.test(title + description)) errors.push(`${at}: titles and descriptions cannot contain < or >`);
+    seen.add(lang.toLowerCase());
+    items.push({ lang, title, description });
+  });
+  return { items, errors };
+}
+
+/** "srt" / "vtt" when the text looks like SubRip or WebVTT, else null. */
+export function captionFormat(text: string): "srt" | "vtt" | null {
+  const t = text.replace(/^\uFEFF/, "").trimStart();
+  if (/^WEBVTT(\s|$)/.test(t)) return "vtt";
+  if (/^\d+\s*\r?\n\s*\d{1,2}:\d{2}:\d{2}[,.]\d{1,3}\s*-->\s*\d{1,2}:\d{2}:\d{2}[,.]\d{1,3}/.test(t)) return "srt";
+  return null;
+}
+
+/** Caption track of a post (language: captionsLanguage, else the audio language, else the video language). */
+function captionsOf(s: Record<string, any>): UploadState["captions"] {
+  const text = typeof s.captions === "string" ? s.captions.replace(/^\uFEFF/, "") : "";
+  if (!text.trim()) return null;
+  const language = String(s.captionsLanguage || s.audioLanguage || s.language || "");
+  return { text, language, name: String(s.captionsName ?? "").trim() || "Subtitles" };
+}
+
+function newPlaylistOf(s: Record<string, any>, status: { privacyStatus: string; publishAt?: string }): UploadState["newPlaylist"] {
+  const title = String(s.newPlaylist ?? "").trim();
+  if (!title) return null;
+  const chosen = ["public", "unlisted", "private"].includes(s.newPlaylistPrivacy) ? s.newPlaylistPrivacy : null;
+  // "Same as the video": a scheduled video ends up public.
+  return { title, privacy: chosen ?? (status.publishAt ? "public" : status.privacyStatus) };
+}
+
 /** Metadata of the videos.insert call. */
 export function videoResource(post: PublishPost) {
   const s = post.settings;
@@ -126,14 +237,18 @@ export function videoResource(post: PublishPost) {
   const publishAt = toIso(s.publishAt);
   const privacy = publishAt ? "private" : ["public", "unlisted", "private"].includes(s.privacy) ? s.privacy : "private";
   const tags = tagsOf(s.tags);
+  const localizations = parseLocalizations(s.localizations).items;
   return {
     snippet: {
       title,
       description: post.content,
       ...(tags.length ? { tags } : {}),
       categoryId: String(s.category || "22"),
-      ...(s.language ? { defaultLanguage: String(s.language), defaultAudioLanguage: String(s.language) } : {}),
+      // `language` alone sets both (the behavior before `audioLanguage` existed).
+      ...(s.language ? { defaultLanguage: String(s.language) } : {}),
+      ...(s.audioLanguage || s.language ? { defaultAudioLanguage: String(s.audioLanguage || s.language) } : {}),
     },
+    ...(localizations.length ? { localizations: Object.fromEntries(localizations.map((l) => [l.lang, { title: l.title, ...(l.description ? { description: l.description } : {}) }])) } : {}),
     status: {
       privacyStatus: privacy,
       ...(publishAt ? { publishAt } : {}),
@@ -236,7 +351,50 @@ async function uploadChunks(
   return probe(ctx, token, state);
 }
 
-/** Thumbnail + playlist after the upload. Failures only warn: the video is already live. */
+/** captions.insert: a multipart/related upload (JSON metadata + the caption text; small, so built in memory). */
+async function insertCaptions(ctx: ProviderContext, token: string, videoId: string, c: NonNullable<UploadState["captions"]>) {
+  const boundary = `pf${crypto.randomUUID().replace(/-/g, "")}`;
+  const meta = JSON.stringify({ snippet: { videoId, language: c.language, name: c.name, isDraft: false } });
+  const body =
+    `--${boundary}\r\ncontent-type: application/json; charset=UTF-8\r\n\r\n${meta}\r\n` +
+    `--${boundary}\r\ncontent-type: application/octet-stream\r\n\r\n${c.text}\r\n--${boundary}--\r\n`;
+  await yt(ctx, `${UPLOAD_API}/captions`, {
+    method: "POST",
+    token,
+    query: { uploadType: "multipart", part: "snippet" },
+    headers: { "content-type": `multipart/related; boundary=${boundary}` },
+    body,
+  });
+}
+
+/** The playlist titled `title` (first PLAYLIST_PAGES pages of the channel's playlists), else a new one. */
+async function findOrCreatePlaylist(ctx: ProviderContext, token: string, p: NonNullable<UploadState["newPlaylist"]>): Promise<string> {
+  const want = p.title.trim().toLowerCase();
+  let pageToken: string | undefined;
+  for (let page = 0; page < PLAYLIST_PAGES; page++) {
+    const res: { items?: any[]; nextPageToken?: string } = await yt(ctx, `${API}/playlists`, {
+      token,
+      query: { part: "snippet", mine: true, maxResults: 50, pageToken },
+    });
+    const hit = (res.items ?? []).find((x) => String(x.snippet?.title ?? "").trim().toLowerCase() === want);
+    if (hit) return String(hit.id);
+    pageToken = res.nextPageToken;
+    if (!pageToken) break;
+  }
+  const created = await yt<{ id: string }>(ctx, `${API}/playlists`, {
+    method: "POST",
+    token,
+    query: { part: "snippet,status" },
+    json: { snippet: { title: p.title.trim() }, status: { privacyStatus: p.privacy } },
+  });
+  ctx.log("info", `YouTube: created the playlist "${p.title.trim()}" (${p.privacy})`);
+  return created.id;
+}
+
+/**
+ * Thumbnail, captions and playlists after the upload. Failures only warn: the video is already live.
+ * At most 8 requests (thumbnail, captions, 3 playlist pages + insert, 2 playlist items): fits next to the upload PUTs.
+ */
 async function finish(ctx: ProviderContext, token: string, state: UploadState, videoId: string): Promise<PublishResult> {
   if (state.thumbnail) {
     try {
@@ -256,13 +414,29 @@ async function finish(ctx: ProviderContext, token: string, state: UploadState, v
       ctx.log("warn", `YouTube: video uploaded but the custom thumbnail failed (custom thumbnails need a verified channel): ${(err as Error).message}`);
     }
   }
-  if (state.playlistId) {
+  if (state.captions) {
+    try {
+      await insertCaptions(ctx, token, videoId, state.captions);
+    } catch (err) {
+      ctx.log("warn", `YouTube: video uploaded but the captions (${state.captions.language}) failed: ${(err as Error).message}`);
+    }
+  }
+  const playlists = state.playlistId ? [state.playlistId] : [];
+  if (state.newPlaylist) {
+    try {
+      const id = await findOrCreatePlaylist(ctx, token, state.newPlaylist);
+      if (!playlists.includes(id)) playlists.push(id);
+    } catch (err) {
+      ctx.log("warn", `YouTube: video uploaded but creating the playlist "${state.newPlaylist.title}" failed: ${(err as Error).message}`);
+    }
+  }
+  for (const playlistId of playlists) {
     try {
       await yt(ctx, `${API}/playlistItems`, {
         method: "POST",
         token,
         query: { part: "snippet" },
-        json: { snippet: { playlistId: state.playlistId, resourceId: { kind: "youtube#video", videoId } } },
+        json: { snippet: { playlistId, resourceId: { kind: "youtube#video", videoId } } },
       });
     } catch (err) {
       ctx.log("warn", `YouTube: video uploaded but adding it to the playlist failed: ${(err as Error).message}`);
@@ -288,6 +462,126 @@ async function advance(ctx: ProviderContext, token: string, state: UploadState, 
   }
 }
 
+// ---------------------------------------------------------------------------------------------------------------
+// YouTube Analytics API (reports.query). Missing data (the 1-3 day lag, tiny videos) leaves keys out; failures other
+// than a missing scope only warn: the Data API numbers are still stored.
+
+interface Report {
+  columnHeaders?: Array<{ name: string }>;
+  rows?: unknown[][];
+}
+
+const ymd = (t: number) => new Date(t).toISOString().slice(0, 10);
+
+/** reports.query. A token without yt-analytics.readonly → reconnect_required (analytics only, never publishing). */
+async function analyticsReport(ctx: ProviderContext, token: string, account: { meta: Record<string, unknown> }, query: Record<string, string | number>): Promise<Report> {
+  const channel = account.meta.channelId ? `channel==${account.meta.channelId}` : "channel==MINE";
+  try {
+    return await requestJson<Report>(ctx, ANALYTICS_API, { token, query: { ids: channel, ...query }, classify });
+  } catch (err) {
+    if (err instanceof ProviderError && err.status !== 401 && googleReasons(err.body).some((r) => SCOPE_REASONS.includes(r)))
+      throw missingScope(NAME, ANALYTICS_SCOPE);
+    throw readable(err);
+  }
+}
+
+/** Rows as objects keyed by column name. */
+function rowsOf(r: Report): Array<Record<string, unknown>> {
+  const names = (r.columnHeaders ?? []).map((h) => h.name);
+  return (r.rows ?? []).map((row) => Object.fromEntries(names.map((n, i) => [n, row[i]])));
+}
+
+const round = (v: unknown, digits: number) => {
+  const n = count(v);
+  return n === undefined ? undefined : Math.round(n * 10 ** digits) / 10 ** digits;
+};
+
+/** Filter + dimensions for a set of videos: `video` is only a dimension when several ids are filtered. */
+function videoQuery(ids: string[], dims: string[] = []): Record<string, string> {
+  const dimensions = ids.length > 1 ? ["video", ...dims] : dims;
+  return { filters: `video==${ids.join(",")}`, ...(dimensions.length ? { dimensions: dimensions.join(",") } : {}) };
+}
+
+async function addAnalytics(ctx: ProviderContext, token: string, account: { meta: Record<string, unknown> }, items: MetricsItem[], out: PostMetricsResult) {
+  const t = Date.now();
+  const due = items.filter((i) => t - i.publishedAt >= ANALYTICS_AFTER);
+  if (!due.length || fetchesLeft(ctx) < 1) return;
+  // Analytics dates are in the channel's time zone (Pacific): start a day early.
+  const range = (list: MetricsItem[]) => ({ startDate: ymd(Math.min(...list.map((i) => i.publishedAt)) - DAY), endDate: ymd(t) });
+  const videoOf = (row: Record<string, unknown>, ids: string[]) => String(row.video ?? (ids.length === 1 ? ids[0] : ""));
+  const merge = (id: string, m: MetricValues) => {
+    const cur = out[id];
+    if (!cur) return;
+    const { extra, details, ...rest } = m;
+    Object.assign(cur, compact(rest));
+    if (extra) {
+      const e = compact({ extra }).extra;
+      if (e) cur.extra = { ...cur.extra, ...e };
+    }
+    if (details) cur.details = { ...cur.details, ...details };
+  };
+  try {
+    const ids = due.map((i) => i.externalId);
+    const basic = await analyticsReport(ctx, token, account, {
+      ...range(due),
+      metrics: "estimatedMinutesWatched,averageViewDuration,averageViewPercentage,shares,subscribersGained",
+      ...videoQuery(ids),
+      ...(ids.length > 1 ? { sort: "-estimatedMinutesWatched", maxResults: ids.length } : {}),
+    });
+    for (const row of rowsOf(basic)) {
+      merge(videoOf(row, ids), {
+        watchTimeMinutes: round(row.estimatedMinutesWatched, 0),
+        avgViewDurationSeconds: round(row.averageViewDuration, 1),
+        avgViewPercentage: round(row.averageViewPercentage, 2),
+        shares: count(row.shares),
+        extra: { subscribers_gained: count(row.subscribersGained) } as Record<string, number>,
+      });
+    }
+
+    const detailed = due.filter((i) => t - i.publishedAt >= DETAILS_FROM && t - i.publishedAt < DETAILS_UNTIL);
+    if (!detailed.length || fetchesLeft(ctx) < 1) return;
+    const dIds = detailed.map((i) => i.externalId);
+    const traffic = await analyticsReport(ctx, token, account, { ...range(detailed), metrics: "views", ...videoQuery(dIds, ["insightTrafficSourceType"]) });
+    const sources = new Map<string, Array<{ source: string; views: number }>>();
+    for (const row of rowsOf(traffic)) {
+      const id = videoOf(row, dIds);
+      const views = count(row.views);
+      if (!views || !row.insightTrafficSourceType) continue;
+      const list = sources.get(id) ?? [];
+      list.push({ source: String(row.insightTrafficSourceType), views });
+      sources.set(id, list);
+    }
+    for (const [id, list] of sources) merge(id, { details: { trafficSources: list.sort((a, b) => b.views - a.views) } });
+
+    for (const item of detailed.slice(0, MAX_RETENTION)) {
+      if (fetchesLeft(ctx) < 1) break;
+      const r = await analyticsReport(ctx, token, account, {
+        ...range([item]),
+        metrics: "audienceWatchRatio",
+        dimensions: "elapsedVideoTimeRatio",
+        filters: `video==${item.externalId}`,
+        sort: "elapsedVideoTimeRatio",
+      });
+      const retention: MetricDetails["retention"] = [];
+      for (const row of rowsOf(r)) {
+        const x = count(row.elapsedVideoTimeRatio);
+        const y = round(row.audienceWatchRatio, 4);
+        if (x !== undefined && y !== undefined) retention.push([x, y]);
+      }
+      if (retention.length) merge(item.externalId, { details: { retention } });
+    }
+  } catch (err) {
+    // Channels connected before yt-analytics.readonly existed: keep collecting views/likes/comments, and say how to get
+    // watch time (reconnecting grants the scope). Never hold back the Data API numbers for it.
+    if (err instanceof MetricsUnavailableError) {
+      ctx.log("warn", `YouTube watch time and retention need the ${ANALYTICS_SCOPE} scope: reconnect the channel to grant it`);
+      return;
+    }
+    // API not enabled in the Cloud project, quota, outage...: keep the Data API numbers.
+    ctx.log("warn", `YouTube Analytics unavailable, storing views/likes/comments only: ${(err as Error).message}`);
+  }
+}
+
 export const youtube: Provider = {
   id: "youtube",
   name: NAME,
@@ -297,15 +591,16 @@ export const youtube: Provider = {
   auth: "oauth2",
   docsUrl: googleDocsUrl,
   setupNotes: [
-    "1. In the [Google Cloud console](https://console.cloud.google.com/) create a project and enable **YouTube Data API v3**.",
-    "2. Configure the **OAuth consent screen** (External), add the scopes `youtube.upload`, `youtube`, `youtube.force-ssl` and `youtube.readonly` (analytics), and add your Google account as a test user.",
+    "1. In the [Google Cloud console](https://console.cloud.google.com/) create a project and enable **YouTube Data API v3** and **YouTube Analytics API** (APIs & Services → Library).",
+    "2. Configure the **OAuth consent screen** (External), add the scopes `youtube.upload`, `youtube`, `youtube.force-ssl` (comments, captions), `youtube.readonly` and `yt-analytics.readonly` (analytics), and add your Google account as a test user.",
     "3. Create an **OAuth client ID** of type *Web application* with the authorized redirect URI `{{redirectUri}}`.",
     "4. Paste the client ID and secret here, then connect a channel (pick the brand channel on Google's account chooser).",
     "",
     "Notes: videos uploaded by an **unverified API project** (created after July 2020 and not audited) are locked to **private** by YouTube until the project passes the [API audit](https://support.google.com/youtube/contact/yt_api_form). " +
       "While the consent screen is in *Testing*, refresh tokens expire after 7 days: publish the app to *Production* to stay connected. " +
-      "Custom thumbnails require a verified channel. Each upload costs ~1600 quota units of the default 10,000/day. " +
-      "Analytics read video and channel statistics (1 quota unit per 50 videos); channels connected before analytics existed must be **reconnected** to grant `youtube.readonly`.",
+      "An image attached next to the video becomes its custom thumbnail (needs a verified channel). " +
+      "Quota (default 10,000 units/day): an upload uses 1 call of the separate 100 uploads/day bucket; thumbnail 50, captions 400, new playlist 50, adding to a playlist 50, first comment 50 units; statistics 1 unit per 50 videos. " +
+      "Watch time, retention and traffic sources come from the YouTube Analytics API (data lags 1-3 days). Channels connected before analytics (or before watch time / retention) must be **reconnected** to grant `youtube.readonly` and `yt-analytics.readonly`.",
   ].join("\n"),
   appFields: googleAppFields,
   credentialFields: [],
@@ -330,7 +625,67 @@ export const youtube: Provider = {
     },
     { key: "category", label: "Category", type: "select", dynamicOptions: true, default: "22" },
     { key: "playlist", label: "Add to playlist", type: "select", dynamicOptions: true, default: "" },
+    {
+      key: "newPlaylist",
+      label: "New playlist",
+      type: "text",
+      maxLength: 150,
+      help: "Title of a playlist to add the video to: reused when the channel already has one with this title, otherwise created. Works together with \"Add to playlist\".",
+    },
+    {
+      key: "newPlaylistPrivacy",
+      label: "New playlist privacy",
+      type: "select",
+      default: "",
+      options: [
+        { value: "", label: "Same as the video" },
+        { value: "public", label: "Public" },
+        { value: "unlisted", label: "Unlisted" },
+        { value: "private", label: "Private" },
+      ],
+      help: "Only used when the playlist is created. \"Same as the video\" is public for videos scheduled with \"Go public at\".",
+    },
     { key: "tags", label: "Tags", type: "tags", help: "At most 500 characters in total." },
+    {
+      key: "language",
+      label: "Video language",
+      type: "select",
+      default: "",
+      options: languageOptions("Not set"),
+      help: "Language of the title and description (defaultLanguage). Also the audio language when that is not set.",
+    },
+    {
+      key: "audioLanguage",
+      label: "Audio language",
+      type: "select",
+      default: "",
+      options: languageOptions("Same as the video language"),
+      help: "Language spoken in the video (defaultAudioLanguage).",
+    },
+    {
+      key: "captions",
+      label: "Captions (SRT or WebVTT)",
+      type: "textarea",
+      maxLength: MAX_CAPTIONS,
+      placeholder: "1\n00:00:00,000 --> 00:00:02,500\nHello!",
+      help: "Paste a SubRip (.srt) or WebVTT (.vtt) file: it is added as a caption track after the upload (400 quota units).",
+    },
+    {
+      key: "captionsLanguage",
+      label: "Captions language",
+      type: "select",
+      default: "",
+      options: languageOptions("Same as the audio language"),
+      help: "Defaults to the audio language, else the video language.",
+    },
+    { key: "captionsName", label: "Captions track name", type: "text", maxLength: 150, help: "Shown to viewers next to the language (default \"Subtitles\")." },
+    {
+      key: "localizations",
+      label: "Translations",
+      type: "textarea",
+      placeholder: "de | Mein Video | Beschreibung auf Deutsch\nes | Mi video | Descripción",
+      help: "Translated title and description, one language per line: `lang | title | description` (description optional, \\n for a line break). Needs the video language.",
+    },
     { key: "madeForKids", label: "Made for kids", type: "checkbox", default: false },
     { key: "notifySubscribers", label: "Notify subscribers", type: "checkbox", default: true },
     { key: "shorts", label: "Short", type: "checkbox", default: false, help: "Adds #Shorts to the title. Vertical videos up to 3 minutes become Shorts automatically." },
@@ -354,13 +709,14 @@ export const youtube: Provider = {
     media: { images: 1, videos: 1, mixed: true, required: true },
     thread: true,
     threadLabel: "First comment",
+    mediaNote: THUMBNAIL_NOTE,
   },
 
   metrics: {
-    post: ["views", "likes", "comments"],
+    post: ["views", "likes", "comments", "shares", "watchTimeMinutes", "avgViewDurationSeconds", "avgViewPercentage"],
     account: ["followers", "posts"],
     batch: METRICS_BATCH,
-    scopes: ["https://www.googleapis.com/auth/youtube.readonly"],
+    scopes: ["https://www.googleapis.com/auth/youtube.readonly", "https://www.googleapis.com/auth/yt-analytics.readonly"],
   },
 
   authorize(ctx, p) {
@@ -395,6 +751,18 @@ export const youtube: Provider = {
     if (post.media.filter((m) => m.kind === "video").length !== 1) errors.push("YouTube: attach exactly one video");
     if (/[<>]/.test(post.content)) errors.push("YouTube: the description cannot contain < or >");
     if (tagsOf(post.settings.tags).join(",").length > 500) errors.push("YouTube: tags are limited to 500 characters in total");
+    const s = post.settings;
+    for (const k of ["language", "audioLanguage", "captionsLanguage"])
+      if (s[k] && !BCP47.test(String(s[k]))) errors.push(`YouTube: "${s[k]}" is not a language code (e.g. en, pt-BR)`);
+    const loc = parseLocalizations(s.localizations);
+    errors.push(...loc.errors);
+    if (loc.items.length && !s.language) errors.push("YouTube: translations need the video language (the language of the main title and description)");
+    const captions = captionsOf(s);
+    if (captions) {
+      if (Array.from(captions.text).length > MAX_CAPTIONS) errors.push(`YouTube: captions are limited to ${MAX_CAPTIONS.toLocaleString("en-US")} characters`);
+      if (!captionFormat(captions.text)) errors.push("YouTube: the captions must be SubRip (.srt: starts with 1 and a 00:00:00,000 --> 00:00:01,000 line) or WebVTT (starts with WEBVTT)");
+      if (!captions.language) errors.push("YouTube: set the captions language (or the audio / video language)");
+    }
     return errors;
   },
 
@@ -403,12 +771,17 @@ export const youtube: Provider = {
     if (!video) throw new ProviderError("YouTube needs a video", "invalid");
     if (!String(post.settings.title ?? "").trim()) throw new ProviderError("YouTube: a title is required", "invalid");
     const token = String(account.credentials.accessToken);
+    const resource = videoResource(post);
     const res = await request(ctx, `${UPLOAD_API}/videos`, {
       method: "POST",
       token,
-      query: { uploadType: "resumable", part: "snippet,status", notifySubscribers: bool(post.settings.notifySubscribers, true) },
+      query: {
+        uploadType: "resumable",
+        part: resource.localizations ? "snippet,status,localizations" : "snippet,status",
+        notifySubscribers: bool(post.settings.notifySubscribers, true),
+      },
       headers: { "x-upload-content-type": video.mime || "video/mp4", "x-upload-content-length": String(video.size) },
-      json: videoResource(post),
+      json: resource,
       classify,
     }).catch((err) => {
       throw readable(err);
@@ -420,6 +793,8 @@ export const youtube: Provider = {
       video,
       thumbnail: post.media.find((m) => m.kind === "image") ?? null,
       playlistId: post.settings.playlist ? String(post.settings.playlist) : null,
+      newPlaylist: newPlaylistOf(post.settings, resource.status),
+      captions: captionsOf(post.settings),
     };
     return advance(ctx, token, state, 0);
   },
@@ -466,11 +841,17 @@ export const youtube: Provider = {
     }
     return [];
   },
-  /** One videos.list call for the whole batch. Videos missing from the response (deleted, private, unknown) → null. */
+  /**
+   * One videos.list call for the whole batch (views, likes, comments); videos missing from it (deleted, private,
+   * unknown) → null. Snapshots ≥ 24h after publishing add YouTube Analytics numbers: one report for the batch (watch
+   * time, average view duration / percentage, shares, subscribers gained) and, in the 7d-37d window, one traffic
+   * source report for the batch plus one retention request per video (≤ MAX_RETENTION). Worst case 3 + 10 fetches.
+   */
   async postMetrics(ctx, account, items) {
     const ids = [...new Set(items.map((i) => i.externalId))].slice(0, METRICS_BATCH);
     if (!ids.length) return {};
-    const res = await ytRead<{ items?: any[] }>(ctx, String(account.credentials.accessToken), "/videos", {
+    const token = String(account.credentials.accessToken);
+    const res = await ytRead<{ items?: any[] }>(ctx, token, "/videos", {
       part: "statistics",
       id: ids.join(","),
       maxResults: METRICS_BATCH,
@@ -488,6 +869,8 @@ export const youtube: Provider = {
           })
         : null;
     }
+    const live = items.filter((i) => found.has(i.externalId));
+    await addAnalytics(ctx, token, account, live, out);
     return out;
   },
 

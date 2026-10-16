@@ -75,6 +75,8 @@ export function formatDayKey(day: string, opts: Intl.DateTimeFormatOptions = { m
 /** Post-level metric keys in display order (account-level keys excluded). */
 export const POST_METRIC_KEYS: MetricKey[] = ["views", "impressions", "reach", "likes", "comments", "replies", "shares", "reposts", "quotes", "saves", "clicks"];
 export const ACCOUNT_METRIC_KEYS: MetricKey[] = ["followers", "following", "posts"];
+/** Watch-time keys (YouTube Analytics): shown with their own units, never summed across posts. */
+export const WATCH_METRIC_KEYS: MetricKey[] = ["watchTimeMinutes", "avgViewDurationSeconds", "avgViewPercentage"];
 
 export const METRIC_LABELS: Record<MetricKey, string> = {
   views: "Views",
@@ -91,7 +93,57 @@ export const METRIC_LABELS: Record<MetricKey, string> = {
   followers: "Followers",
   following: "Following",
   posts: "Posts",
+  watchTimeMinutes: "Watch time",
+  avgViewDurationSeconds: "Avg. view duration",
+  avgViewPercentage: "Avg. % viewed",
 };
+
+/** "2:05" (m:ss) or "1:02:05" for a duration in seconds. */
+export function formatDuration(seconds: number): string {
+  const s = Math.max(0, Math.round(seconds));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const ss = String(s % 60).padStart(2, "0");
+  return h ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
+}
+
+/** Watch-time values with their units: "4.2h" / "35 min", "2:05", "41.3%". */
+export function formatWatchMetric(key: MetricKey, v: number): string {
+  if (key === "avgViewDurationSeconds") return formatDuration(v);
+  if (key === "avgViewPercentage") return `${v.toFixed(1)}%`;
+  if (key === "watchTimeMinutes") return v >= 120 ? `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1, notation: "compact" }).format(v / 60)}h` : `${Math.round(v)} min`;
+  return String(v);
+}
+
+/** Readable names of YouTube traffic sources (insightTrafficSourceType); unknown values are title-cased. */
+const TRAFFIC_LABELS: Record<string, string> = {
+  ADVERTISING: "YouTube ads",
+  ANNOTATION: "Annotations",
+  CAMPAIGN_CARD: "Campaign cards",
+  END_SCREEN: "End screens",
+  EXT_URL: "External",
+  HASHTAGS: "Hashtag pages",
+  LIVE_REDIRECT: "Live redirects",
+  NO_LINK_EMBEDDED: "Embedded (no link)",
+  NO_LINK_OTHER: "Direct or unknown",
+  NOTIFICATION: "Notifications",
+  PLAYLIST: "Playlists",
+  PRODUCT_PAGE: "Product pages",
+  PROMOTED: "Promoted",
+  RELATED_VIDEO: "Suggested videos",
+  SHORTS: "Shorts feed",
+  SOUND_PAGE: "Sound pages",
+  SUBSCRIBER: "Browse features",
+  YT_CHANNEL: "Channel pages",
+  YT_OTHER_PAGE: "Other YouTube features",
+  YT_SEARCH: "YouTube search",
+  VIDEO_REMIXES: "Remixes",
+  WATCH_WITH: "Watch with",
+};
+
+export function trafficSourceLabel(source: string): string {
+  return TRAFFIC_LABELS[source] ?? source.toLowerCase().replace(/_/g, " ").replace(/^./, (c) => c.toUpperCase());
+}
 
 /** Which key a post's exposure (views / impressions / reach) comes from. */
 export function exposureKey(m: MetricValues | null | undefined): "views" | "impressions" | "reach" | null {

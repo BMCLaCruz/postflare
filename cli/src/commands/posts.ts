@@ -233,6 +233,17 @@ export const posts: Command = {
   },
 };
 
+/** avgViewPercentage 45.2 → "45.2%", avgViewDurationSeconds 123 → "2:03", counts → fmtNum. */
+function fmtMetric(key: string, v: number | undefined): string {
+  if (v === undefined) return "-";
+  if (key === "avgViewPercentage") return `${+v.toFixed(1)}%`;
+  if (key === "avgViewDurationSeconds") {
+    const sec = Math.round(v);
+    return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`;
+  }
+  return fmtNum(v);
+}
+
 export const postsShow: Command = {
   name: "posts show",
   args: "<id>",
@@ -269,11 +280,21 @@ export const postsShow: Command = {
       else {
         const m = metrics.metrics;
         const { extra, ...rest } = m;
-        println("  " + Object.entries(rest).map(([k, v]) => `${k} ${c.bold(fmtNum(v))}`).join("  "));
+        println("  " + Object.entries(rest).map(([k, v]) => `${k} ${c.bold(fmtMetric(k, v))}`).join("  "));
         const exp = exposure(m);
         const eng = ["likes", "comments", "shares", "saves", "replies", "reposts", "quotes", "clicks"].reduce((n, k) => n + (m[k] ?? 0), 0);
         if (exp) println(`  engagement rate ${c.bold(fmtPct(eng / exp))}`);
         if (extra && Object.keys(extra).length) println(c.gray("  " + Object.entries(extra).map(([k, v]) => `${k} ${fmtNum(v)}`).join("  ")));
+        const d = metrics.details;
+        if (d?.retention?.length) {
+          // Share of viewers still watching at 10%, 25%, 50%, 75% and 100% of the video.
+          const at = (x: number) => d.retention!.reduce((best, p) => (Math.abs(p[0] - x) < Math.abs(best[0] - x) ? p : best));
+          println(`  retention ${[0.1, 0.25, 0.5, 0.75, 1].map((x) => `${Math.round(x * 100)}% ${c.bold(fmtPct(at(x)[1], 0))}`).join("  ")}`);
+        }
+        if (d?.trafficSources?.length) {
+          const total = d.trafficSources.reduce((n, t) => n + t.views, 0) || 1;
+          println(`  traffic   ${d.trafficSources.slice(0, 6).map((t) => `${t.source} ${c.bold(fmtNum(t.views))} (${fmtPct(t.views / total, 0)})`).join("  ")}`);
+        }
         println(c.gray(`  collected ${fmtDate(metrics.metricsAt)}${metrics.metricsNextAt ? `, next ${fmtDate(metrics.metricsNextAt)}` : ""} · ${metrics.snapshots.length} snapshots`));
       }
     }

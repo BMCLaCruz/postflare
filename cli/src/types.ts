@@ -25,6 +25,8 @@ export interface ProviderCapabilities {
   media: { images: number; videos: number; mixed: boolean; required: boolean };
   thread: boolean;
   threadLabel?: string;
+  /** What the media is used for when not obvious (YouTube: the image becomes the custom thumbnail). */
+  mediaNote?: string;
 }
 
 export interface ProviderInfo {
@@ -46,6 +48,12 @@ export interface ProviderInfo {
 }
 
 export type MetricValues = Partial<Record<string, number>> & { extra?: Record<string, number> };
+
+/** Structured post analytics (YouTube): retention [elapsed share 0.01..1, audienceWatchRatio], views per traffic source. */
+export interface MetricDetails {
+  retention?: Array<[number, number]>;
+  trafficSources?: Array<{ source: string; views: number }>;
+}
 
 export interface AccountDTO {
   id: string;
@@ -184,6 +192,9 @@ export interface PostMetricsDTO {
   metricsAt: number | null;
   metricsNextAt: number | null;
   snapshots: Array<{ capturedAt: number; metrics: MetricValues }>;
+  /** Servers with YouTube Analytics support; older servers omit them. */
+  details?: MetricDetails | null;
+  detailsAt?: number | null;
 }
 
 export interface MeDTO {

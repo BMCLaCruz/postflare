@@ -2,17 +2,17 @@ import { useState } from "react";
 import { AlertTriangle, Hourglass, RefreshCw } from "lucide-react";
 import { ApiError, api } from "../../lib/api";
 import { useApp } from "../../lib/app";
-import { exposureKey, METRIC_LABELS, POST_METRIC_KEYS } from "../../lib/analytics";
+import { exposureKey, formatWatchMetric, METRIC_LABELS, POST_METRIC_KEYS, trafficSourceLabel, WATCH_METRIC_KEYS } from "../../lib/analytics";
 import { compactNumber, fullNumber, percent } from "../../lib/format";
 import { useSession } from "../../lib/session";
 import { formatDateTime, relativeTime } from "../../lib/time";
 import { engagements, exposure } from "@shared/types";
-import type { MetricKey, MetricValues, PostWithLogs } from "../../lib/types";
+import type { MetricDetails, MetricKey, MetricValues, PostWithLogs } from "../../lib/types";
 import { invalidate, useFetch } from "../../lib/useFetch";
 import { Button } from "../ui/Button";
 import { Skeleton, Tabs } from "../ui/Misc";
 import { useToast } from "../ui/Toast";
-import { LineChart, SERIES_1, SERIES_2, useNow } from "./charts";
+import { InlineBar, LineChart, SERIES_1, SERIES_2, useNow } from "./charts";
 
 const COOLDOWN = 60_000;
 const HOUR = 36e5;
@@ -49,6 +49,7 @@ export function PostPerformance({ post }: { post: PostWithLogs }) {
   // Keys the platform reports (from ProviderInfo), else the ones present in the data.
   const supported = new Set<MetricKey>(provider?.analytics.metrics ?? (Object.keys(m ?? {}) as MetricKey[]));
   const keys = POST_METRIC_KEYS.filter((k) => supported.has(k) && (m?.[k] !== undefined || !m));
+  const watchKeys = WATCH_METRIC_KEYS.filter((k) => m?.[k] !== undefined);
   const ek = exposureKey(m) ?? (["views", "impressions", "reach"] as const).find((k) => supported.has(k)) ?? null;
   const rate = m && exposure(m) ? engagements(m) / exposure(m)! : null;
   const cooldownLeft = d?.metricsAt ? d.metricsAt + COOLDOWN - now : 0;
@@ -143,6 +144,16 @@ export function PostPerformance({ post }: { post: PostWithLogs }) {
               </div>
             )}
           </dl>
+          {watchKeys.length > 0 && (
+            <dl className="mt-2 grid grid-cols-3 gap-2">
+              {watchKeys.map((k) => (
+                <div key={k} className="rounded-lg bg-zinc-50 px-3 py-2 dark:bg-zinc-800/50">
+                  <dt className="truncate text-xs text-zinc-500 dark:text-zinc-400">{METRIC_LABELS[k]}</dt>
+                  <dd className="text-base font-semibold tabular-nums">{formatWatchMetric(k, m[k]!)}</dd>
+                </div>
+              ))}
+            </dl>
+          )}
           {points.length > 1 && (
             <div className="mt-4">
               <div className="mb-2 flex items-center justify-between gap-2">
@@ -178,6 +189,7 @@ export function PostPerformance({ post }: { post: PostWithLogs }) {
               />
             </div>
           )}
+          {d.details && <Details details={d.details} at={d.detailsAt ?? null} />}
         </>
       )}
       {d && (
@@ -188,6 +200,61 @@ export function PostPerformance({ post }: { post: PostWithLogs }) {
         </p>
       )}
     </Shell>
+  );
+}
+
+/** YouTube Analytics extras: audience retention curve and views per traffic source. */
+function Details({ details, at }: { details: MetricDetails; at: number | null }) {
+  const { tz } = useApp();
+  const retention = details.retention ?? [];
+  const sources = (details.trafficSources ?? []).slice(0, 6);
+  const total = (details.trafficSources ?? []).reduce((n, s) => n + s.views, 0);
+  const when = at ? ` · as of ${formatDateTime(at, tz)}` : "";
+  return (
+    <>
+      {retention.length > 1 && (
+        <div className="mt-4">
+          <p className="mb-2 text-xs text-zinc-500 dark:text-zinc-400" title="Share of viewers still watching at each moment (above 100% when parts are rewatched).">
+            Audience retention{when}
+          </p>
+          <LineChart
+            points={retention.map(([x, y]) => ({ x, y: y * 100, label: `${Math.round(x * 100)}% into the video` }))}
+            xDomain={[0, 1]}
+            xTicks={[
+              { x: 0, label: "Start" },
+              { x: 0.5, label: "Middle" },
+              { x: 1, label: "End" },
+            ]}
+            height={96}
+            fromZero
+            formatValue={(v) => `${Math.round(v)}%`}
+            valueLabel="still watching"
+            label={`Audience retention: ${[0.25, 0.5, 0.75, 1]
+              .map((x) => {
+                const p = retention.reduce((best, q) => (Math.abs(q[0] - x) < Math.abs(best[0] - x) ? q : best));
+                return `${Math.round(p[1] * 100)}% at ${Math.round(x * 100)}%`;
+              })
+              .join(", ")}`}
+          />
+        </div>
+      )}
+      {sources.length > 0 && (
+        <div className="mt-4">
+          <p className="mb-2 text-xs text-zinc-500 dark:text-zinc-400">Traffic sources (views){when}</p>
+          <ol className="space-y-1.5">
+            {sources.map((s) => (
+              <li key={s.source} className="grid grid-cols-[minmax(0,10rem)_1fr_auto] items-center gap-3 text-xs" title={s.source}>
+                <span className="truncate text-zinc-700 dark:text-zinc-300">{trafficSourceLabel(s.source)}</span>
+                <InlineBar value={s.views} max={sources[0].views} />
+                <span className="tabular-nums text-zinc-500 dark:text-zinc-400">
+                  {compactNumber(s.views)} · {total ? percent(s.views / total, 0) : "–"}
+                </span>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+    </>
   );
 }
 

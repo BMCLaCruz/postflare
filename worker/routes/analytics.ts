@@ -29,6 +29,7 @@ import {
   refreshAccountMetrics,
   refreshPostMetrics,
   utcDay,
+  withoutDetails,
   type AnalyticsPostRow,
 } from "../lib/metrics";
 import { findPost } from "../lib/posts";
@@ -373,13 +374,18 @@ analyticsRoutes.get("/posts/:id/metrics", requirePermission("posts.read"), async
   const { results } = await c.env.DB.prepare("SELECT captured_at, metrics FROM post_metrics WHERE post_id = ? AND workspace_id = ? ORDER BY captured_at")
     .bind(row.id, wsId(c))
     .all<{ captured_at: number; metrics: string }>();
+  const snapshots = results.map((s) => ({ capturedAt: s.captured_at, metrics: parseJson<MetricValues>(s.metrics, {}) }));
+  // Structured details (YouTube retention / traffic sources) of the latest snapshot that has them, once.
+  const withDetails = snapshots.findLast((s) => s.metrics.details);
   const body: PostMetricsDTO = {
     postId: row.id,
     publishedAt: row.published_at,
     metrics: parseJson<MetricValues | null>(row.metrics, null),
     metricsAt: row.metrics_at ?? null,
     metricsNextAt: row.metrics_next_at ?? null,
-    snapshots: results.map((s) => ({ capturedAt: s.captured_at, metrics: parseJson<MetricValues>(s.metrics, {}) })),
+    snapshots: snapshots.map((s) => ({ capturedAt: s.capturedAt, metrics: withoutDetails(s.metrics) })),
+    details: withDetails?.metrics.details ?? null,
+    detailsAt: withDetails?.capturedAt ?? null,
   };
   return c.json(body);
 });

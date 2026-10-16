@@ -103,6 +103,7 @@ export const platforms: Command = {
       if (p.status) println(`  Status:    ${p.status}${p.statusNote ? ` (${p.statusNote})` : ""}`);
       println(`  Text:      ${cap.text}, max ${cap.maxLength.toLocaleString("en-US")} characters`);
       println(`  Media:     ${mediaSummary(p)}${cap.media.mixed ? ", images and videos can be mixed" : ""}`);
+      if (cap.mediaNote) println(`             ${cap.mediaNote}`);
       println(`  Follow-up: ${cap.thread ? `${cap.threadLabel ?? "yes"} (--thread)` : "no"}`);
       if (p.analytics) println(`  Analytics: ${p.analytics.post || p.analytics.account ? p.analytics.metrics.join(", ") : "none"}`);
       if (p.composerNotice) println(`  Notice:    ${truncate(p.composerNotice.replace(/\[([^\]]+)\]\([^)]+\)/g, "$1").replace(/\*\*/g, ""), 400)}`);

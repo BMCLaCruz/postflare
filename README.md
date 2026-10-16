@@ -256,6 +256,13 @@ Webhook...) need no developer app.
 Some platforms restrict unreviewed apps: TikTok posts from unaudited apps are private ("Only me") and YouTube uploads
 from unverified projects are private. You can make them public in the app afterwards, or submit your app for review.
 
+**YouTube:** an image attached next to the video becomes its **custom thumbnail** (JPEG/PNG, 16:9 e.g. 1280×720,
+≤2 MB, larger or other formats are re-encoded; the channel must be verified). Per-post settings also cover the video and
+audio language, a caption track (paste SRT or WebVTT text), translated titles/descriptions (`lang | title | description`
+per line), adding to an existing playlist and creating one by title (an existing playlist with that title is reused).
+Thumbnail, captions and playlist failures only add a warning to the post log: the video is already published. Enable
+both **YouTube Data API v3** and **YouTube Analytics API** in the Google Cloud project (see the Platforms page).
+
 ## Analytics
 
 The cron collects the metrics of every published post about **1h, 24h, 3d, 7d and 30d after publishing, then weekly
@@ -269,7 +276,7 @@ X 100, Reddit 100, Bluesky 25, TikTok 20, Meta's Batch API 50...); whatever does
 | Instagram (Facebook login) | same | same | `instagram_manage_insights` |
 | Facebook Page | views, reach, likes (reactions), comments, shares, clicks | followers | `read_insights` (+ `pages_read_engagement`) |
 | Threads | views, likes, replies, reposts, quotes, shares | followers | `threads_manage_insights` |
-| YouTube | views, likes, comments | subscribers, videos | `https://www.googleapis.com/auth/youtube.readonly` |
+| YouTube | views, likes, comments; from 24h (YouTube Analytics API): shares, watch time, average view duration and percentage, subscribers gained; 7d/30d: audience retention curve, traffic sources | subscribers, videos | `https://www.googleapis.com/auth/youtube.readonly`, `https://www.googleapis.com/auth/yt-analytics.readonly` (also enable **YouTube Analytics API** in the Google Cloud project) |
 | TikTok | views, likes, comments, shares | followers, following, videos | `video.list`, `user.info.stats` (Display API, app review), then set **Analytics scopes: On** on the Platforms page |
 | TikTok for Business | views, likes, comments, shares, reach | followers | already requested (`video.list`, `user.info.stats`) |
 | X | impressions, likes, replies, reposts, quotes, bookmarks | followers, following, posts | none (`tweet.read`, `users.read`); reads need a paid X API plan or credits |

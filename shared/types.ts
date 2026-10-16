@@ -53,6 +53,11 @@ export interface ProviderCapabilities {
   thread: boolean;
   /** UI label for follow-ups, e.g. "Thread replies" or "First comment". */
   threadLabel?: string;
+  /**
+   * What the media is used for when it is not obvious (shown under the composer's media picker, in list_platforms and
+   * `postflare platforms <id>`), e.g. YouTube: the image next to the video becomes the custom thumbnail.
+   */
+  mediaNote?: string;
 }
 
 /**
@@ -122,12 +127,35 @@ export type MetricKey =
   | "quotes"
   | "followers"
   | "following"
-  | "posts";
+  | "posts"
+  /** Minutes watched in total (YouTube Analytics estimatedMinutesWatched). */
+  | "watchTimeMinutes"
+  /** Average length of a view in seconds (YouTube Analytics averageViewDuration). Not additive across posts. */
+  | "avgViewDurationSeconds"
+  /** Average share of the video watched per view, in percent 0-100 (YouTube Analytics averageViewPercentage). Not additive. */
+  | "avgViewPercentage";
+
+/**
+ * Structured analytics of a post that are not single numbers (YouTube Analytics). Stored with the snapshot in
+ * `post_metrics` only (never in `posts.metrics`, which list endpoints return for many posts); PostMetricsDTO.details
+ * carries the latest one.
+ */
+export interface MetricDetails {
+  /**
+   * Audience retention curve: [elapsed share of the video 0.01..1, audienceWatchRatio] (~100 points). The ratio is the
+   * share of views still watching at that moment and can exceed 1 when parts are rewatched.
+   */
+  retention?: Array<[number, number]>;
+  /** Views per traffic source (YouTube insightTrafficSourceType, e.g. YT_SEARCH, SHORTS, EXT_URL), most views first. */
+  trafficSources?: Array<{ source: string; views: number }>;
+}
 
 /** Metric values of a post or an account at one point in time. Missing key = the platform does not report it. */
 export type MetricValues = Partial<Record<MetricKey, number>> & {
   /** Platform-specific numbers (e.g. Reddit upvote_ratio, YouTube favorites, Instagram profile_visits). */
   extra?: Record<string, number>;
+  /** Structured data (retention curve, traffic sources); post snapshots only, see MetricDetails. */
+  details?: MetricDetails;
 };
 
 /** The keys that count as engagements (interactions with a post). */
@@ -588,7 +616,12 @@ export interface PostMetricsDTO {
   metrics: MetricValues | null;
   metricsAt: number | null;
   metricsNextAt: number | null;
+  /** Snapshots, oldest first (without `details`: the latest details are in `details`). */
   snapshots: Array<{ capturedAt: number; metrics: MetricValues }>;
+  /** Structured analytics of the latest snapshot that has them (YouTube retention curve, traffic sources), else null. */
+  details?: MetricDetails | null;
+  /** When `details` were captured. */
+  detailsAt?: number | null;
 }
 
 /** Body of POST /api/analytics/refresh: exactly one of them. */

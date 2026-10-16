@@ -14,7 +14,7 @@ import { getProvider } from "../providers/registry";
 import { encryptJson } from "./crypto";
 import { DEMO_ACCOUNTS, DEMO_MEDIA, SIMULATED_LOG, fakeExternalId, fakePostUrl, seedPosts } from "./demo-seed";
 import { demoAccountMetrics, demoPostMetrics, demoSnapshotTimes } from "./demo-metrics";
-import { CHECKPOINTS, nextAccountRun, nextCheckpoint, utcDay } from "./metrics";
+import { CHECKPOINTS, nextAccountRun, nextCheckpoint, utcDay, withoutDetails } from "./metrics";
 import { demoPublishEventsStatement } from "./usage";
 import { DEMO_ROLE, DEMO_WORKSPACE_PERMISSIONS } from "./permissions";
 import { getSetting, setSetting } from "./settings";
@@ -280,7 +280,7 @@ function seedMetrics(posts: SeedPost[], t: number) {
       last = demoPostMetrics(provider, { content: p.content, published_at: p.published_at, playbook_id: p.playbook_id }, at);
       snapshots.push([p.id, at, JSON.stringify(last)]);
     }
-    latest.push([p.id, JSON.stringify(last), nextCheckpoint(p.published_at, t)]);
+    latest.push([p.id, JSON.stringify(withoutDetails(last)), nextCheckpoint(p.published_at, t)]);
   }
   const days: Array<[string, string, number, string]> = [];
   const accounts: Array<[string, string, number]> = [];
