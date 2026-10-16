@@ -46,12 +46,13 @@ const PLAYLIST_PAGES = 3;
 const SCOPE_REASONS = ["insufficientPermissions", "ACCESS_TOKEN_SCOPE_INSUFFICIENT"];
 
 /**
- * Resumable upload chunks must be multiples of 256 KiB (except the last one). Each chunk is one PUT streamed
- * straight from R2 (no copy through JS), so big chunks keep the subrequest count low: a 2GB video is 8 PUTs.
+ * Resumable upload chunks must be multiples of 256 KiB (except the last one; Google recommends multiples of 8 MiB).
+ * Each chunk is one PUT streamed straight from R2 (no copy through JS). 32 MiB keeps a failed or slow PUT cheap to
+ * redo and well inside the request timeout; a 2GB video is 64 PUTs, i.e. 3 calls of STEP_PUTS.
  */
-const CHUNK = 256 * 1024 * 1024;
+const CHUNK = 32 * 1024 * 1024;
 /** Per call (workflow step): at most this many PUTs / this much time, then continue in checkStatus. */
-const STEP_PUTS = 8;
+const STEP_PUTS = 24;
 const STEP_MS = 2 * 60 * 1000;
 
 interface UploadState {

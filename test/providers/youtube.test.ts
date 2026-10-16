@@ -113,8 +113,8 @@ describe("youtube", () => {
     expect(put.headers["content-range"]).toBe(`bytes 0-${5 * MiB - 1}/${5 * MiB}`);
   });
 
-  it("streams 256MiB chunks from R2 following the server's Range offsets", async () => {
-    const total = 600 * MiB + 123;
+  it("streams 32MiB chunks from R2 following the server's Range offsets", async () => {
+    const total = 70 * MiB + 123;
     // The server keeps 1 byte less of the first chunk: the next chunk must restart from its reported offset.
     const m = mockFetch([sessionRoute, ["PUT " + SESSION, fakeSession(total, { keepLess: 1 })]]);
     const ctx = hollowMedia(testContext(m.fetch, app));
@@ -127,37 +127,43 @@ describe("youtube", () => {
     expect(res).toMatchObject({ status: "published", externalId: "VID123" });
     const puts = m.requests.filter((r) => r.method === "PUT").map((r) => r.headers["content-range"]);
     expect(puts).toEqual([
-      `bytes 0-${256 * MiB - 1}/${total}`,
-      `bytes ${256 * MiB - 1}-${512 * MiB - 2}/${total}`,
-      `bytes ${512 * MiB - 1}-${total - 1}/${total}`,
+      `bytes 0-${32 * MiB - 1}/${total}`,
+      `bytes ${32 * MiB - 1}-${64 * MiB - 2}/${total}`,
+      `bytes ${64 * MiB - 1}-${total - 1}/${total}`,
     ]);
     expect(ranges).toEqual([
-      [0, 256 * MiB],
-      [256 * MiB - 1, 256 * MiB],
-      [512 * MiB - 1, total - (512 * MiB - 1)],
+      [0, 32 * MiB],
+      [32 * MiB - 1, 32 * MiB],
+      [64 * MiB - 1, total - (64 * MiB - 1)],
     ]);
-    // Non-final chunks are multiples of 256KiB.
-    expect((256 * MiB) % (256 * 1024)).toBe(0);
+    // Non-final chunks are multiples of 256KiB (and of Google's recommended 8MiB).
+    expect((32 * MiB) % (8 * MiB)).toBe(0);
   });
 
   it("uploads a 2GB+ video within the per-call subrequest budget and resumes without a new session", async () => {
     const total = 2048 * MiB + 5 * MiB;
     const m = mockFetch([sessionRoute, ["PUT " + SESSION, fakeSession(total)]]);
     const ctx = hollowMedia(testContext(m.fetch, app));
-    const first = await youtube.publish(ctx, testAccount(), post({ media: [video({ size: total })] }));
-    expect(first.status).toBe("pending");
-    const firstCall = m.requests.length;
-    expect(firstCall).toBe(9); // session + 8 PUTs of 256MiB
-    expect(firstCall).toBeLessThanOrEqual(40);
-    const state = (first as any).state;
-    expect(state.uploadUrl).toBe(SESSION);
-
-    const second = await youtube.checkStatus!(ctx, testAccount(), JSON.parse(JSON.stringify(state)));
-    expect(second).toMatchObject({ status: "published", externalId: "VID123" });
-    const after = m.requests.slice(firstCall);
-    expect(after.length).toBeLessThanOrEqual(40);
-    expect(after[0].headers["content-range"]).toBe(`bytes */${total}`);
-    expect(after[1].headers["content-range"]).toBe(`bytes ${2048 * MiB}-${total - 1}/${total}`);
+    let res = await youtube.publish(ctx, testAccount(), post({ media: [video({ size: total })] }));
+    expect(res.status).toBe("pending");
+    const calls = [m.requests.length];
+    expect(calls[0]).toBe(25); // session + 24 PUTs of 32MiB
+    expect((res as any).state.uploadUrl).toBe(SESSION);
+    let seen = m.requests.length;
+    while (res.status === "pending") {
+      res = await youtube.checkStatus!(ctx, testAccount(), JSON.parse(JSON.stringify((res as any).state)));
+      const call = m.requests.slice(seen);
+      // Every resumed call first asks the session where it stands.
+      expect(call[0].headers["content-range"]).toBe(`bytes */${total}`);
+      calls.push(call.length);
+      seen = m.requests.length;
+    }
+    expect(res).toMatchObject({ status: "published", externalId: "VID123" });
+    // 65 chunks: 24 + 24 + 17 PUTs over three calls, each well under the subrequest budget.
+    expect(calls).toEqual([25, 25, 18]);
+    expect(Math.max(...calls)).toBeLessThanOrEqual(40);
+    const puts = m.requests.filter((r) => r.method === "PUT" && !r.headers["content-range"].startsWith("bytes */"));
+    expect(puts.at(-1)!.headers["content-range"]).toBe(`bytes ${2048 * MiB}-${total - 1}/${total}`);
     // Only one session was ever created.
     expect(m.requests.filter((r) => r.method === "POST")).toHaveLength(1);
   });
@@ -466,9 +472,15 @@ describe("youtube extras (languages, captions, playlists, translations)", () => 
     const state = JSON.parse(JSON.stringify((first as any).state));
     expect(state.captions).toEqual({ text: SRT, language: "en", name: "Subtitles" });
     expect(state.newPlaylist).toEqual({ title: "Devlog", privacy: "unlisted" });
-    const before = m.requests.length;
-    const done = await youtube.checkStatus!(ctx, testAccount(), state);
+    let before = m.requests.length;
+    let done = await youtube.checkStatus!(ctx, testAccount(), state);
+    while (done.status === "pending") {
+      expect(m.requests.length - before).toBeLessThanOrEqual(40);
+      before = m.requests.length;
+      done = await youtube.checkStatus!(ctx, testAccount(), JSON.parse(JSON.stringify((done as any).state)));
+    }
     expect(done).toMatchObject({ status: "published", externalId: "VID123" });
+    // The last call: the remaining chunks plus every extra, still inside the budget.
     const after = m.requests.slice(before);
     expect(after.length).toBeLessThanOrEqual(40);
     const thumb = after.find((r) => r.url.includes("thumbnails/set"))!;
