@@ -41,7 +41,13 @@ export const PERMISSIONS: ReadonlyArray<PermissionInfo & { action: string }> = [
     description: "Admin overview: usage, publishing health and Free plan quotas across every workspace.",
     action: "view the instance overview",
   },
-  { key: "workspace.manage", scope: "workspace", label: "Manage workspace", description: "Rename the workspace.", action: "manage this workspace" },
+  {
+    key: "workspace.manage",
+    scope: "workspace",
+    label: "Manage workspace",
+    description: "Rename the workspace; App Store campaign settings (provider token, auto-insert, Revflare connection) and apps.",
+    action: "manage this workspace",
+  },
   {
     key: "workspace.delete",
     scope: "workspace",

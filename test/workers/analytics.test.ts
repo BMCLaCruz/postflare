@@ -209,6 +209,12 @@ describe("summary math and scoping", () => {
       engagementRate: 100 / 3000, // exposure: views of p1, impressions of p2
       followers: 210, // 150 + 60
       followersChange: 70, // (150 - 100) + (60 - 40)
+      // No tracked App Store links in this workspace.
+      campaignPosts: 0,
+      clicks: 0,
+      downloads: 0,
+      redownloads: 0,
+      proceeds: 0,
     });
     expect(s.previous).toMatchObject({ posts: 1, views: 500, engagements: 5, engagementRate: 5 / 500, followers: 100, followersChange: 0 });
     expect(s.tz).toBe("UTC");

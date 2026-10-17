@@ -33,6 +33,7 @@ import {
   type AnalyticsPostRow,
 } from "../lib/metrics";
 import { findPost } from "../lib/posts";
+import { CAMPAIGN_RESULT_COLUMNS, campaignResults, type CampaignResultCols } from "../lib/campaigns";
 import { getSetting } from "../lib/settings";
 import { now, parseJson } from "../lib/util";
 import { getProvider } from "../providers/registry";
@@ -136,7 +137,7 @@ function dayIndex(days: Array<{ start: number }>, t: number): number {
 // ---------------------------------------------------------------------------------------------------------------
 // Summary
 
-interface PostAgg {
+interface PostAgg extends CampaignResultCols {
   t: number;
   account_id: string;
   provider: string;
@@ -166,9 +167,21 @@ class Acc {
   rateExp = 0;
   followers: number | null = null;
   followersChange: number | null = null;
+  campaignPosts = 0;
+  clicks = 0;
+  downloads = 0;
+  redownloads = 0;
+  proceeds = 0;
 
-  add(r: PostAgg) {
+  add(r: PostAgg, campaign?: ReturnType<typeof campaignResults>) {
     this.posts++;
+    if (campaign) {
+      this.campaignPosts++;
+      this.clicks += campaign.clicks;
+      this.downloads += campaign.downloads ?? 0;
+      this.redownloads += campaign.redownloads ?? 0;
+      this.proceeds += campaign.proceeds ?? 0;
+    }
     if (!r.m) return;
     this.postsWithMetrics++;
     this.views += r.views;
@@ -204,6 +217,11 @@ class Acc {
       engagementRate: this.rateExp > 0 ? this.rateEng / this.rateExp : null,
       followers: this.followers,
       followersChange: this.followersChange,
+      campaignPosts: this.campaignPosts,
+      clicks: this.clicks,
+      downloads: this.downloads,
+      redownloads: this.redownloads,
+      proceeds: Math.round(this.proceeds * 100) / 100,
     };
   }
 }
@@ -223,7 +241,7 @@ analyticsRoutes.get("/analytics/summary", requirePermission("posts.read"), async
 
   const { results: rows } = await c.env.DB.prepare(
     `SELECT p.published_at AS t, p.account_id, a.provider, p.metrics IS NOT NULL AS m, ${num("views")}, ${num("impressions")}, ${num("reach")},
-       ${num("likes")}, ${num("comments")}, ${num("shares")}, ${engagementSql()} AS eng, ${exposureSql()} AS exp
+       ${num("likes")}, ${num("comments")}, ${num("shares")}, ${engagementSql()} AS eng, ${exposureSql()} AS exp, ${CAMPAIGN_RESULT_COLUMNS()}
      FROM posts p JOIN accounts a ON a.id = p.account_id
      WHERE p.workspace_id = ? AND p.status = 'published' AND p.published_at >= ? AND p.published_at < ?${f.sql}`,
   )
@@ -251,18 +269,21 @@ analyticsRoutes.get("/analytics/summary", requirePermission("posts.read"), async
   const previous = new Acc();
   const byProvider = new Map<string, Acc>();
   const byAccount = new Map<string, Acc>();
+  let currency: string | null = null;
   for (const row of rows) {
+    const campaign = campaignResults(row);
+    if (campaign?.currency) currency ??= campaign.currency;
     if (row.t < from) {
-      previous.add(row);
+      previous.add(row, campaign);
       continue;
     }
-    current.add(row);
+    current.add(row, campaign);
     let p = byProvider.get(row.provider);
     if (!p) byProvider.set(row.provider, (p = new Acc()));
-    p.add(row);
+    p.add(row, campaign);
     let a = byAccount.get(row.account_id);
     if (!a) byAccount.set(row.account_id, (a = new Acc()));
-    a.add(row);
+    a.add(row, campaign);
     const d = daily[dayIndex(days, row.t)];
     d.posts++;
     if (row.m) {
@@ -334,6 +355,7 @@ analyticsRoutes.get("/analytics/summary", requirePermission("posts.read"), async
     byAccount: accountRows.sort(byViews),
     daily,
     followers,
+    currency,
   };
   return c.json(body);
 });
@@ -346,7 +368,12 @@ const SORTS: Record<string, string> = {
   engagements: `${engagementSql()} DESC`,
   engagementRate: `(${engagementSql()} * 1.0 / NULLIF(${exposureSql()}, 0)) DESC NULLS LAST`,
   publishedAt: "p.published_at DESC",
+  // Tracked App Store links (aliases of ANALYTICS_POST_COLUMNS).
+  clicks: "campaign_clicks DESC NULLS LAST",
+  downloads: "json_extract(campaign_stats, '$.downloads') DESC NULLS LAST",
+  proceeds: "json_extract(campaign_stats, '$.proceeds') DESC NULLS LAST",
 };
+SORTS.installs = SORTS.downloads;
 
 analyticsRoutes.get("/analytics/posts", requirePermission("posts.read"), async (c) => {
   const r = range(c);
@@ -377,6 +404,7 @@ analyticsRoutes.get("/posts/:id/metrics", requirePermission("posts.read"), async
   const snapshots = results.map((s) => ({ capturedAt: s.captured_at, metrics: parseJson<MetricValues>(s.metrics, {}) }));
   // Structured details (YouTube retention / traffic sources) of the latest snapshot that has them, once.
   const withDetails = snapshots.findLast((s) => s.metrics.details);
+  const camp = await c.env.DB.prepare(`SELECT ${CAMPAIGN_RESULT_COLUMNS()} FROM posts p WHERE p.id = ? AND p.workspace_id = ?`).bind(row.id, wsId(c)).first<CampaignResultCols>();
   const body: PostMetricsDTO = {
     postId: row.id,
     publishedAt: row.published_at,
@@ -386,6 +414,7 @@ analyticsRoutes.get("/posts/:id/metrics", requirePermission("posts.read"), async
     snapshots: snapshots.map((s) => ({ capturedAt: s.capturedAt, metrics: withoutDetails(s.metrics) })),
     details: withDetails?.metrics.details ?? null,
     detailsAt: withDetails?.capturedAt ?? null,
+    campaign: camp ? campaignResults(camp) : null,
   };
   return c.json(body);
 });

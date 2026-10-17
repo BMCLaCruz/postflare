@@ -642,3 +642,94 @@ export function seedPosts(t0: number, tz: string, newId: (prefix: string) => str
   });
   return { posts, logs };
 }
+
+// ---------------------------------------------------------------------------------------------------------------
+// App Store campaign links (worker/lib/campaigns.ts): two apps, tracked links on the published posts of clickable
+// platforms, bio links for Instagram and TikTok, clicks and sample App Analytics numbers. Never from Revflare.
+
+export const DEMO_PROVIDER_TOKEN = "123456";
+export const DEMO_APPS = {
+  tempo: { id: "app_demo_tempo", appStoreId: "6450000001", name: "Tempo: Focus Timer" },
+  plants: { id: "app_demo_plants", appStoreId: "6450000002", name: "Pocket Plants" },
+} as const;
+
+export interface SeedCampaigns {
+  /** [post id, app id] */
+  postApps: Array<[string, string]>;
+  links: Array<{ code: string; kind: "post" | "bio"; post_id: string | null; account_id: string; provider: string; app_id: string; app_store_id: string; ct: string; url: string; created_at: number }>;
+  /** [code, day, clicks] */
+  clicks: Array<[string, string, number]>;
+  stats: Array<{ app_store_id: string; ct: string; downloads: number; redownloads: number; purchases: number; proceeds: number; sales: number; first_day: string; last_day: string }>;
+}
+
+/** Deterministic pseudo-random 0..1 from a string (stable numbers per post across renders of one reset). */
+function unit(seed: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < seed.length; i++) h = Math.imul(h ^ seed.charCodeAt(i), 16777619) >>> 0;
+  return (h % 10_000) / 10_000;
+}
+
+export function seedCampaigns(
+  posts: SeedPost[],
+  t0: number,
+  helpers: {
+    token: (provider: string, postId: string) => string;
+    bioToken: (provider: string) => string;
+    url: (appStoreId: string, ct: string) => string;
+    code: () => string;
+    clickable: (provider: string) => boolean;
+  },
+): SeedCampaigns {
+  const day = (t: number) => new Date(t).toISOString().slice(0, 10);
+  const accountById = new Map(Object.values(DEMO_ACCOUNTS).map((a) => [a.id, a]));
+  const out: SeedCampaigns = { postApps: [], links: [], clicks: [], stats: [] };
+  const addResults = (code: string, ct: string, appStoreId: string, from: number, scale: number) => {
+    // Clicks per day since `from`; Apple's numbers only for days at least 3 days old (reports lag 2-3 days).
+    let total = 0;
+    for (let d = from; d < t0; d += DAY) {
+      const age = Math.floor((d - from) / DAY);
+      const n = Math.max(0, Math.round(scale * (age === 0 ? 1 : 1 / (1 + age * 0.6)) * (0.6 + unit(`${code}${age}`))));
+      if (!n) continue;
+      out.clicks.push([code, day(d), n]);
+      if (d < t0 - 3 * DAY) total += n;
+    }
+    if (total < 3) return;
+    const downloads = Math.round(total * (0.18 + unit(`${ct}d`) * 0.2));
+    const purchases = Math.round(downloads * (0.05 + unit(`${ct}p`) * 0.08));
+    const sales = Math.round(purchases * 9.99 * 100) / 100;
+    out.stats.push({
+      app_store_id: appStoreId,
+      ct,
+      downloads,
+      redownloads: Math.round(downloads * 0.12),
+      purchases,
+      proceeds: Math.round(sales * 0.85 * 100) / 100,
+      sales,
+      first_day: day(from),
+      last_day: day(t0 - 3 * DAY),
+    });
+  };
+  for (const p of posts) {
+    const account = accountById.get(p.account_id);
+    if (!account) continue;
+    const app = /pocket plants|plant/i.test(p.content) || account.provider === "tiktok" ? DEMO_APPS.plants : /tempo|focus/i.test(p.content) ? DEMO_APPS.tempo : null;
+    if (!app) continue;
+    out.postApps.push([p.id, app.id]);
+    if (p.status !== "published" || !p.published_at || !helpers.clickable(account.provider)) continue;
+    const ct = helpers.token(account.provider, p.id);
+    const code = helpers.code();
+    out.links.push({ code, kind: "post", post_id: p.id, account_id: account.id, provider: account.provider, app_id: app.id, app_store_id: app.appStoreId, ct, url: helpers.url(app.appStoreId, ct), created_at: p.created_at });
+    addResults(code, ct, app.appStoreId, p.published_at, 8 + unit(p.id) * 40);
+  }
+  // Bio links: Instagram (Tempo) and TikTok (Pocket Plants), 30 days of clicks.
+  for (const [account, app] of [
+    [DEMO_ACCOUNTS.ig, DEMO_APPS.tempo],
+    [DEMO_ACCOUNTS.tt, DEMO_APPS.plants],
+  ] as const) {
+    const ct = helpers.bioToken(account.provider);
+    const code = helpers.code();
+    out.links.push({ code, kind: "bio", post_id: null, account_id: account.id, provider: account.provider, app_id: app.id, app_store_id: app.appStoreId, ct, url: helpers.url(app.appStoreId, ct), created_at: t0 - 30 * DAY });
+    addResults(code, ct, app.appStoreId, t0 - 30 * DAY, 12);
+  }
+  return out;
+}

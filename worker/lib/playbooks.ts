@@ -14,10 +14,12 @@ import type {
   PlaybookInput,
   PlaybookStatsDTO,
   PlaybookStatsRow,
+  PlaybookStatsSort,
   PlaybookSummaryDTO,
 } from "../../shared/types";
 import { PLATFORM_GROUPS, PLAYBOOK_FORMATS, PLAYBOOK_GOALS, SLUG_RE, checklistOf, matchesPlatform, parsePlaybook, serializePlaybook } from "../../shared/playbooks";
 import { getProvider } from "../providers/registry";
+import { campaignResults } from "./campaigns";
 import { parseJson } from "./util";
 
 const files = import.meta.glob("../../playbooks/*.md", { query: "?raw", import: "default", eager: true }) as Record<string, string>;
@@ -450,6 +452,9 @@ export interface StatsPostRow {
   eng: number;
   /** Exposure: views, else impressions, else reach (null when the platform reports none). */
   exp: number | null;
+  /** Tracked App Store link results (lib/campaigns.ts CAMPAIGN_RESULT_COLUMNS), absent without a link. */
+  campaign_clicks?: number | null;
+  campaign_stats?: string | null;
 }
 
 /** Posts analyzed at most (the most recent ones in the range). */
@@ -474,7 +479,10 @@ export const STATS_METHOD =
   "For every published post with metrics in the range, its engagement rate (engagements ÷ views, else impressions, else reach; " +
   "engagements for platforms reporting no exposure) is divided by the median of the same account's posts written without a playbook " +
   `(all of the account's posts when it has fewer than ${MIN_BASELINE_POSTS} such posts). Lift = median of these ratios − 1. ` +
-  "Confidence: insufficient < 5 posts, low 5–19, ok ≥ 20. This is a correlation: topics, timing and media differ between posts.";
+  "Confidence: insufficient < 5 posts, low 5–19, ok ≥ 20. Installs and revenue: App Store downloads and proceeds of the posts' tracked links " +
+  "(Apple App Analytics via Revflare; small numbers are withheld, 2–3 days delay), per tracked post. This is a correlation: topics, timing and media differ between posts.";
+
+export const STATS_SORTS: PlaybookStatsSort[] = ["lift", "downloads", "proceeds", "downloadsPerPost", "proceedsPerPost"];
 
 /**
  * Per-post lift against the account's baseline, then per-group aggregates. O(n log n) over at most STATS_MAX_POSTS
@@ -483,7 +491,17 @@ export const STATS_METHOD =
 export function computePlaybookStats(
   rows: StatsPostRow[],
   info: (id: string) => { name: string; builtin: boolean },
-): Pick<PlaybookStatsDTO, "baseline" | "playbooks" | "postsAnalyzed"> {
+  sort: PlaybookStatsSort = "lift",
+): Pick<PlaybookStatsDTO, "baseline" | "playbooks" | "postsAnalyzed" | "currency"> {
+  // Tracked link results per post (parsed once).
+  const campaign = new Map<StatsPostRow, NonNullable<ReturnType<typeof campaignResults>>>();
+  let currency: string | null = null;
+  for (const r of rows) {
+    const c = campaignResults(r);
+    if (!c) continue;
+    campaign.set(r, c);
+    if (c.currency) currency ??= c.currency;
+  }
   // 1. Account baselines.
   const byAccount = new Map<string, StatsPostRow[]>();
   for (const r of rows) {
@@ -512,8 +530,19 @@ export function computePlaybookStats(
     const views: number[] = [];
     const lifts: number[] = [];
     const accounts = new Set<string>();
+    let campaignPosts = 0;
+    let clicks = 0;
+    let downloads = 0;
+    let proceeds = 0;
     for (const p of posts) {
       accounts.add(p.account_id);
+      const c = campaign.get(p);
+      if (c) {
+        campaignPosts++;
+        clicks += c.clicks;
+        downloads += c.downloads ?? 0;
+        proceeds += c.proceeds ?? 0;
+      }
       if (p.exp && p.exp > 0) {
         rates.push(p.eng / p.exp);
         views.push(p.exp);
@@ -532,6 +561,12 @@ export function computePlaybookStats(
       lift: m === null ? null : m - 1,
       liftPosts: lifts.length,
       confidence: confidence(posts.length),
+      campaignPosts,
+      clicks,
+      downloads,
+      proceeds: Math.round(proceeds * 100) / 100,
+      downloadsPerPost: campaignPosts ? downloads / campaignPosts : null,
+      proceedsPerPost: campaignPosts ? Math.round((proceeds / campaignPosts) * 100) / 100 : null,
     };
   };
 
@@ -567,6 +602,9 @@ export function computePlaybookStats(
       : [];
     return { ...aggregate(posts, { playbookId: id, name, builtin }), versions, variants };
   });
-  playbooks.sort((a, b) => rank[a.confidence] - rank[b.confidence] || (b.lift ?? -Infinity) - (a.lift ?? -Infinity) || b.posts - a.posts);
-  return { postsAnalyzed: rows.length, baseline: aggregate(none, { playbookId: null, name: "No playbook", builtin: false }), playbooks };
+  const byLift = (a: PlaybookStatsRow, b: PlaybookStatsRow) => rank[a.confidence] - rank[b.confidence] || (b.lift ?? -Infinity) - (a.lift ?? -Infinity) || b.posts - a.posts;
+  const key = sort === "lift" ? null : sort;
+  // Installs / revenue: playbooks with tracked posts first, then by the value (lift breaks ties).
+  playbooks.sort(key ? (a, b) => (b[key] ?? -Infinity) - (a[key] ?? -Infinity) || byLift(a, b) : byLift);
+  return { postsAnalyzed: rows.length, baseline: aggregate(none, { playbookId: null, name: "No playbook", builtin: false }), playbooks, currency };
 }

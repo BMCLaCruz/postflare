@@ -194,6 +194,35 @@ describe("demo login", () => {
     fetchSpy.mockRestore();
   });
 
+  it("seeds App Store campaign links with sample installs and revenue, and never calls Revflare", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const apps = (await call(ON, demo, "/api/apps")).json;
+    expect(apps.map((a: any) => a.name).sort()).toEqual(["Pocket Plants", "Tempo: Focus Timer"]);
+    const settings = (await call(ON, demo, "/api/campaigns/settings")).json;
+    expect(settings).toMatchObject({ providerToken: "123456", autoLink: true, revflare: { keyConfigured: false, currency: "USD" } });
+    const s = (await call(ON, demo, "/api/analytics/summary")).json;
+    expect(s.totals.campaignPosts).toBeGreaterThanOrEqual(3);
+    expect(s.totals.clicks).toBeGreaterThan(0);
+    expect(s.totals.downloads).toBeGreaterThan(0);
+    expect(s.currency).toBe("USD");
+    const top = (await call(ON, demo, "/api/analytics/posts?sort=downloads")).json;
+    expect(top[0].campaign.downloads).toBeGreaterThan(0);
+    const bio = (await call(ON, demo, "/api/campaigns/links?kind=bio")).json;
+    expect(bio.map((l: any) => l.ct).sort()).toEqual(["pf-igs-bio", "pf-tt-bio"]);
+    const ranking = (await call(ON, demo, "/api/playbooks/stats?sort=downloads")).json;
+    expect(ranking.playbooks.some((p: any) => p.downloads > 0)).toBe(true);
+    // The demo cannot connect or sync Revflare (no workspace.manage, and the workspace refuses it anyway).
+    expect((await call(ON, demo, "/api/campaigns/sync", { body: {} })).status).toBe(403);
+    expect((await call(ON, demo, "/api/campaigns/settings", { method: "PUT", body: { revflareUrl: "https://revflare.example.com", revflareKey: "rf_0123456789abcdef" } })).status).toBe(403);
+    // A tracked link of the demo redirects and counts.
+    const link = (await call(ON, demo, "/api/campaigns/links?kind=post&limit=1")).json[0];
+    const res = await call(ON, null, `/a/${link.code}`, { headers: { "user-agent": "Mozilla/5.0 (iPhone) Safari/604.1" }, wait: true });
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toContain("apps.apple.com/app/apple-store/id6450000");
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  });
+
   it("is throttled per IP", async () => {
     for (let i = 0; i < DEMO_LOGINS_PER_HOUR; i++) {
       const res = await call(ON, null, "/api/auth/demo", { method: "POST", headers: { "cf-connecting-ip": "10.8.9.9" } });

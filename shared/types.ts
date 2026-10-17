@@ -257,6 +257,12 @@ export interface PostDTO {
   playbookId: string | null;
   playbookVersion: number | null;
   variant: string | null;
+  /** App Store app the post is about (workspace app id, GET /api/apps), null when none. */
+  appId: string | null;
+  /** Per-post override of the workspace's "auto-insert tracked links" setting; null = workspace default. */
+  autoLink: boolean | null;
+  /** Tracked link of the post (GET /api/posts/:id only; null without an app or on non-clickable platforms). */
+  campaign?: CampaignLinkDTO | null;
 }
 
 /** Body of POST /api/posts/:id/resolve (only for `needs_check` posts). */
@@ -302,6 +308,13 @@ export interface CreatePostsInput {
   playbookVersion?: number | null;
   /** A/B label, e.g. "A" or "short-hook" (at most 32 characters). */
   variant?: string | null;
+  /**
+   * App Store app the posts are about: workspace app id (app_...), App Store id or app name (GET /api/apps). Posts on
+   * clickable platforms get a tracked link (/a/<code>) with a campaign token; null removes it (PATCH).
+   */
+  appId?: string | null;
+  /** Override the workspace's auto-insert setting for these posts (null/absent = workspace default). */
+  autoLink?: boolean | null;
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -538,6 +551,15 @@ export interface AnalyticsTotals {
   followers: number | null;
   /** Followers at the end minus followers at the start of the range (accounts with both values). */
   followersChange: number | null;
+  /** Posts with a tracked App Store link. */
+  campaignPosts: number;
+  /** Clicks on their tracked links (bots filtered roughly). */
+  clicks: number;
+  /** App Store first-time downloads attributed to their campaign tokens (Apple App Analytics via Revflare). */
+  downloads: number;
+  redownloads: number;
+  /** Apple's proceeds estimate for those downloads, in `currency` of the summary. */
+  proceeds: number;
 }
 
 export interface AnalyticsBreakdown extends AnalyticsTotals {
@@ -583,6 +605,8 @@ export interface AnalyticsSummaryDTO {
   byAccount: AnalyticsBreakdown[];
   daily: AnalyticsDay[];
   followers: FollowerSeries[];
+  /** Currency of `proceeds` (the Revflare workspace currency), null before the first sync. */
+  currency: string | null;
 }
 
 /** GET /api/analytics/posts item */
@@ -607,6 +631,8 @@ export interface AnalyticsPostDTO {
   metricsNextAt: number | null;
   engagements: number;
   engagementRate: number | null;
+  /** Tracked link results (null when the post has no tracked link). */
+  campaign: CampaignResultsDTO | null;
 }
 
 /** GET /api/posts/:id/metrics */
@@ -622,6 +648,8 @@ export interface PostMetricsDTO {
   details?: MetricDetails | null;
   /** When `details` were captured. */
   detailsAt?: number | null;
+  /** Tracked link results (null when the post has no tracked link). */
+  campaign?: CampaignResultsDTO | null;
 }
 
 /** Body of POST /api/analytics/refresh: exactly one of them. */
@@ -870,7 +898,18 @@ export interface PlaybookStatsRow {
   /** Posts that have a lift value (account baseline available). */
   liftPosts: number;
   confidence: PlaybookConfidence;
+  /** Posts with a tracked App Store link, their clicks, downloads and proceeds (Apple App Analytics via Revflare). */
+  campaignPosts: number;
+  clicks: number;
+  downloads: number;
+  proceeds: number;
+  /** downloads / proceeds ÷ campaignPosts (null without tracked posts). */
+  downloadsPerPost: number | null;
+  proceedsPerPost: number | null;
 }
+
+/** GET /api/playbooks/stats?sort= */
+export type PlaybookStatsSort = "lift" | "downloads" | "proceeds" | "downloadsPerPost" | "proceedsPerPost";
 
 /** GET /api/playbooks/stats */
 export interface PlaybookStatsDTO {
@@ -889,4 +928,114 @@ export interface PlaybookStatsDTO {
   playbooks: Array<PlaybookStatsRow & { versions: PlaybookStatsRow[]; variants: PlaybookStatsRow[] }>;
   /** How the numbers are computed (shown as a disclaimer: correlation, not causation). */
   method: string;
+  /** How `playbooks` is sorted. */
+  sort: PlaybookStatsSort;
+  /** Currency of `proceeds`, null before the first Revflare sync. */
+  currency: string | null;
 }
+
+// ---------------------------------------------------------------------------------------------------------------
+// App Store campaign links (worker/lib/campaigns.ts, worker/lib/revflare.ts, shared/campaigns.ts)
+
+/** GET /api/apps item: an App Store app of the workspace. */
+export interface AppDTO {
+  id: string;
+  appStoreId: string;
+  name: string;
+  iconUrl: string | null;
+  /** Imported from Revflare (its app id there). */
+  revflareAppId: string | null;
+  createdAt: number;
+}
+
+/** Body of POST /api/apps: an App Store id (name and icon are looked up on the App Store when not given). */
+export interface AppInput {
+  appStoreId: string;
+  name?: string;
+  iconUrl?: string | null;
+}
+
+/** GET /api/campaigns/settings (workspace). The Revflare API key is never returned: only whether it is set. */
+export interface CampaignSettingsDTO {
+  /** Apple provider token (pt=), null when not set. */
+  providerToken: string | null;
+  /** Replace App Store URLs / append the tracked link by default. */
+  autoLink: boolean;
+  revflare: {
+    url: string | null;
+    keyConfigured: boolean;
+    status: "ok" | "error" | null;
+    message: string | null;
+    syncedAt: number | null;
+    nextSyncAt: number | null;
+    currency: string | null;
+  };
+  /** Base of tracked links, e.g. https://postflare.example.com/a/ */
+  linkBase: string;
+}
+
+/** Body of PUT /api/campaigns/settings (every field optional; revflareKey: "" or null removes the connection). */
+export interface CampaignSettingsInput {
+  providerToken?: string | null;
+  autoLink?: boolean;
+  revflareUrl?: string | null;
+  revflareKey?: string | null;
+}
+
+/** POST /api/campaigns/test */
+export interface RevflareTestDTO {
+  ok: boolean;
+  error?: string;
+  /** Apps in the Revflare workspace (those with an App Store id). */
+  apps?: number;
+  currency?: string;
+}
+
+/** Results of a tracked link: Postflare clicks and Apple's numbers for its campaign token. */
+export interface CampaignResultsDTO {
+  clicks: number;
+  /** First-time downloads (Apple App Analytics). Null until Revflare reported the token. */
+  downloads: number | null;
+  redownloads: number | null;
+  /** App Store purchases (units). */
+  purchases: number | null;
+  proceeds: number | null;
+  sales: number | null;
+  currency: string | null;
+  /** Latest report day with this token (YYYY-MM-DD). */
+  asOf: string | null;
+}
+
+/** A tracked link (GET /api/campaigns/links, PostDTO.campaign). */
+export interface CampaignLinkDTO extends CampaignResultsDTO {
+  code: string;
+  kind: "post" | "bio";
+  /** https://<host>/a/<code> */
+  trackedUrl: string;
+  /** The App Store campaign link it redirects to. */
+  appStoreUrl: string;
+  ct: string;
+  postId: string | null;
+  accountId: string | null;
+  provider: string;
+  appId: string;
+  appStoreId: string;
+  createdAt: number;
+}
+
+/** POST /api/campaigns/sync */
+export interface CampaignSyncDTO {
+  ok: boolean;
+  error?: string;
+  /** Campaign tokens stored (pf-... only). */
+  campaigns?: number;
+  currency?: string;
+  asOf?: string | null;
+}
+
+/**
+ * Shown next to App Store numbers: Apple leaves out small counts (fewer than 5 users) in the Detailed reports
+ * campaign data comes from and adds a little noise; each day is complete after 2-3 days.
+ */
+export const CAMPAIGN_DATA_NOTE =
+  "App Store numbers come from Apple App Analytics (via Revflare): they lag 2-3 days, Apple withholds small numbers (fewer than 5 users) for privacy, and proceeds are Apple's estimate.";

@@ -7,6 +7,7 @@ import {
   type AnalyticsPostDTO,
   type AnalyticsSummaryDTO,
   type AnalyticsTotals,
+  type CampaignResultsDTO,
   type MetricValues,
 } from "../../shared/types";
 import { apiKeyUser, type AppEnv } from "../lib/auth";
@@ -142,7 +143,10 @@ export function mcpRoutes(api: { fetch: (req: Request, env: Env, ctx: ExecutionC
     create_post: {
       description:
         "Create a post on one or more accounts. `scheduledAt` is an ISO date, \"now\" to publish immediately, or null for a draft. Per-account `content`, `settings`, `media` and `thread` override the shared values. " +
-        "Pass the `playbookId` (and `playbookVersion`) of the playbook you followed (get_playbook), and a `variant` label (\"A\"/\"B\") when testing two versions.",
+        "Pass the `playbookId` (and `playbookVersion`) of the playbook you followed (get_playbook), and a `variant` label (\"A\"/\"B\") when testing two versions. " +
+        "When the post is about an App Store app, pass `appId` (list_apps): posts on clickable platforms (X, Threads, Bluesky, LinkedIn, Facebook, Pinterest, Reddit, Mastodon, YouTube, Telegram...) " +
+        "get a tracked link (clicks, App Store installs and proceeds per post); with auto-insert (workspace setting, or `autoLink: true`) App Store URLs of that app in the text are replaced by it, " +
+        "or it is appended when the post has no link. Instagram/TikTok captions are not clickable: use the account's bio link instead.",
       inputSchema: {
         type: "object",
         properties: {
@@ -151,6 +155,8 @@ export function mcpRoutes(api: { fetch: (req: Request, env: Env, ctx: ExecutionC
           playbookId: { type: "string", description: "Id of the playbook the post was written with (search_playbooks / get_playbook)." },
           playbookVersion: { type: "number", description: "Version of that playbook (default: latest)." },
           variant: { type: "string", description: "A/B label, e.g. \"A\" or \"B\" (max 32 characters)." },
+          appId: { type: "string", description: "App Store app the post is about: app id from list_apps, App Store id or app name." },
+          autoLink: { type: "boolean", description: "Override the workspace setting: replace App Store URLs / append the tracked link (true) or leave the text alone (false)." },
           media: { type: "array", items: { type: "string" } },
           thread: {
             type: "array",
@@ -179,6 +185,8 @@ export function mcpRoutes(api: { fetch: (req: Request, env: Env, ctx: ExecutionC
           ...(a.playbookId ? { playbookId: String(a.playbookId) } : {}),
           ...(a.playbookVersion != null ? { playbookVersion: Number(a.playbookVersion) } : {}),
           ...(a.variant ? { variant: String(a.variant) } : {}),
+          ...(a.appId ? { appId: String(a.appId) } : {}),
+          ...(typeof a.autoLink === "boolean" ? { autoLink: a.autoLink } : {}),
           posts: a.accounts.map((x: any) => ({
             accountId: x.accountId,
             content: x.content ?? a.content ?? "",
@@ -206,9 +214,26 @@ export function mcpRoutes(api: { fetch: (req: Request, env: Env, ctx: ExecutionC
       },
     },
     get_post: {
-      description: "Get a post with its publishing log.",
+      description: "Get a post with its publishing log and, when it is about an app, its tracked link (`campaign`: trackedUrl, ct, clicks, App Store downloads, proceeds).",
       inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
       run: (c, a) => call(c, "GET", `/posts/${seg(a.id)}`),
+    },
+    list_apps: {
+      description:
+        "List this workspace's App Store apps (id, App Store id, name). Pass an app's id as `appId` to create_post for tracked App Store links " +
+        "(campaign token per post and platform: clicks, installs and proceeds per post in the analytics tools).",
+      inputSchema: { type: "object", properties: {} },
+      run: async (c) => ((await call(c, "GET", "/apps")) as any[]).map((x) => ({ id: x.id, appStoreId: x.appStoreId, name: x.name })),
+    },
+    get_bio_link: {
+      description:
+        "Get (or create) the tracked bio link of an account for an app: put it in the profile of Instagram/TikTok accounts, whose captions are not clickable. " +
+        "Its campaign token is pf-<platform>-bio; clicks and installs show in Postflare.",
+      inputSchema: { type: "object", properties: { accountId: { type: "string" }, appId: { type: "string" } }, required: ["accountId", "appId"] },
+      run: async (c, a) => {
+        const l = await call(c, "POST", "/campaigns/bio-links", { accountId: a.accountId, appId: a.appId });
+        return drop({ url: l.trackedUrl, ct: l.ct, appStoreUrl: l.appStoreUrl, clicks: l.clicks, installs: l.downloads, proceeds: l.proceeds, currency: l.currency });
+      },
     },
     update_post: {
       description: "Edit a draft, scheduled or failed post. `scheduledAt`: ISO date, \"now\", or null for draft.",
@@ -224,6 +249,8 @@ export function mcpRoutes(api: { fetch: (req: Request, env: Env, ctx: ExecutionC
           playbookId: { type: ["string", "null"], description: "Playbook attribution (null removes it)." },
           playbookVersion: { type: "number" },
           variant: { type: ["string", "null"] },
+          appId: { type: ["string", "null"], description: "App Store app (list_apps); null removes it." },
+          autoLink: { type: ["boolean", "null"], description: "Auto-insert override (null = workspace default)." },
         },
         required: ["id"],
       },
@@ -271,7 +298,9 @@ export function mcpRoutes(api: { fetch: (req: Request, env: Env, ctx: ExecutionC
     get_top_posts: {
       description:
         "Published posts of a range with their latest metrics, best first. `sort`: views (views, else impressions, else reach), " +
-        "engagements, engagementRate or publishedAt (newest first). `limit` ≤ 50 (default 10).",
+        "engagements, engagementRate, publishedAt (newest first), or for posts with tracked App Store links clicks, installs (first-time downloads) or proceeds. " +
+        "`limit` ≤ 50 (default 10). " +
+        CAMPAIGN_NOTE,
       inputSchema: {
         type: "object",
         properties: {
@@ -279,13 +308,13 @@ export function mcpRoutes(api: { fetch: (req: Request, env: Env, ctx: ExecutionC
           to: { type: "string" },
           accountId: { type: "string" },
           provider: { type: "string" },
-          sort: { type: "string", enum: ["views", "engagements", "engagementRate", "publishedAt"] },
+          sort: { type: "string", enum: ["views", "engagements", "engagementRate", "publishedAt", "clicks", "installs", "proceeds"] },
           limit: { type: "number" },
         },
       },
       run: async (c, a) => {
         const q = analyticsQuery(a);
-        q.set("sort", a.sort ?? "views");
+        q.set("sort", a.sort === "installs" ? "downloads" : (a.sort ?? "views"));
         q.set("limit", String(Math.min(Math.max(Number(a.limit) || 10, 1), 50)));
         return ((await call(c, "GET", `/analytics/posts?${q}`)) as any[]).map(compactPost);
       },
@@ -295,7 +324,9 @@ export function mcpRoutes(api: { fetch: (req: Request, env: Env, ctx: ExecutionC
         "Latest metrics of a published post and the series of snapshots collected over time (~1h, 24h, 3d, 7d, 30d, then weekly). " +
         "YouTube adds watchTimeMinutes, avgViewDurationSeconds, avgViewPercentage (0-100) and shares from 24h on (YouTube Analytics lags 1-3 days), " +
         "and `details` from the 7d/30d snapshots: `retention` = [[elapsed share of the video 0.01..1, audienceWatchRatio], ...] (ratio of viewers still " +
-        "watching, can exceed 1 on rewatches) and `trafficSources` = views per insightTrafficSourceType (YT_SEARCH, RELATED_VIDEO, SHORTS, EXT_URL...).",
+        "watching, can exceed 1 on rewatches) and `trafficSources` = views per insightTrafficSourceType (YT_SEARCH, RELATED_VIDEO, SHORTS, EXT_URL...). " +
+        "Posts with a tracked App Store link add `campaign`: clicks, installs (first-time downloads), redownloads, proceeds. " +
+        CAMPAIGN_NOTE,
       inputSchema: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
       run: async (c, a) => {
         const m = await call(c, "GET", `/posts/${seg(a.id)}/metrics`);
@@ -311,6 +342,7 @@ export function mcpRoutes(api: { fetch: (req: Request, env: Env, ctx: ExecutionC
           snapshots: m.snapshots.map((s: any) => ({ at: iso(s.capturedAt), ...s.metrics })),
           details: m.details ?? undefined,
           detailsAt: iso(m.detailsAt),
+          campaign: m.campaign ? compactCampaign(m.campaign) : undefined,
         });
       },
     },
@@ -381,17 +413,20 @@ export function mcpRoutes(api: { fetch: (req: Request, env: Env, ctx: ExecutionC
       description:
         "Rank playbooks by measured performance in this workspace: for each playbook (and version / A-B variant), published posts with metrics, " +
         "median engagement rate, median views and lift vs each account's usual (posts without a playbook), with a confidence label " +
-        "(insufficient < 5 posts, low < 20, ok). Correlational, not causal. Use it to pick the playbook that works best for an account or platform.",
+        "(insufficient < 5 posts, low < 20, ok), plus App Store installs and proceeds of posts with tracked links. Correlational, not causal. " +
+        "Use it to pick the playbook that works best for an account or platform; `sort`: lift (default), installs, proceeds, installsPerPost, proceedsPerPost.",
       inputSchema: {
         type: "object",
         properties: {
           days: { type: "number", description: "Look-back window in days (default 90, max 366)." },
           platform: { type: "string", description: "Provider id, e.g. tiktok." },
           accountId: { type: "string" },
+          sort: { type: "string", enum: ["lift", "installs", "proceeds", "installsPerPost", "proceedsPerPost"] },
         },
       },
       run: async (c, a) => {
         const q = new URLSearchParams();
+        if (a.sort) q.set("sort", { installs: "downloads", installsPerPost: "downloadsPerPost" }[String(a.sort)] ?? String(a.sort));
         if (a.days) q.set("days", String(a.days));
         if (a.platform) q.set("platform", String(a.platform));
         if (a.accountId) q.set("accountId", String(a.accountId));
@@ -408,10 +443,18 @@ export function mcpRoutes(api: { fetch: (req: Request, env: Env, ctx: ExecutionC
             medianEngagementRatePct: pct(r.medianEngagementRate),
             medianViews: r.medianViews ?? undefined,
             confidence: r.confidence,
+            trackedPosts: r.campaignPosts || undefined,
+            clicks: r.campaignPosts ? r.clicks : undefined,
+            installs: r.campaignPosts ? r.downloads : undefined,
+            proceeds: r.campaignPosts ? round(r.proceeds) : undefined,
+            installsPerPost: r.downloadsPerPost === null || r.downloadsPerPost === undefined ? undefined : round(r.downloadsPerPost),
+            proceedsPerPost: r.proceedsPerPost ?? undefined,
           });
         return drop({
           range: { from: iso(s.from), to: iso(s.to), days: s.days },
           postsAnalyzed: s.postsAnalyzed,
+          sort: s.sort,
+          currency: s.currency ?? undefined,
           baseline: row(s.baseline),
           playbooks: s.playbooks.map((p: any) => drop({ ...row(p), versions: p.versions.length > 1 ? p.versions.map(row) : undefined, variants: p.variants.map(row) })),
           method: s.method,
@@ -459,7 +502,7 @@ export function mcpRoutes(api: { fetch: (req: Request, env: Env, ctx: ExecutionC
               "`Authorization: Bearer <same API key>`, `Content-Type: <mime>`, `X-Filename: <name>` (optionally X-Width/X-Height/X-Duration), " +
               "e.g. `curl --data-binary @clip.mp4 -H 'Content-Type: video/mp4' -H 'X-Filename: clip.mp4' -H 'Authorization: Bearer pf_...' https://<host>/api/media`; the JSON response has the media id. " +
               "Analytics: get_analytics_summary (KPIs, change vs previous period, per platform/account, followers), get_top_posts, " +
-              "get_post_metrics, refresh_metrics. Metrics are collected ~1h, 24h, 3d, 7d and 30d after publishing; accounts whose " +
+              "get_post_metrics, refresh_metrics. Posts about an App Store app (create_post `appId`, see list_apps) get tracked links: clicks, installs and proceeds per post. Metrics are collected ~1h, 24h, 3d, 7d and 30d after publishing; accounts whose " +
               "`analytics` is reconnect_required must be reconnected in the app to grant analytics permissions.",
           });
         case "ping":
@@ -496,6 +539,9 @@ export function mcpRoutes(api: { fetch: (req: Request, env: Env, ctx: ExecutionC
 // ---------------------------------------------------------------------------------------------------------------
 // Compact, LLM-friendly shapes of the analytics DTOs (ISO dates, rates in %, rounded, no nulls/empty arrays).
 
+const CAMPAIGN_NOTE =
+  "App Store installs/proceeds come from Apple App Analytics via Revflare: 2-3 days delay, small numbers (< 5 users) withheld, proceeds are Apple's estimate.";
+
 const iso = (ms: number | null | undefined) => (typeof ms === "number" ? new Date(ms).toISOString() : undefined);
 const pct = (r: number | null | undefined) => (typeof r === "number" ? Math.round(r * 10000) / 100 : undefined);
 const round = (n: number) => Math.round(n * 100) / 100;
@@ -529,6 +575,25 @@ function compactTotals(t: AnalyticsTotals) {
     engagementRatePct: pct(t.engagementRate),
     followers: t.followers,
     followersChange: t.followersChange,
+    trackedPosts: t.campaignPosts || undefined,
+    clicks: t.campaignPosts ? t.clicks : undefined,
+    installs: t.campaignPosts ? t.downloads : undefined,
+    redownloads: t.campaignPosts ? t.redownloads : undefined,
+    proceeds: t.campaignPosts ? round(t.proceeds) : undefined,
+    proceedsPerPost: t.campaignPosts ? round(t.proceeds / t.campaignPosts) : undefined,
+  });
+}
+
+function compactCampaign(c: CampaignResultsDTO) {
+  return drop({
+    clicks: c.clicks,
+    installs: c.downloads ?? undefined,
+    redownloads: c.redownloads ?? undefined,
+    purchases: c.purchases ?? undefined,
+    proceeds: c.proceeds ?? undefined,
+    currency: c.currency ?? undefined,
+    asOf: c.asOf ?? undefined,
+    note: c.downloads === null ? "App Store numbers not reported yet (Revflare not connected, or the token has no data yet)" : undefined,
   });
 }
 
@@ -559,6 +624,7 @@ function compactBreakdown(b: AnalyticsBreakdown) {
 function compactSummary(s: AnalyticsSummaryDTO) {
   return drop({
     range: { from: iso(s.from), to: iso(s.to), tz: s.tz },
+    currency: s.totals.campaignPosts ? (s.currency ?? undefined) : undefined,
     totals: compactTotals(s.totals),
     previousPeriod: compactTotals(s.previous),
     change: deltas(s.totals, s.previous),
@@ -592,6 +658,7 @@ function compactPost(p: AnalyticsPostDTO) {
     engagementRatePct: pct(p.engagementRate),
     metrics: p.metrics ? nonZero : undefined,
     metricsAt: iso(p.metricsAt),
+    campaign: p.campaign ? compactCampaign(p.campaign) : undefined,
     note: p.metrics ? undefined : "no metrics collected yet",
   });
 }

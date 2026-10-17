@@ -16,5 +16,7 @@ declare namespace Cloudflare {
     PLAYBOOKS_DB: D1Database;
     /** Own instance for the Meta data deletion callback tests (they configure Meta app secrets). */
     DELETION_DB: D1Database;
+    /** Own instance for the App Store campaign tests (links, clicks, Revflare sync with mocked fetch). */
+    CAMPAIGNS_DB: D1Database;
   }
 }

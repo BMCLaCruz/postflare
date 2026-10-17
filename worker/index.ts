@@ -6,7 +6,8 @@ import { demoCron } from "./lib/demo";
 import { ensureSchema } from "./lib/migrate";
 import { recoverStuckPosts, sweepScheduledPosts } from "./lib/posts";
 import { now } from "./lib/util";
-import { CRON_METRICS_LIMITS, collectMetrics, expireMetricsSchedules } from "./lib/metrics";
+import { CRON_METRICS_LIMITS, CRON_METRICS_LIMITS_CAMPAIGN_TICK, TICK_FETCH_BUDGET, collectMetrics, expireMetricsSchedules } from "./lib/metrics";
+import { campaignSyncCron } from "./lib/revflare";
 import { sweepMedia } from "./lib/media-lifecycle";
 import { pruneDeletionsStatement } from "./lib/meta-deletion";
 import { updateCheckCron } from "./lib/updates";
@@ -15,6 +16,7 @@ import { accountRoutes } from "./routes/accounts";
 import { adminRoutes } from "./routes/admin";
 import { analyticsRoutes } from "./routes/analytics";
 import { authRoutes } from "./routes/auth";
+import { campaignRedirect, campaignRoutes } from "./routes/campaigns";
 import { demoLogin, demoPage } from "./routes/demo";
 import { invitationPublicRoutes, invitationRoutes } from "./routes/invitations";
 import { mcpRoutes } from "./routes/mcp";
@@ -50,6 +52,7 @@ api.route("/", mediaRoutes);
 api.route("/", postRoutes);
 api.route("/", analyticsRoutes);
 api.route("/", playbookRoutes);
+api.route("/", campaignRoutes);
 api.route("/", settingsRoutes);
 api.route("/", uploadLinkRoutes);
 api.route("/", updateRoutes);
@@ -97,6 +100,8 @@ app.route("/api", api);
 app.route("/oauth", oauthRoutes);
 app.route("/m", publicMedia);
 app.route("/u", uploadLinkPublic);
+// Tracked App Store links (public, cheap: one D1 read + one upsert per counted click).
+app.route("/a", campaignRedirect);
 app.route("/mcp", mcpRoutes(app));
 
 /**
@@ -138,11 +143,29 @@ export async function frequentJobs(env: Env): Promise<void> {
   await recordCronRun(env, "frequent", started);
 }
 
-/** Analytics collection, on its own trigger so it doesn't share the publishing tick's D1 and subrequest budget. */
-export async function metricsJobs(env: Env): Promise<void> {
+/** The hourly analytics tick (:50, or :52 with the legacy METRICS_CRON) also syncs Revflare campaign numbers. */
+export const isCampaignTick = (scheduledTime: number) => new Date(scheduledTime).getUTCMinutes() >= 45;
+
+/**
+ * Analytics collection, on its own trigger so it doesn't share the publishing tick's D1 and subrequest budget.
+ * Once an hour it first syncs App Store campaign numbers from Revflare (lib/revflare.ts: at most 2 workspaces, 2
+ * fetches and one batch each) and collects fewer posts that tick to stay within the 50 D1 queries / 40 fetches.
+ */
+export async function metricsJobs(env: Env, scheduledTime: number = now()): Promise<void> {
   const started = now();
   const events: MetricsEvent[] = [];
-  await collectMetrics(env, { ...CRON_METRICS_LIMITS, events }).catch((err) => console.error("metrics cron failed", err));
+  const campaignTick = isCampaignTick(scheduledTime);
+  let fetches = 0;
+  if (campaignTick) {
+    fetches = await campaignSyncCron(env)
+      .then((r) => r.fetches)
+      .catch((err) => {
+        console.error("campaign sync failed", err);
+        return 4;
+      });
+  }
+  const limits = campaignTick ? CRON_METRICS_LIMITS_CAMPAIGN_TICK : CRON_METRICS_LIMITS;
+  await collectMetrics(env, { ...limits, budget: TICK_FETCH_BUDGET - fetches, events }).catch((err) => console.error("metrics cron failed", err));
   // The tick's usage events and its last-run marker: one batch (the tick is close to the 50-query budget).
   await env.DB.batch([...(events.length ? [metricsEventsStatement(env.DB, events)] : []), cronRunStatement(env.DB, "metrics", started, now())]).catch((err) =>
     console.error("metrics usage not recorded", err),
@@ -183,6 +206,6 @@ export default {
     const job = cronJob(event.cron, event.scheduledTime);
     if (!job) return;
     await ensureSchema(env.DB);
-    ctx.waitUntil(job === "daily" ? dailyJobs(env) : job === "metrics" ? metricsJobs(env) : frequentJobs(env));
+    ctx.waitUntil(job === "daily" ? dailyJobs(env) : job === "metrics" ? metricsJobs(env, event.scheduledTime) : frequentJobs(env));
   },
 } satisfies ExportedHandler<Env>;

@@ -17,6 +17,7 @@ import { MetricsUnavailableError, ProviderError } from "../providers/errors";
 import { getProvider, providers } from "../providers/registry";
 import type { Provider, ProviderContext } from "../providers/types";
 import { freshAccount, providerContext, type AccountRow } from "./accounts";
+import { CAMPAIGN_RESULT_COLUMNS, campaignResults, type CampaignResultCols } from "./campaigns";
 import { demoAccountMetrics, demoPostMetrics } from "./demo-metrics";
 import { metricsEventStatement, metricsEventsStatement, utcDay, type MetricsEvent } from "./usage";
 import { errorMessage, now, parseJson } from "./util";
@@ -44,6 +45,8 @@ const ACCOUNTS_PER_TICK = 10;
  * 10 posts every 15 minutes is ~960 collections a day, enough for ~70 published posts a day.
  */
 export const CRON_METRICS_LIMITS = { posts: 10, accounts: 3 } as const;
+/** The hourly tick that also syncs Revflare campaign numbers (index.ts metricsJobs): 3 posts fewer (9 statements). */
+export const CRON_METRICS_LIMITS_CAMPAIGN_TICK = { posts: 7, accounts: 3 } as const;
 /** Blocked accounts (reconnect_required / not_supported) are re-checked this often. */
 const BLOCKED_RECHECK = 7 * DAY;
 /** Snapshots closer than this to the previous one replace it (manual refreshes do not pile up). */
@@ -101,7 +104,7 @@ export function metricsStatusDto(row: AccountMetricsCols): AccountMetricsStatusD
   };
 }
 
-export interface AnalyticsPostRow {
+export interface AnalyticsPostRow extends CampaignResultCols {
   id: string;
   group_id: string;
   account_id: string;
@@ -118,9 +121,9 @@ export interface AnalyticsPostRow {
   account_username: string | null;
 }
 
-/** SELECT list for AnalyticsPostRow (posts p JOIN accounts a). */
-export const ANALYTICS_POST_COLUMNS =
-  "p.id, p.group_id, p.account_id, p.content, p.media, p.external_id, p.external_url, p.published_at, p.metrics, p.metrics_at, p.metrics_next_at, a.provider, a.name AS account_name, a.username AS account_username";
+/** SELECT list for AnalyticsPostRow (posts p JOIN accounts a), with the tracked link results. */
+export const ANALYTICS_POST_COLUMNS = `p.id, p.group_id, p.account_id, p.content, p.media, p.external_id, p.external_url, p.published_at, p.metrics, p.metrics_at, p.metrics_next_at, a.provider, a.name AS account_name, a.username AS account_username,
+  ${CAMPAIGN_RESULT_COLUMNS()}`;
 
 export function analyticsPostDto(r: AnalyticsPostRow): AnalyticsPostDTO {
   const metrics = parseJson<MetricValues | null>(r.metrics, null);
@@ -143,6 +146,7 @@ export function analyticsPostDto(r: AnalyticsPostRow): AnalyticsPostDTO {
     metricsNextAt: r.metrics_next_at,
     engagements: eng,
     engagementRate: metrics && exp ? eng / exp : null,
+    campaign: campaignResults(r),
   };
 }
 

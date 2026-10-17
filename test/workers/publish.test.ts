@@ -523,6 +523,69 @@ describe("D1 queries per invocation (Free plan: 50)", () => {
     await run("DELETE FROM accounts WHERE id LIKE 'acc_tick_%'");
   });
 
+  it("the hourly metrics tick with a Revflare campaign sync (2 workspaces) stays under 50 D1 queries and 40 fetches", async () => {
+    const yt = getProvider("youtube") as Provider;
+    vi.spyOn(yt as Required<Provider>, "refresh").mockImplementation(async (_ctx, acc) => ({ credentials: { ...acc.credentials, accessToken: "NEW" }, expiresAt: Date.now() + HOUR }));
+    const fetches: string[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(new Request(input as any, init).url);
+      fetches.push(url.toString());
+      if (url.host === "revflare.example.com" && url.pathname === "/api/v1/acquisition/campaigns") {
+        return Response.json({ currency: "USD", items: Array.from({ length: 300 }, (_, i) => ({ campaign: `pf-x-${String(i).padStart(10, "0")}`, appId: "a1", appleAppId: "1234567890", firstSeen: "2026-10-01", lastSeen: "2026-10-10", impressions: 1, pageViews: 1, downloads: i, redownloads: 0, purchases: 0, proceeds: 0 })) });
+      }
+      if (url.host === "revflare.example.com" && url.pathname === "/api/v1/acquisition") return Response.json({ currency: "USD", rows: [], lastDay: "2026-10-10" });
+      if (url.pathname === "/youtube/v3/videos") {
+        return Response.json({ items: url.searchParams.get("id")!.split(",").map((id) => ({ id, statistics: { viewCount: "1", likeCount: "1", commentCount: "0" } })) });
+      }
+      if (url.pathname === "/youtube/v3/channels") return Response.json({ items: [{ id: "c", statistics: { subscriberCount: "5", videoCount: "1", viewCount: "9" } }] });
+      return Response.json({});
+    });
+    const t = Date.now();
+    const keyEnc = await encryptJson(E, { key: "rf_test_key_0123456789" });
+    for (const id of ["ws_rf_1", "ws_rf_2", "ws_rf_3"]) {
+      await run(
+        "INSERT INTO workspaces (id, name, created_at, updated_at, revflare_url, revflare_key_enc) VALUES (?, ?, ?, ?, 'https://revflare.example.com', ?)",
+        id,
+        id,
+        t,
+        t,
+        keyEnc,
+      );
+    }
+    for (let i = 0; i < 10; i++) {
+      await account(`acc_rf_${i}`, "ws_q", "youtube", { expiresAt: t + 20 * 60 * 1000, updatedAt: t - HOUR, credentials: { accessToken: "AT", refreshToken: "RT" } });
+      for (let j = 0; j < 3; j++) {
+        await post(`p_rf_${i}_${j}`, "ws_q", `acc_rf_${i}`, { status: "published", publishedAt: t - 2 * HOUR });
+        await run("UPDATE posts SET external_id = ?, metrics_next_at = ? WHERE id = ?", `vid_rf_${i}_${j}`, t - HOUR, `p_rf_${i}_${j}`);
+      }
+    }
+    await run("UPDATE accounts SET metrics_next_at = NULL WHERE id LIKE 'acc_rf_%'");
+    const d = new Date(t);
+    d.setUTCMinutes(50, 0, 0);
+    // Warm the isolate's caches (schema, encryption key) like any invocation after the first.
+    const warm = createExecutionContext();
+    await worker.scheduled!(createScheduledController({ cron: TICK_CRON, scheduledTime: d.getTime() - 45 * 60 * 1000 }), E, warm);
+    await waitOnExecutionContext(warm);
+    await run("UPDATE posts SET metrics_next_at = ? WHERE id LIKE 'p_rf_%'", t - HOUR);
+    await run("UPDATE accounts SET metrics_next_at = NULL WHERE id LIKE 'acc_rf_%'");
+    count.reset();
+    fetches.length = 0;
+    const ctx = createExecutionContext();
+    await worker.scheduled!(createScheduledController({ cron: TICK_CRON, scheduledTime: d.getTime() }), E, ctx);
+    await waitOnExecutionContext(ctx);
+    expect(count.queries + count.batchStatements, count.sql.join("\n")).toBeLessThan(50);
+    expect(fetches.length, fetches.join("\n")).toBeLessThanOrEqual(40);
+    expect(fetches.filter((u) => u.includes("revflare.example.com"))).toHaveLength(4); // 2 workspaces this tick
+    const synced = await one<{ n: number }>("SELECT COUNT(*) AS n FROM workspaces WHERE id LIKE 'ws_rf_%' AND revflare_status = 'ok'");
+    expect(synced!.n).toBe(2);
+    expect((await one<{ n: number }>("SELECT COUNT(*) AS n FROM campaign_stats WHERE workspace_id = 'ws_rf_1'"))!.n).toBe(300);
+    expect(count.sql.some((s) => s.includes("metrics_next_at")), "metrics collected").toBe(true);
+    await run("DELETE FROM posts WHERE id LIKE 'p_rf_%'");
+    await run("DELETE FROM accounts WHERE id LIKE 'acc_rf_%'");
+    await run("DELETE FROM campaign_stats WHERE workspace_id LIKE 'ws_rf_%'");
+    await run("DELETE FROM workspaces WHERE id LIKE 'ws_rf_%'");
+  });
+
   it("the single */5 trigger picks the job from the tick's UTC time", () => {
     const at = (h: number, m: number) => Date.UTC(2026, 9, 13, h, m);
     expect([0, 15, 30, 45].map((m) => cronJob(TICK_CRON, at(12, m)))).toEqual(["frequent", "frequent", "frequent", "frequent"]);

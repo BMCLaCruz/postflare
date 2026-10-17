@@ -2,13 +2,15 @@
 // immutable versions, and the ranking of playbooks by measured performance. Read: posts.read. Write: playbooks.manage.
 
 import { Hono, type Context } from "hono";
-import type { PlaybookInput, PlaybookStatsDTO } from "../../shared/types";
+import type { PlaybookInput, PlaybookStatsDTO, PlaybookStatsSort } from "../../shared/types";
+import { CAMPAIGN_RESULT_COLUMNS } from "../lib/campaigns";
 import { can, requirePermission, wsId, type AppEnv } from "../lib/auth";
 import { simulateDueDemoPosts } from "../lib/demo";
 import { engagementSql, exposureSql } from "../lib/metrics";
 import {
   STATS_MAX_POSTS,
   STATS_METHOD,
+  STATS_SORTS,
   builtinPlaybooks,
   computePlaybookStats,
   findPlaybook,
@@ -45,6 +47,9 @@ playbookRoutes.get("/playbooks/stats", requirePermission("posts.read"), async (c
   const days = Math.min(Math.max(Math.round(Number(c.req.query("days")) || 90), 1), 366);
   const platform = c.req.query("platform") || null;
   const accountId = c.req.query("accountId") || null;
+  const rawSort = c.req.query("sort") || "lift";
+  const sort = (rawSort === "installs" ? "downloads" : rawSort === "revenue" ? "proceeds" : rawSort) as PlaybookStatsSort;
+  if (!STATS_SORTS.includes(sort)) return c.json({ error: `sort must be one of ${STATS_SORTS.join(", ")}` }, 400);
   const to = now();
   const from = to - days * DAY;
   if (c.var.workspace?.demo) await simulateDueDemoPosts(c.env, ws);
@@ -54,7 +59,7 @@ playbookRoutes.get("/playbooks/stats", requirePermission("posts.read"), async (c
   if (accountId) where.push("p.account_id = ?") && binds.push(accountId);
   // One query: the most recent published posts with metrics (engagements and exposure computed by D1).
   const { results } = await c.env.DB.prepare(
-    `SELECT p.account_id, p.playbook_id, p.playbook_version, p.variant, ${engagementSql()} AS eng, ${exposureSql()} AS exp
+    `SELECT p.account_id, p.playbook_id, p.playbook_version, p.variant, ${engagementSql()} AS eng, ${exposureSql()} AS exp, ${CAMPAIGN_RESULT_COLUMNS()}
      FROM posts p JOIN accounts a ON a.id = p.account_id
      WHERE p.workspace_id = ? AND p.status = 'published' AND p.published_at >= ? AND p.published_at < ? AND p.metrics IS NOT NULL
        ${where.map((w) => `AND ${w}`).join(" ")}
@@ -75,7 +80,7 @@ playbookRoutes.get("/playbooks/stats", requirePermission("posts.read"), async (c
     const b = getBuiltin(id);
     return b ? { name: b.name, builtin: true } : { name: names.get(id) ?? id, builtin: false };
   };
-  const body: PlaybookStatsDTO = { from, to, days, platform, accountId, capped, method: STATS_METHOD, ...computePlaybookStats(rows, info) };
+  const body: PlaybookStatsDTO = { from, to, days, platform, accountId, capped, method: STATS_METHOD, sort, ...computePlaybookStats(rows, info, sort) };
   return c.json(body);
 });
 

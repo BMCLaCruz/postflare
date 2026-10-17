@@ -23,7 +23,7 @@ Instance scope:
 Workspace scope:
 | key | meaning |
 |---|---|
-| `workspace.manage` | rename the workspace |
+| `workspace.manage` | rename the workspace; App Store campaign settings (Apple provider token, auto-insert default, Revflare connection, test/sync) and the workspace's apps (add, import, remove). Reading apps and tracked links needs `posts.read`; bio links need `posts.write`. No new permission or migration of roles was needed. |
 | `workspace.delete` | delete the workspace and everything in it |
 | `members.manage` | invite members to this workspace, change their roles, remove them |
 | `accounts.read` | see connected accounts |

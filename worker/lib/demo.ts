@@ -12,7 +12,8 @@
 import type { FieldOption } from "../../shared/types";
 import { getProvider } from "../providers/registry";
 import { encryptJson } from "./crypto";
-import { DEMO_ACCOUNTS, DEMO_MEDIA, SIMULATED_LOG, fakeExternalId, fakePostUrl, seedPosts } from "./demo-seed";
+import { DEMO_ACCOUNTS, DEMO_APPS, DEMO_MEDIA, DEMO_PROVIDER_TOKEN, SIMULATED_LOG, fakeExternalId, fakePostUrl, seedCampaigns, seedPosts } from "./demo-seed";
+import { appStoreCampaignUrl, bioCampaignToken, isClickable, newLinkCode, postCampaignToken } from "../../shared/campaigns";
 import { demoAccountMetrics, demoPostMetrics, demoSnapshotTimes } from "./demo-metrics";
 import { CHECKPOINTS, nextAccountRun, nextCheckpoint, utcDay, withoutDetails } from "./metrics";
 import { demoPublishEventsStatement } from "./usage";
@@ -189,7 +190,18 @@ export async function resetDemo(env: Env): Promise<void> {
     const ws = DEMO_WORKSPACE_ID;
     const j = (k: string) => `json_extract(value, '$.${k}')`;
     const metrics = seedMetrics(posts, t);
+    const campaigns = seedCampaigns(posts, t, {
+      token: postCampaignToken,
+      bioToken: (p) => bioCampaignToken(p),
+      url: (app, ct) => appStoreCampaignUrl(app, DEMO_PROVIDER_TOKEN, ct),
+      code: () => newLinkCode(),
+      clickable: isClickable,
+    });
     await db.batch([
+      db.prepare("DELETE FROM campaign_clicks WHERE code IN (SELECT code FROM campaign_links WHERE workspace_id = ?)").bind(ws),
+      db.prepare("DELETE FROM campaign_links WHERE workspace_id = ?").bind(ws),
+      db.prepare("DELETE FROM campaign_stats WHERE workspace_id = ?").bind(ws),
+      db.prepare("DELETE FROM workspace_apps WHERE workspace_id = ?").bind(ws),
       db.prepare("DELETE FROM post_logs WHERE post_id IN (SELECT id FROM posts WHERE workspace_id = ?)").bind(ws),
       db.prepare("DELETE FROM post_metrics WHERE workspace_id = ? OR post_id IN (SELECT id FROM posts WHERE workspace_id = ?)").bind(ws, ws),
       db.prepare("DELETE FROM account_metrics WHERE workspace_id = ? OR account_id IN (SELECT id FROM accounts WHERE workspace_id = ?)").bind(ws, ws),
@@ -258,6 +270,37 @@ export async function resetDemo(env: Env): Promise<void> {
            FROM (SELECT value FROM json_each(?)) AS m WHERE accounts.id = json_extract(m.value, '$[0]')`,
         )
         .bind(t, JSON.stringify(metrics.accounts)),
+      // App Store campaigns: sample apps, tracked links, clicks and App Analytics numbers (never from Revflare).
+      db
+        .prepare(
+          `UPDATE workspaces SET apple_provider_token = ?, campaign_autolink = 1, revflare_url = NULL, revflare_key_enc = NULL, revflare_status = 'ok',
+             revflare_message = 'Sample numbers (demo): the demo never calls Revflare', revflare_synced_at = ?, revflare_next_at = NULL, revflare_currency = 'USD' WHERE id = ?`,
+        )
+        .bind(DEMO_PROVIDER_TOKEN, t, ws),
+      db
+        .prepare(
+          `INSERT OR REPLACE INTO workspace_apps (id, workspace_id, app_store_id, name, icon_url, revflare_app_id, created_at)
+           SELECT ${j("id")}, ?, ${j("appStoreId")}, ${j("name")}, NULL, NULL, ? FROM json_each(?)`,
+        )
+        .bind(ws, t - 30 * 24 * HOUR, JSON.stringify(Object.values(DEMO_APPS))),
+      db
+        .prepare(`UPDATE posts SET app_id = json_extract(m.value, '$[1]') FROM (SELECT value FROM json_each(?)) AS m WHERE posts.id = json_extract(m.value, '$[0]')`)
+        .bind(JSON.stringify(campaigns.postApps)),
+      db
+        .prepare(
+          `INSERT INTO campaign_links (code, workspace_id, kind, post_id, account_id, provider, app_id, app_store_id, ct, url, created_at)
+           SELECT ${j("code")}, ?, ${j("kind")}, ${j("post_id")}, ${j("account_id")}, ${j("provider")}, ${j("app_id")}, ${j("app_store_id")}, ${j("ct")}, ${j("url")}, ${j("created_at")} FROM json_each(?)`,
+        )
+        .bind(ws, JSON.stringify(campaigns.links)),
+      db
+        .prepare(`INSERT INTO campaign_clicks (code, day, clicks) SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'), json_extract(value, '$[2]') FROM json_each(?)`)
+        .bind(JSON.stringify(campaigns.clicks)),
+      db
+        .prepare(
+          `INSERT INTO campaign_stats (workspace_id, app_store_id, ct, downloads, redownloads, purchases, proceeds, sales, currency, first_day, last_day, synced_at)
+           SELECT ?, ${j("app_store_id")}, ${j("ct")}, ${j("downloads")}, ${j("redownloads")}, ${j("purchases")}, ${j("proceeds")}, ${j("sales")}, 'USD', ${j("first_day")}, ${j("last_day")}, ? FROM json_each(?)`,
+        )
+        .bind(ws, t, JSON.stringify(campaigns.stats)),
       db.prepare("INSERT INTO settings (key, value) VALUES ('demo_reset_at', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").bind(String(t)),
     ]);
   } finally {

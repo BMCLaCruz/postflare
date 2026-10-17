@@ -6,6 +6,20 @@ import { findAccount, freshAccount, providerContext, type AccountRow } from "../
 import { DEMO_POSTS_PER_DAY, demoPostsLeft, queueDemoPublish, simulateDueDemoPosts } from "../lib/demo";
 import type { MediaRow } from "../lib/media";
 import { normalizeVariant, resolveAttribution } from "../lib/playbooks";
+import {
+  campaignContext,
+  insertLinkStatement,
+  isLinkCollision,
+  listLinks,
+  newPostLink,
+  rewriteForCampaign,
+  trackedUrl,
+  wantsPostLink,
+  type CampaignContext,
+  type CampaignLinkRow,
+} from "../lib/campaigns";
+import { baseUrl } from "../lib/settings";
+import { appStoreCampaignUrl } from "../../shared/campaigns";
 import { findPost, logPost, logStatement, postDto, startWorkflow, startWorkflows, terminateWorkflow, workflowInstanceId, type PostRow } from "../lib/posts";
 import { errorMessage, newId, now, parseJson } from "../lib/util";
 import { validatePost } from "../lib/validate";
@@ -106,6 +120,42 @@ async function attribution(
   return { id: res.id, version: res.version, variant };
 }
 
+/** `autoLink` of a body → stored value (undefined = not in the body). */
+const autoLinkValue = (v: unknown): number | null | undefined => (v === undefined ? undefined : v === null ? null : v ? 1 : 0);
+
+/**
+ * Tracked links of new posts (clickable platforms, when the workspace has a provider token) and, with auto-insert on,
+ * their rewritten text (App Store URLs replaced, link appended; see rewriteForCampaign). No D1 query.
+ */
+function planCampaign(
+  ws: string,
+  rows: Array<{ id: string; d: Draft }>,
+  refs: Awaited<ReturnType<typeof loadRefs>>,
+  camp: CampaignContext,
+  base: string | null,
+  autoInsert: boolean,
+  attempt: number,
+): { drafts: Draft[]; links: CampaignLinkRow[]; notes: Map<string, string[]> } {
+  const links: CampaignLinkRow[] = [];
+  const notes = new Map<string, string[]>();
+  const drafts = rows.map(({ id, d }) => {
+    const account = refs.accounts.get(d.accountId);
+    const provider = account && getProvider(account.provider);
+    if (!camp.app || !account || !provider || !wantsPostLink(provider.id)) return d;
+    if (!camp.providerToken || !base) {
+      notes.set(id, ["No tracked App Store link: set the Apple provider token in Workspace settings → App Store campaigns"]);
+      return d;
+    }
+    const link = newPostLink(ws, { id, accountId: account.id, provider: provider.id }, camp.app, camp.providerToken, attempt);
+    links.push(link);
+    if (!autoInsert) return d;
+    const r = rewriteForCampaign(provider, d, trackedUrl(base, link.code), camp.app.appStoreId);
+    if (r.skipped.length) notes.set(id, r.skipped);
+    return r.changed ? { ...d, content: r.content, thread: r.thread, settings: r.settings } : d;
+  });
+  return { drafts, links, notes };
+}
+
 /** Returns null for an unparseable `scheduledAt` (NaN would otherwise be stored as NULL and publish immediately). */
 function resolveSchedule(scheduledAt: CreatePostsInput["scheduledAt"]): { status: PostRow["status"]; at: number | null } | null {
   if (scheduledAt === null || scheduledAt === undefined) return { status: "draft", at: null };
@@ -163,7 +213,8 @@ postRoutes.get("/posts/:id", requirePermission("posts.read"), async (c) => {
   )
     .bind(row.id)
     .all();
-  return c.json({ ...postDto(row), logs: results });
+  const [campaign] = await listLinks(c.env.DB, wsId(c), await baseUrl(c.env, c.req.url), { postId: row.id, kind: "post", limit: 1 });
+  return c.json({ ...postDto(row), campaign: campaign ?? null, logs: results });
 });
 
 postRoutes.post("/posts/validate", requirePermission("posts.write"), async (c) => {
@@ -176,15 +227,31 @@ postRoutes.post("/posts", requirePermission("posts.write"), async (c) => {
   const workspaceId = wsId(c);
   const body = await c.req.json<CreatePostsInput>();
   if (!body.posts?.length) return c.json({ error: "Select at least one account" }, 400);
-  const drafts = body.posts.map(normalize);
+  const normalized = body.posts.map(normalize);
   const schedule = resolveSchedule(body.scheduledAt);
   if (!schedule) return c.json({ error: "Invalid scheduledAt" }, 400);
   const { status, at } = schedule;
-  const errors = await checkAll(c.env, workspaceId, drafts, status !== "draft");
+  // App Store campaign: the app and the workspace's provider token / auto-insert default (one query, only with an app).
+  const appRef = typeof body.appId === "string" && body.appId.trim() ? body.appId.trim() : null;
+  if (body.appId !== undefined && body.appId !== null && typeof body.appId !== "string") return c.json({ error: "appId must be a string" }, 400);
+  const camp = appRef ? await campaignContext(c.env.DB, workspaceId, appRef) : null;
+  if (appRef && !camp?.app) return c.json({ error: `App ${appRef} not found (add it in Workspace settings → App Store campaigns)` }, 404);
+  const autoLink = autoLinkValue(body.autoLink);
+  const base = camp?.app && camp.providerToken ? await baseUrl(c.env, c.req.url) : null;
+
+  const refs = await loadRefs(c.env, workspaceId, normalized);
+  const ids = normalized.map(() => newId("pst_"));
+  const plan = (attempt: number) =>
+    camp?.app
+      ? planCampaign(workspaceId, normalized.map((d, i) => ({ id: ids[i], d })), refs, camp, base, !!(autoLink ?? (camp.autoLink ? 1 : 0)), attempt)
+      : { drafts: normalized, links: [] as CampaignLinkRow[], notes: new Map<string, string[]>() };
+  let planned = plan(0);
+  // Validated after the rewrite: exactly what will be published.
+  const errors = planned.drafts.flatMap((d) => check(refs, d, status !== "draft"));
   if (errors.length) return c.json({ error: errors.join("\n"), errors }, 400);
   const pb = await attribution(c.env, workspaceId, body);
   if (pb && "error" in pb) return c.json({ error: pb.error }, pb.error.endsWith("not found") ? 404 : 400);
-  if (isDemo(c) && (await demoPostsLeft(c.env, workspaceId)) < drafts.length) {
+  if (isDemo(c) && (await demoPostsLeft(c.env, workspaceId)) < normalized.length) {
     return c.json(
       { error: `The live demo has reached today's limit of ${DEMO_POSTS_PER_DAY} new posts. It resets daily: come back tomorrow, or deploy your own Postflare.` },
       429,
@@ -196,21 +263,39 @@ postRoutes.post("/posts", requirePermission("posts.write"), async (c) => {
   const demo = isDemo(c);
   // Real workspaces start one workflow per scheduled post; its instance id is known up front (`${id}-0`).
   const withWorkflow = status === "scheduled" && !demo;
-  const rows = drafts.map((d) => {
-    const id = newId("pst_");
-    return { id, revision: 0, d, workflowId: withWorkflow ? workflowInstanceId({ id, revision: 0 }) : null };
-  });
   const message = status === "scheduled" ? (body.scheduledAt === "now" ? "Queued for immediate publishing" : `Scheduled for ${new Date(at!).toISOString()}`) : null;
+  const statements = () => {
+    const rows = planned.drafts.map((d, i) => {
+      const id = ids[i];
+      return { id, revision: 0, d, workflowId: withWorkflow ? workflowInstanceId({ id, revision: 0 }) : null };
+    });
+    return {
+      rows,
+      list: [
+        ...rows.map((r) =>
+          c.env.DB.prepare(
+            `INSERT INTO posts (id, group_id, account_id, status, scheduled_at, content, media, settings, thread, attempts, revision, workflow_id, created_at, updated_at, workspace_id, created_by, playbook_id, playbook_version, variant, app_id, campaign_autolink)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ).bind(r.id, groupId, r.d.accountId, status, at, r.d.content, JSON.stringify(r.d.media), JSON.stringify(r.d.settings), JSON.stringify(r.d.thread), r.workflowId, t, t, workspaceId, c.var.user.id, pb?.id ?? null, pb?.version ?? null, pb?.variant ?? null, camp?.app?.id ?? null, autoLink ?? null),
+        ),
+        ...planned.links.map((l) => insertLinkStatement(c.env.DB, l)),
+        ...(message ? rows.map((r) => logStatement(c.env.DB, r.id, "info", message)) : []),
+        ...[...planned.notes].flatMap(([id, notes]) => notes.map((n) => logStatement(c.env.DB, id, "warn", n))),
+      ],
+    };
+  };
   // One batch (one transaction) for every row and log line: the D1 query count does not grow with the accounts.
-  await c.env.DB.batch([
-    ...rows.map((r) =>
-      c.env.DB.prepare(
-        `INSERT INTO posts (id, group_id, account_id, status, scheduled_at, content, media, settings, thread, attempts, revision, workflow_id, created_at, updated_at, workspace_id, created_by, playbook_id, playbook_version, variant)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).bind(r.id, groupId, r.d.accountId, status, at, r.d.content, JSON.stringify(r.d.media), JSON.stringify(r.d.settings), JSON.stringify(r.d.thread), r.workflowId, t, t, workspaceId, c.var.user.id, pb?.id ?? null, pb?.version ?? null, pb?.variant ?? null),
-    ),
-    ...(message ? rows.map((r) => logStatement(c.env.DB, r.id, "info", message)) : []),
-  ]);
+  let batch = statements();
+  try {
+    await c.env.DB.batch(batch.list);
+  } catch (err) {
+    // A link code or campaign token collided (practically never): new ones, same posts.
+    if (!isLinkCollision(err)) throw err;
+    planned = plan(1);
+    batch = statements();
+    await c.env.DB.batch(batch.list);
+  }
+  const rows = batch.rows;
   if (withWorkflow) {
     // If this fails, the posts keep their workflow ids and the cron sweep (sweepScheduledPosts) re-arms them.
     await startWorkflows(c.env, rows);
@@ -225,12 +310,15 @@ postRoutes.post("/posts", requirePermission("posts.write"), async (c) => {
 
 /** Edit a draft/scheduled/failed post. Changing `scheduledAt` reschedules; null turns it into a draft. */
 postRoutes.patch("/posts/:id", requirePermission("posts.write"), async (c) => {
-  const row = await findPost(c.env, wsId(c), c.req.param("id"));
+  const ws = wsId(c);
+  const row = await findPost(c.env, ws, c.req.param("id"));
   if (!row) return c.json({ error: "Not found" }, 404);
   if (!["draft", "scheduled", "failed", "cancelled"].includes(row.status))
     return c.json({ error: `A ${row.status} post cannot be edited` }, 409);
-  const body = await c.req.json<Partial<Draft> & Pick<CreatePostsInput, "playbookId" | "playbookVersion" | "variant"> & { scheduledAt?: CreatePostsInput["scheduledAt"] }>();
-  const draft: Draft = {
+  const body = await c.req.json<
+    Partial<Draft> & Pick<CreatePostsInput, "playbookId" | "playbookVersion" | "variant" | "appId" | "autoLink"> & { scheduledAt?: CreatePostsInput["scheduledAt"] }
+  >();
+  let draft: Draft = {
     accountId: row.account_id,
     content: body.content ?? row.content,
     media: body.media ?? parseJson(row.media, []),
@@ -242,9 +330,50 @@ postRoutes.patch("/posts/:id", requirePermission("posts.write"), async (c) => {
       ? resolveSchedule(body.scheduledAt)
       : { status: row.status === "scheduled" ? "scheduled" : ("draft" as PostRow["status"]), at: row.scheduled_at };
   if (!sched) return c.json({ error: "Invalid scheduledAt" }, 400);
-  const errors = await checkAll(c.env, wsId(c), [draft], sched.status === "scheduled");
+
+  // App Store campaign: the app (kept, changed or removed), the auto-insert override, the post's tracked link.
+  if (body.appId !== undefined && body.appId !== null && typeof body.appId !== "string") return c.json({ error: "appId must be a string" }, 400);
+  const appRef = body.appId === undefined ? (row.app_id ?? null) : body.appId?.trim() || null;
+  const autoLink = body.autoLink === undefined ? (row.campaign_autolink ?? null) : autoLinkValue(body.autoLink)!;
+  const camp = appRef ? await campaignContext(c.env.DB, ws, appRef) : null;
+  if (appRef && !camp?.app) return c.json({ error: `App ${appRef} not found (add it in Workspace settings → App Store campaigns)` }, 404);
+  const refs = await loadRefs(c.env, ws, [draft]);
+  let linkStatement: ((revision: number) => D1PreparedStatement) | null = null;
+  let notes: string[] = [];
+  const provider = getProvider(refs.accounts.get(row.account_id)?.provider ?? "");
+  if (camp?.app && provider && wantsPostLink(provider.id) && camp.providerToken) {
+    const base = await baseUrl(c.env, c.req.url);
+    const existing = await c.env.DB.prepare("SELECT * FROM campaign_links WHERE post_id = ? AND workspace_id = ?").bind(row.id, ws).first<CampaignLinkRow>();
+    let link: CampaignLinkRow;
+    // Only while the update below succeeds (guarded on the new revision): the link and the text change together.
+    const guard = "EXISTS (SELECT 1 FROM posts WHERE id = ? AND revision = ?)";
+    if (existing) {
+      // Stable: same code and token; a new app keeps the token and points the link at the new app.
+      link = existing;
+      if (existing.app_id !== camp.app.id) {
+        link = { ...existing, app_id: camp.app.id, app_store_id: camp.app.appStoreId, url: appStoreCampaignUrl(camp.app.appStoreId, camp.providerToken, existing.ct) };
+        linkStatement = (rev) =>
+          c.env.DB.prepare(`UPDATE campaign_links SET app_id = ?, app_store_id = ?, url = ? WHERE code = ? AND ${guard}`).bind(link.app_id, link.app_store_id, link.url, link.code, row.id, rev);
+      }
+    } else {
+      link = newPostLink(ws, { id: row.id, accountId: row.account_id, provider: provider.id }, camp.app, camp.providerToken);
+      linkStatement = (rev) =>
+        c.env.DB.prepare(
+          `INSERT INTO campaign_links (code, workspace_id, kind, post_id, account_id, provider, app_id, app_store_id, ct, url, created_at)
+           SELECT ?, ?, 'post', ?, ?, ?, ?, ?, ?, ?, ? WHERE ${guard}`,
+        ).bind(link.code, ws, row.id, link.account_id, link.provider, link.app_id, link.app_store_id, link.ct, link.url, link.created_at, row.id, rev);
+    }
+    // Rewrite only when this edit touches the text, settings, app or auto-insert (a reschedule leaves the text alone).
+    const touched = body.content !== undefined || body.thread !== undefined || body.settings !== undefined || body.appId !== undefined || body.autoLink !== undefined;
+    if (touched && !!(autoLink ?? (camp.autoLink ? 1 : 0))) {
+      const r = rewriteForCampaign(provider, draft, trackedUrl(base, link.code), camp.app.appStoreId);
+      notes = r.skipped;
+      if (r.changed) draft = { ...draft, content: r.content, thread: r.thread, settings: r.settings };
+    }
+  }
+  const errors = [draft].flatMap((d) => check(refs, d, sched.status === "scheduled"));
   if (errors.length) return c.json({ error: errors.join("\n"), errors }, 400);
-  const pb = (await attribution(c.env, wsId(c), body, { id: row.playbook_id ?? null, version: row.playbook_version ?? null, variant: row.variant ?? null })) ?? {
+  const pb = (await attribution(c.env, ws, body, { id: row.playbook_id ?? null, version: row.playbook_version ?? null, variant: row.variant ?? null })) ?? {
     id: row.playbook_id ?? null,
     version: row.playbook_version ?? null,
     variant: row.variant ?? null,
@@ -254,12 +383,13 @@ postRoutes.patch("/posts/:id", requirePermission("posts.write"), async (c) => {
   // Guarded on the revision/status we read: if the workflow claimed the post meanwhile, it is publishing and must
   // not be rescheduled (that would publish it twice). Bump first, then stop the old workflow: its claim now fails.
   const revision = row.revision + 1;
-  const res = await c.env.DB.prepare(
+  const update = c.env.DB.prepare(
     `UPDATE posts SET content = ?, media = ?, settings = ?, thread = ?, status = ?, scheduled_at = ?, error = NULL,
-       revision = ?, workflow_id = NULL, updated_at = ?, playbook_id = ?, playbook_version = ?, variant = ? WHERE id = ? AND workspace_id = ? AND revision = ? AND status = ?`,
-  )
-    .bind(draft.content, JSON.stringify(draft.media), JSON.stringify(draft.settings), JSON.stringify(draft.thread), sched.status, sched.at, revision, now(), pb.id, pb.version, pb.variant, row.id, wsId(c), row.revision, row.status)
-    .run();
+       revision = ?, workflow_id = NULL, updated_at = ?, playbook_id = ?, playbook_version = ?, variant = ?, app_id = ?, campaign_autolink = ?
+     WHERE id = ? AND workspace_id = ? AND revision = ? AND status = ?`,
+  ).bind(draft.content, JSON.stringify(draft.media), JSON.stringify(draft.settings), JSON.stringify(draft.thread), sched.status, sched.at, revision, now(), pb.id, pb.version, pb.variant, camp?.app?.id ?? null, autoLink, row.id, ws, row.revision, row.status);
+  const extra = [...(linkStatement ? [linkStatement(revision)] : []), ...notes.map((n) => logStatement(c.env.DB, row.id, "warn", n))];
+  const res = extra.length ? (await c.env.DB.batch([update, ...extra]))[0] : await update.run();
   if (!res.meta.changes) return c.json({ error: "The post changed while saving (it may be publishing), reload and try again" }, 409);
   if (row.workflow_id) await terminateWorkflow(c.env, row.workflow_id);
   if (sched.status === "scheduled") {
@@ -271,7 +401,7 @@ postRoutes.patch("/posts/:id", requirePermission("posts.write"), async (c) => {
       await logPost(c.env, row.id, "info", `Rescheduled for ${new Date(sched.at!).toISOString()}`);
     }
   }
-  return c.json(postDto((await findPost(c.env, wsId(c), row.id))!));
+  return c.json(postDto((await findPost(c.env, ws, row.id))!));
 });
 
 postRoutes.post("/posts/:id/retry", requirePermission("posts.write"), async (c) => {

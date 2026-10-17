@@ -31,6 +31,8 @@ export interface PostRow {
   playbook_id?: string | null;
   playbook_version?: number | null;
   variant?: string | null;
+  app_id?: string | null;
+  campaign_autolink?: number | null;
 }
 
 export function postDto(row: PostRow): PostDTO {
@@ -54,6 +56,8 @@ export function postDto(row: PostRow): PostDTO {
     playbookId: row.playbook_id ?? null,
     playbookVersion: row.playbook_version ?? null,
     variant: row.variant ?? null,
+    appId: row.app_id ?? null,
+    autoLink: row.campaign_autolink === null || row.campaign_autolink === undefined ? null : !!row.campaign_autolink,
   };
 }
 
