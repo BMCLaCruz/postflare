@@ -54,6 +54,10 @@ workspace with sample data that never publishes anything, reset daily).
   feature spotlights, game clips...), plus your workspace's own. AI agents find them over MCP and the CLI, posts record
   the playbook they were written with, and a ranking shows which ones beat each account's usual (see
   [Playbooks](#playbooks)).
+- **App Store campaign links**: posts about one of your iOS apps get a tracked short link (`/a/<code>`) with an App
+  Store campaign token per post and platform; clicks are counted, and with an optional Revflare connection Apple's
+  installs and proceeds show per post, platform, account and playbook (see
+  [App Store campaigns](#app-store-campaigns)).
 - **Users, workspaces and roles**: several people on one deployment, each workspace with its own accounts, posts and
   media; built-in and custom permission-based roles, invite links (see [below](#users-workspaces-and-roles)).
 - REST API with per-workspace API keys and a built-in **MCP server** (`/mcp`) so AI agents can schedule posts and read
@@ -300,7 +304,37 @@ posts from unaudited apps: those have no post metrics.
 Engagements = likes + comments + shares + saves + replies + reposts + quotes + clicks; engagement rate = engagements /
 views (else impressions, else reach). In the daily series, a post's metrics count for the day it was published.
 API: `GET /api/analytics/summary`, `GET /api/analytics/posts`, `GET /api/posts/:id/metrics`,
-`POST /api/analytics/refresh` (types in [`shared/types.ts`](shared/types.ts)).
+`POST /api/analytics/refresh` (types in [`shared/types.ts`](shared/types.ts)). Posts with a tracked App Store link also
+report clicks, installs and proceeds (see [App Store campaigns](#app-store-campaigns), [docs/api.md](docs/api.md)).
+
+## App Store campaigns
+
+Measure which posts bring App Store installs and revenue. In **Workspace settings → App Store campaigns**:
+
+1. **Apple provider token**: App Store Connect → Analytics → Acquisition → Campaigns → *Generate a campaign link*; copy
+   the `pt=` number (one per developer account).
+2. **Apps**: add them by App Store id (name and icon are looked up on the App Store) or import them from Revflare.
+3. Optional **auto-insert**: App Store links of the post's app are replaced by the tracked link when a post is saved,
+   or the link is appended when the post has no link (within each platform's length limit; never on Instagram/TikTok,
+   whose captions are not clickable: use the account's **bio link**, on the Accounts page and in the composer).
+4. Optional **Revflare** connection (URL + `rf_` API key of a user who can read the workspace; stored encrypted, never
+   shown again; **Test connection**): [Revflare](https://github.com/FerdiKT/revflare) imports Apple's App Analytics
+   reports, and Postflare reads downloads, redownloads, purchases and proceeds per campaign token every 6 hours
+   (hourly analytics tick, 2 workspaces per tick).
+
+Pick the app in the composer (agents: `appId` in the API/MCP, `pf post --app <name>`). Each post on a clickable
+platform gets a stable campaign token `pf-<platform>-<id>` (≤ 30 characters, Apple's documented limit) and the link
+`https://<host>/a/<code>`, which counts the click (bots and link previews excluded) and redirects to
+`https://apps.apple.com/app/apple-store/id<app>?pt=<pt>&ct=<token>&mt=8`
+([Apple's format](https://developer.apple.com/help/app-store-connect-analytics/acquisition/campaign-links)).
+Results show in the post drawer, Analytics (installs, proceeds and revenue per post by platform and account, top
+posts by installs or revenue) and the playbook ranking (rank by installs or revenue). Apple's numbers lag 2–3 days,
+small numbers (fewer than 5 users) are withheld, and proceeds are Apple's estimate. API: [docs/api.md](docs/api.md).
+
+**Deploying**: `/a/*` must run the Worker first (`assets.run_worker_first` in `wrangler.jsonc`; mirror it in your
+`wrangler.local.jsonc`). If you use a Cloudflare rate-limiting rule for the instance, exclude `/a/` like `/m/`, `/u/`
+and `/oauth/`: link clicks come from many visitors behind shared IPs, and the route is cheap (one D1 read and one
+upsert per click).
 
 ## Users, workspaces and roles
 
@@ -389,7 +423,7 @@ claude mcp add --transport http postflare https://<your-app>/mcp --header "Autho
 MCP tools: `list_platforms`, `list_accounts` (with followers and analytics status), `get_account_options`, media
 (`upload_media_from_url`, `create_upload_link`, `get_upload_link`, `list_media`), posts (`create_post`, `list_posts`,
 `get_post`, `update_post`, `cancel_post`, `retry_post`, `delete_post`; `create_post` takes `playbookId`,
-`playbookVersion` and `variant`), playbooks (`search_playbooks`, `get_playbook`, `get_playbook_stats`) and analytics
+`playbookVersion`, `variant`, `appId` and `autoLink`), App Store campaigns (`list_apps`, `get_bio_link`), playbooks (`search_playbooks`, `get_playbook`, `get_playbook_stats`) and analytics
 (`get_analytics_summary`, `get_top_posts`, `get_post_metrics`, `refresh_metrics`; ranges as ISO dates or
 `"7d"`/`"30d"`). The server's instructions tell agents to look up a playbook before writing and to attribute the post.
 
