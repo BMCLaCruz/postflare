@@ -2,11 +2,12 @@ import { Hono } from "hono";
 import type { SetupInput } from "../../shared/types";
 import { createSession, destroySession, sessionUser, throttleIp, type AppEnv } from "../lib/auth";
 import { demoEnabled } from "../lib/demo";
+import { emailEnabled, loginLinkEmail, sendEmail } from "../lib/email";
 import { hashPassword, needsRehash, verifyPassword } from "../lib/crypto";
 import { ROLE } from "../lib/permissions";
 import { baseUrl, getSetting, setSetting } from "../lib/settings";
 import { normalizeEmail, normalizeName, passwordError } from "../lib/users";
-import { newId, now, parseJson, sha256Hex } from "../lib/util";
+import { newId, now, parseJson, randomToken, sha256Hex } from "../lib/util";
 
 export const authRoutes = new Hono<AppEnv>();
 
@@ -26,6 +27,8 @@ authRoutes.get("/status", async (c) => {
     ...(!setup && c.env.SETUP_TOKEN ? { setupToken: true } : {}),
     // Only when the live demo is on (the landing page shows its "Live demo" buttons then).
     ...(demoEnabled(c.env) ? { demo: true } : {}),
+    // The sign-in page then offers "Email me a sign-in link".
+    ...(setup && emailEnabled(c.env) ? { emailLogin: true } : {}),
   });
 });
 
@@ -119,6 +122,60 @@ authRoutes.post("/login", async (c) => {
     await c.env.DB.prepare("UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?").bind(await hashPassword(password), now(), user.id).run();
   }
   await createSession(c, user.id);
+  return c.json({ ok: true });
+});
+
+const LINK_TTL_MS = 15 * 60 * 1000;
+const MAX_LINKS_IP = 10;
+const MAX_LINKS_EMAIL = 5;
+
+/**
+ * Email sign-in ("magic link"): mails a single-use link to an existing active user. The answer is the same whether
+ * or not the email has an account, and the email goes out after the response (no enumeration by timing either).
+ */
+authRoutes.post("/email-link", async (c) => {
+  if (!emailEnabled(c.env)) return c.json({ error: "Email sign-in is not set up on this instance" }, 404);
+  const body = await c.req.json<{ email?: unknown }>().catch(() => ({}) as { email?: unknown });
+  const email = normalizeEmail(body.email);
+  if (!email) return c.json({ error: "A valid email is required" }, 400);
+  const ipKey = `login_link:${throttleIp(c.req.header("cf-connecting-ip"))}`;
+  const emailKey = `login_link:email:${email.toLowerCase()}`;
+  const [ipF, emailF] = await Promise.all([failures(c.env, ipKey), failures(c.env, emailKey)]);
+  const over = (f: Failures, max: number) => f.n >= max && f.until > Date.now();
+  if (over(ipF, MAX_LINKS_IP) || over(emailF, MAX_LINKS_EMAIL)) return c.json({ error: "Too many sign-in links, try again in a few minutes" }, 429);
+  await Promise.all([recordFailure(c.env, ipKey, ipF), recordFailure(c.env, emailKey, emailF)]);
+
+  const user = await c.env.DB.prepare("SELECT id, email FROM users WHERE email = ? AND is_demo = 0 AND status = 'active'")
+    .bind(email)
+    .first<{ id: string; email: string }>();
+  if (user) {
+    const token = randomToken(32);
+    const t = now();
+    await c.env.DB.prepare("INSERT INTO login_links (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)")
+      .bind(await sha256Hex(token), user.id, t, t + LINK_TTL_MS)
+      .run();
+    // The token goes in the fragment: never sent to a server, so it stays out of request logs.
+    const url = `${await baseUrl(c.env, c.req.url)}/login/link#${token}`;
+    c.executionCtx.waitUntil(sendEmail(c.env, loginLinkEmail(user.email, url, LINK_TTL_MS / 60_000)).catch((err) => console.error("sign-in link email failed", err)));
+  }
+  return c.json({ ok: true });
+});
+
+/** Opens a session from an emailed sign-in link (POSTed by the /login/link page, so link scanners cannot use it up). */
+authRoutes.post("/email-link/verify", async (c) => {
+  const body = await c.req.json<{ token?: unknown }>().catch(() => ({}) as { token?: unknown });
+  const token = typeof body.token === "string" ? body.token.trim() : "";
+  if (!token) return c.json({ error: "Missing token" }, 400);
+  const t = now();
+  const row = await c.env.DB.prepare(
+    `UPDATE login_links SET used_at = ? WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?
+     AND user_id IN (SELECT id FROM users WHERE status = 'active' AND is_demo = 0) RETURNING user_id`,
+  )
+    .bind(t, await sha256Hex(token), t)
+    .first<{ user_id: string }>();
+  if (!row) return c.json({ error: "This sign-in link is invalid, used or expired. Ask for a new one." }, 400);
+  await c.env.DB.prepare("UPDATE users SET last_login_at = ? WHERE id = ?").bind(t, row.user_id).run();
+  await createSession(c, row.user_id);
   return c.json({ ok: true });
 });
 

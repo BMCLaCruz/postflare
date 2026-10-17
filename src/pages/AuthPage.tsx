@@ -1,11 +1,22 @@
 import { useState, type FormEvent, type ReactNode } from "react";
-import { CalendarClock, Lock, Sparkles, Users } from "lucide-react";
+import { CalendarClock, KeyRound, Lock, Mail, MailCheck, Sparkles, Users } from "lucide-react";
 import { Wordmark } from "../components/Logo";
 import { Button } from "../components/ui/Button";
 import { Field, Input } from "../components/ui/Form";
 import { ApiError, api, errorMessage } from "../lib/api";
 
-export function AuthPage({ mode, setupToken: askToken = false, onDone }: { mode: "setup" | "login"; setupToken?: boolean; onDone: () => void }) {
+/** `emailLogin`: the instance can email sign-in links, offered next to the password. */
+export function AuthPage({
+  mode,
+  setupToken: askToken = false,
+  emailLogin = false,
+  onDone,
+}: {
+  mode: "setup" | "login";
+  setupToken?: boolean;
+  emailLogin?: boolean;
+  onDone: () => void;
+}) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -15,6 +26,9 @@ export function AuthPage({ mode, setupToken: askToken = false, onDone }: { mode:
   const [error, setError] = useState<{ message: string; tone: "red" | "amber" } | null>(null);
   const [busy, setBusy] = useState(false);
   const setup = mode === "setup";
+  const [useLink, setUseLink] = useState(false);
+  const [sentTo, setSentTo] = useState<string | null>(null);
+  const linkMode = !setup && emailLogin && useLink;
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -24,6 +38,10 @@ export function AuthPage({ mode, setupToken: askToken = false, onDone }: { mode:
     if (setup && password !== confirm) return setError({ message: "Passwords do not match.", tone: "red" });
     setBusy(true);
     try {
+      if (linkMode) {
+        await api.auth.emailLink(email.trim());
+        return setSentTo(email.trim());
+      }
       if (setup) await api.auth.setup({ name: name.trim(), email: email.trim(), password, workspaceName: workspaceName.trim() || undefined, ...(askToken ? { setupToken: token.trim() } : {}) });
       else await api.auth.login(email.trim(), password);
       onDone();
@@ -36,10 +54,33 @@ export function AuthPage({ mode, setupToken: askToken = false, onDone }: { mode:
     }
   }
 
+  if (sentTo) {
+    return (
+      <AuthShell title="Check your email">
+        <div className="flex gap-3 rounded-xl bg-zinc-50 p-3.5 text-sm text-zinc-600 ring-1 ring-zinc-200 dark:bg-zinc-800/50 dark:text-zinc-300 dark:ring-zinc-800">
+          <MailCheck className="mt-0.5 size-5 shrink-0 text-brand-500" />
+          <p>
+            If <span className="font-medium text-zinc-900 dark:text-zinc-100">{sentTo}</span> has an account here, a sign-in link is on its way. It works once
+            and expires in 15 minutes.
+          </p>
+        </div>
+        <Button variant="ghost" className="mt-4 w-full" onClick={() => setSentTo(null)}>
+          Use a different email
+        </Button>
+      </AuthShell>
+    );
+  }
+
   return (
     <AuthShell
       title={setup ? "Welcome to Postflare" : "Sign in"}
-      subtitle={setup ? "Create the first account. You become the admin of this instance." : "Sign in with your email and password."}
+      subtitle={
+        setup
+          ? "Create the first account. You become the admin of this instance."
+          : linkMode
+            ? "We email you a link that signs you in, no password needed."
+            : "Sign in with your email and password."
+      }
       footer={
         setup && (
           <ul className="mt-8 space-y-3 px-2 text-sm text-zinc-500 dark:text-zinc-400">
@@ -79,19 +120,21 @@ export function AuthPage({ mode, setupToken: askToken = false, onDone }: { mode:
             />
           )}
         </Field>
-        <Field label="Password">
-          {(id) => (
-            <Input
-              id={id}
-              type="password"
-              autoComplete={setup ? "new-password" : "current-password"}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder={setup ? "At least 8 characters" : "••••••••"}
-              required
-            />
-          )}
-        </Field>
+        {!linkMode && (
+          <Field label="Password">
+            {(id) => (
+              <Input
+                id={id}
+                type="password"
+                autoComplete={setup ? "new-password" : "current-password"}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder={setup ? "At least 8 characters" : "••••••••"}
+                required
+              />
+            )}
+          </Field>
+        )}
         {setup && (
           <>
             <Field label="Confirm password">
@@ -108,9 +151,22 @@ export function AuthPage({ mode, setupToken: askToken = false, onDone }: { mode:
           </>
         )}
         {error && <FormError tone={error.tone}>{error.message}</FormError>}
-        <Button type="submit" variant="primary" size="lg" className="w-full" loading={busy} disabled={!email || !password}>
-          {setup ? "Create account & continue" : "Sign in"}
+        <Button type="submit" variant="primary" size="lg" className="w-full" loading={busy} disabled={!email || (!linkMode && !password)}>
+          {setup ? "Create account & continue" : linkMode ? "Email me a sign-in link" : "Sign in"}
         </Button>
+        {!setup && emailLogin && (
+          <Button
+            variant="ghost"
+            className="w-full"
+            onClick={() => {
+              setUseLink(!useLink);
+              setError(null);
+            }}
+          >
+            {linkMode ? <KeyRound className="size-4" /> : <Mail className="size-4" />}
+            {linkMode ? "Sign in with a password" : "Email me a sign-in link instead"}
+          </Button>
+        )}
       </form>
     </AuthShell>
   );

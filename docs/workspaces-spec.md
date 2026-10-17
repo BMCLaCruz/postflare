@@ -85,6 +85,7 @@ Fresh installs: `/api/auth/setup` now takes `{ name, email, password, workspaceN
 
 ## Auth & request context
 - Login: `POST /api/auth/login {email, password}` (same D1 throttle per IP, plus per email). Disabled users cannot log in; their sessions/API keys stop working.
+- Email sign-in link (when `EMAIL_FROM` + an `EMAIL` binding or `RESEND_API_KEY` are set; `GET /api/auth/status` then has `emailLogin: true`): `POST /api/auth/email-link {email}` always answers `{ok:true}` and mails existing active users a single-use link `/login/link#<token>` (15 min, throttled per IP and per email); the page POSTs `/api/auth/email-link/verify {token}` to open the session.
 - `GET /api/auth/status` → `{ setup: boolean, authenticated: boolean }` (unchanged shape).
 - `GET /api/me` → `{ user: {id, name, email, role: {id, name}}, instancePermissions: string[], workspaces: [{id, name, role: {id,name}, permissions: string[], viaAdmin?: true}], currentWorkspaceId }`.
 - Current workspace: header `X-Workspace-Id` (sent by the web app on every request), else the session's `workspace_id`, else the user's first workspace. `POST /api/me/workspace {workspaceId}` stores it on the session. API keys are bound to one workspace (header ignored).

@@ -20,6 +20,7 @@ import { CalendarPage } from "./pages/CalendarPage";
 import { ComposerProvider } from "./pages/composer/ComposerProvider";
 import { DashboardPage } from "./pages/DashboardPage";
 import { InvitePage } from "./pages/InvitePage";
+import { LoginLinkPage } from "./pages/LoginLinkPage";
 import { MediaPage } from "./pages/MediaPage";
 import { PlatformsPage } from "./pages/PlatformsPage";
 import { PlaybookPage } from "./pages/PlaybookPage";
@@ -57,7 +58,7 @@ export function App() {
     return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
   }, [check]);
 
-  const onLogout = useCallback(() => setStatus({ setup: true, authenticated: false }), []);
+  const onLogout = useCallback(() => setStatus((s) => ({ setup: true, authenticated: false, ...(s?.emailLogin ? { emailLogin: true as const } : {}) })), []);
 
   return (
     <ToastProvider>
@@ -75,6 +76,8 @@ export function App() {
           <Routes>
             {/* Public: works signed out (create an account) and signed in (join as the current user). */}
             <Route path="/invite/:token" element={<InvitePage authenticated={status.setup && status.authenticated} onLoggedOut={onLogout} />} />
+            {/* Public: opened from a sign-in link email (signed in too: the link may be for another user). */}
+            <Route path="/login/link" element={<LoginLinkPage />} />
             <Route
               path="*"
               element={
@@ -82,6 +85,7 @@ export function App() {
                   <AuthPage
                     mode={status.setup ? "login" : "setup"}
                     setupToken={!!status.setupToken}
+                    emailLogin={!!status.emailLogin}
                     onDone={() => {
                       const next = nextPath();
                       if (window.location.pathname === "/login" || window.location.pathname === "/setup" || next !== "/") navigate(next, { replace: true });

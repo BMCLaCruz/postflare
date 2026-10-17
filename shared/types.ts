@@ -523,6 +523,8 @@ export interface AuthStatusDTO {
   demo?: true;
   /** Present (true) before setup when the deployment has a SETUP_TOKEN secret: the setup form must send it. */
   setupToken?: true;
+  /** Present (true) when email sign-in links are set up (EMAIL_FROM + an EMAIL binding or RESEND_API_KEY). */
+  emailLogin?: true;
 }
 
 /** Body of POST /api/auth/setup */

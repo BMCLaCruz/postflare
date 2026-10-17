@@ -18,5 +18,7 @@ declare namespace Cloudflare {
     DELETION_DB: D1Database;
     /** Own instance for the App Store campaign tests (links, clicks, Revflare sync with mocked fetch). */
     CAMPAIGNS_DB: D1Database;
+    /** Own instance for the email sign-in link tests (they configure EMAIL_FROM and a fake EMAIL binding). */
+    EMAIL_LOGIN_DB: D1Database;
   }
 }

@@ -23,12 +23,15 @@
     "PUBLIC_URL": "https://social.example.com",
     // "true" hosts the public, sandboxed live demo at /demo. Leave it out unless you really want a public demo.
     "DEMO_MODE": "false"
+    // Email sign-in links: the sender, plus the "send_email" binding below (or a RESEND_API_KEY secret instead).
+    // "EMAIL_FROM": "Postflare <login@example.com>"
   },
+  // "send_email": [{ "name": "EMAIL" }],
 
   "assets": {
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/", "/demo", "/api/*", "/oauth/*", "/m/*", "/u/*", "/mcp", "/mcp/*"]
+    "run_worker_first": ["/", "/demo", "/api/*", "/oauth/*", "/m/*", "/u/*", "/a/*", "/mcp", "/mcp/*"]
   },
   "d1_databases": [
     { "binding": "DB", "database_name": "postflare", "migrations_dir": "migrations" }

@@ -140,6 +140,8 @@ export const api = {
     setup: (input: SetupInput) => request<{ ok: true }>("POST", "/auth/setup", input),
     login: (email: string, password: string) => request<{ ok: true }>("POST", "/auth/login", { email, password }),
     logout: () => request<{ ok: true }>("POST", "/auth/logout"),
+    emailLink: (email: string) => request<{ ok: true }>("POST", "/auth/email-link", { email }),
+    verifyEmailLink: (token: string) => request<{ ok: true }>("POST", "/auth/email-link/verify", { token }),
   },
   me: {
     get: () => get<MeDTO>("/me"),
