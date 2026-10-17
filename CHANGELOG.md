@@ -46,6 +46,23 @@ is maintained by [release-please](https://github.com/googleapis/release-please) 
   (`0 3 * * *`), and analytics collection moved to its own trigger (`7,22,37,52 * * * *`) so each run stays under the Free plan's 50 D1 queries. Add both to your `wrangler.local.jsonc` / Deploy-button `wrangler.jsonc` triggers.
 * Media used by a draft, scheduled, publishing or needs-check post cannot be deleted (409 with the post ids).
 
+## [0.2.0](https://github.com/FerdiKT/postflare/compare/v0.1.0...v0.2.0) (2026-10-17)
+
+
+### Features
+
+* **youtube:** captions, language fields, playlist creation, localizations, watch time and retention analytics ([5f5c791](https://github.com/FerdiKT/postflare/commit/5f5c791186d652aa11daacdebd5cdb61eb82d6d8))
+
+
+### Performance
+
+* **youtube:** 32 MiB resumable upload chunks, 24 per step ([2dd98be](https://github.com/FerdiKT/postflare/commit/2dd98be38ff60e45601732ec8caa98c82192e7f1))
+
+
+### Documentation
+
+* **provider-brief:** chunk size guidance ([33cff2b](https://github.com/FerdiKT/postflare/commit/33cff2bafffa4ccdf38457d3bf091454deadb449))
+
 ## 0.1.0 (2026-10-13)
 
 First public release.
