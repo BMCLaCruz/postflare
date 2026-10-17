@@ -63,3 +63,35 @@ export function testEmail(to: string, host: string): OutgoingEmail {
   const text = `Email sending works for Postflare on ${host}: sign-in links by email can reach this address.`;
   return { to, subject: "Postflare test email", text: `${text}\n`, html: layout("Postflare test email", `<p style="margin:0;color:#52525b">${escapeHtml(text)}</p>`) };
 }
+
+const button = (url: string, label: string) =>
+  `<p style="margin:0 0 24px"><a href="${escapeHtml(url)}" style="display:inline-block;background:#f97316;color:#fff;text-decoration:none;font-weight:600;padding:10px 18px;border-radius:8px">${label}</a></p>`;
+
+/** Public sign-up: the confirmation link that activates the account (docs/hosted-spec.md "Sign-up"). */
+export function verifySignupEmail(to: string, url: string, hours: number): OutgoingEmail {
+  const host = new URL(url).host;
+  const note = `The link works once and expires in ${hours} hours. If you did not sign up, ignore this email: no account is created.`;
+  return {
+    to,
+    subject: "Confirm your Postflare account",
+    text: `Confirm your email to finish creating your Postflare account (${host}):\n\n${url}\n\n${note}\n`,
+    html: layout(
+      "Confirm your email",
+      `<p style="margin:0 0 20px;color:#52525b">Click the button to finish creating your account on ${escapeHtml(host)}.</p>
+${button(url, "Confirm and sign in")}
+<p style="margin:0;font-size:13px;color:#71717a">${note}<br><br>${escapeHtml(url)}</p>`,
+    ),
+  };
+}
+
+/** Sign-up with an email that already has an account: told to sign in instead (the API answers the same either way). */
+export function signupExistingEmail(to: string, loginUrl: string): OutgoingEmail {
+  const host = new URL(loginUrl).host;
+  const text = `Someone (maybe you) tried to create a Postflare account on ${host} with this email address. You already have an account: sign in instead. If it wasn't you, you can ignore this email.`;
+  return {
+    to,
+    subject: "You already have a Postflare account",
+    text: `${text}\n\n${loginUrl}\n`,
+    html: layout("You already have an account", `<p style="margin:0 0 20px;color:#52525b">${escapeHtml(text)}</p>\n${button(loginUrl, "Sign in")}`),
+  };
+}

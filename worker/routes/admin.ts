@@ -35,7 +35,7 @@ adminRoutes.patch("/admin/email", manageSettings, async (c) => {
   else {
     await c.env.DB.batch([
       c.env.DB.prepare("DELETE FROM settings WHERE key = ?").bind(MAGIC_LINK_SETTING),
-      c.env.DB.prepare("DELETE FROM magic_links"),
+      c.env.DB.prepare("DELETE FROM magic_links WHERE purpose = 'login'"),
     ]);
   }
   return c.json(await emailState(c.env));

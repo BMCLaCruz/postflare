@@ -1,23 +1,26 @@
 import { Hono } from "hono";
-import type { SetupInput } from "../../shared/types";
+import type { SetupInput, SignupDTO, SignupInput } from "../../shared/types";
+import { signupEnabled } from "../billing/config";
+import { trialStatements } from "../billing/entitlements";
 import { createSession, destroySession, sessionUser, throttleIp, type AppEnv } from "../lib/auth";
 import { demoEnabled } from "../lib/demo";
-import { magicLinkEmail, magicLinkEnabled, sendEmail } from "../lib/email";
+import { emailConfigured, magicLinkEmail, magicLinkEnabled, sendEmail, signupExistingEmail, verifySignupEmail } from "../lib/email";
 import { hashPassword, needsRehash, verifyPassword } from "../lib/crypto";
 import { ROLE } from "../lib/permissions";
 import { baseUrl, getSetting, setSetting } from "../lib/settings";
-import { normalizeEmail, normalizeName, passwordError } from "../lib/users";
+import { createWorkspaceStatements, normalizeEmail, normalizeName, passwordError } from "../lib/users";
 import { newId, now, parseJson, randomToken, sha256Hex } from "../lib/util";
 
 export const authRoutes = new Hono<AppEnv>();
 
 async function hasUsers(db: D1Database) {
-  // The live demo's shared user does not count: the instance still needs its first real user.
-  return !!(await db.prepare("SELECT 1 AS x FROM users WHERE is_demo = 0 LIMIT 1").first());
+  // The live demo's shared user does not count: the instance still needs its first real user. Nor do sign-ups that
+  // were never verified (status pending).
+  return !!(await db.prepare("SELECT 1 AS x FROM users WHERE is_demo = 0 AND status != 'pending' LIMIT 1").first());
 }
 
 authRoutes.get("/status", async (c) => {
-  const [setup, session, magicLink] = await Promise.all([hasUsers(c.env.DB), sessionUser(c), magicLinkEnabled(c.env)]);
+  const [setup, session, magicLink, signup] = await Promise.all([hasUsers(c.env.DB), sessionUser(c), magicLinkEnabled(c.env), signupEnabled(c.env.DB)]);
   // Demo visitors are signed in even on an instance that has no real user yet.
   const demo = !!session?.user.demo;
   return c.json({
@@ -29,6 +32,8 @@ authRoutes.get("/status", async (c) => {
     ...(demoEnabled(c.env) ? { demo: true } : {}),
     // The sign-in page then offers "Email me a sign-in link instead" (EMAIL + EMAIL_FROM set and turned on by an admin).
     ...(setup && magicLink ? { magicLink: true } : {}),
+    // Public sign-up (hosted mode, docs/hosted-spec.md): the sign-in page offers "Create an account".
+    ...(setup && signup ? { signup: true } : {}),
   });
 });
 
@@ -57,7 +62,7 @@ authRoutes.post("/setup", async (c) => {
     db
       .prepare(
         `INSERT INTO users (id, email, name, password_hash, role_id, status, created_at, updated_at, last_login_at)
-         SELECT ?, ?, ?, ?, ?, 'active', ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM users WHERE is_demo = 0)`,
+         SELECT ?, ?, ?, ?, ?, 'active', ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM users WHERE is_demo = 0 AND status != 'pending')`,
       )
       .bind(userId, email, name, await hashPassword(body.password!), ROLE.instanceAdmin, t, t, t),
     db
@@ -66,6 +71,8 @@ authRoutes.post("/setup", async (c) => {
     db
       .prepare(`INSERT INTO workspace_members (workspace_id, user_id, role_id, created_at) SELECT ?, ?, ?, ? ${userExists}`)
       .bind(workspaceId, userId, ROLE.owner, t, userId),
+    // Billing cannot be on before the first user exists; kept so every workspace creation path starts a trial.
+    ...trialStatements(db, workspaceId, userId, t),
   ]);
   if (!res.meta.changes) return c.json({ error: "Already set up" }, 409);
   await baseUrl(c.env, c.req.url);
@@ -113,6 +120,7 @@ authRoutes.post("/login", async (c) => {
     await Promise.all([recordFailure(c.env, ipKey, ipF), email ? recordFailure(c.env, emailKey, emailF) : null]);
     return c.json({ error: "Wrong email or password" }, 401);
   }
+  if (user.status === "pending") return c.json({ error: "Confirm your email first: open the link we sent you when you signed up" }, 403);
   if (user.status !== "active") return c.json({ error: "This account is disabled" }, 403);
   await c.env.DB.batch([
     c.env.DB.prepare("DELETE FROM settings WHERE key IN (?, ?)").bind(ipKey, emailKey),
@@ -177,7 +185,9 @@ authRoutes.post("/magic-link/verify", async (c) => {
   const token = typeof body.token === "string" ? body.token.trim() : "";
   if (!/^[\w-]{20,100}$/.test(token)) return c.json({ error: INVALID_LINK }, 400);
   const t = now();
-  const row = await c.env.DB.prepare("UPDATE magic_links SET used_at = ? WHERE token_hash = ? AND used_at IS NULL AND expires_at > ? RETURNING user_id")
+  const row = await c.env.DB.prepare(
+    "UPDATE magic_links SET used_at = ? WHERE token_hash = ? AND used_at IS NULL AND expires_at > ? AND purpose = 'login' RETURNING user_id",
+  )
     .bind(t, await sha256Hex(token), t)
     .first<{ user_id: string }>();
   if (!row) return c.json({ error: INVALID_LINK }, 400);
@@ -185,11 +195,128 @@ authRoutes.post("/magic-link/verify", async (c) => {
   if (!user || user.is_demo) return c.json({ error: INVALID_LINK }, 400);
   if (user.status !== "active") return c.json({ error: "This account is disabled" }, 403);
   await c.env.DB.batch([
-    c.env.DB.prepare("UPDATE magic_links SET used_at = ? WHERE user_id = ? AND used_at IS NULL").bind(t, row.user_id),
+    c.env.DB.prepare("UPDATE magic_links SET used_at = ? WHERE user_id = ? AND used_at IS NULL AND purpose = 'login'").bind(t, row.user_id),
     c.env.DB.prepare("UPDATE users SET last_login_at = ? WHERE id = ?").bind(t, row.user_id),
   ]);
   await createSession(c, row.user_id);
   return c.json({ ok: true });
+});
+
+// ---------- Public sign-up (hosted mode, docs/hosted-spec.md "Sign-up"): off until an instance admin turns it on ----------
+
+const SIGNUP_OFF = "Sign-up is not open on this instance";
+const MAX_SIGNUPS_IP = 5;
+const SIGNUP_WINDOW_MS = 60 * 60 * 1000;
+const VERIFY_TTL_MS = 24 * 60 * 60 * 1000;
+const INVALID_VERIFY = "This confirmation link is invalid, used or expired. Sign up again to get a new one.";
+
+/**
+ * POST /api/auth/signup {name, email, password, workspaceName?}. With email configured (EMAIL + EMAIL_FROM) the user is
+ * created pending and a confirmation link is mailed; the answer is the same whether or not the email already has an
+ * account (an existing user is told to sign in instead), and the lookup and email happen after the response. Without
+ * email the account is created right away and signed in (an existing email then answers 409). 5 per IP per hour.
+ */
+authRoutes.post("/signup", async (c) => {
+  if (!(await signupEnabled(c.env.DB)) || !(await hasUsers(c.env.DB))) return c.json({ error: SIGNUP_OFF }, 404);
+  const body = await c.req.json<Partial<SignupInput>>().catch(() => ({}) as Partial<SignupInput>);
+  const name = normalizeName(body.name);
+  const email = normalizeEmail(body.email);
+  if (!name) return c.json({ error: "Name is required" }, 400);
+  if (!email) return c.json({ error: "A valid email is required" }, 400);
+  if (email.toLowerCase().endsWith("@postflare.local")) return c.json({ error: "Use your real email address" }, 400);
+  const pwError = passwordError(body.password);
+  if (pwError) return c.json({ error: pwError }, 400);
+  const ipKey = `signup:${throttleIp(c.req.header("cf-connecting-ip"))}`;
+  const ipF = await failures(c.env, ipKey);
+  if (ipF.n >= MAX_SIGNUPS_IP && ipF.until > Date.now()) return c.json({ error: "Too many sign-ups from your network. Try again in an hour." }, 429);
+  const n = (ipF.until > Date.now() ? ipF.n : 0) + 1;
+  await setSetting(c.env.DB, ipKey, JSON.stringify({ n, until: ipF.until > Date.now() ? ipF.until : Date.now() + SIGNUP_WINDOW_MS }));
+
+  const db = c.env.DB;
+  const passwordHash = await hashPassword(body.password!);
+  const workspaceName = normalizeName(body.workspaceName) ?? `${name}'s workspace`;
+  const t = now();
+
+  if (!emailConfigured(c.env)) {
+    // No way to verify the address: immediate account (the admin card warns hosted instances to configure email).
+    const userId = newId("usr_");
+    const ws = createWorkspaceStatements(db, workspaceName, userId);
+    try {
+      await db.batch([
+        db
+          .prepare(
+            `INSERT INTO users (id, email, name, password_hash, role_id, status, created_at, updated_at, last_login_at) VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?)`,
+          )
+          .bind(userId, email, name, passwordHash, ROLE.instanceMember, t, t, t),
+        ...ws.statements,
+      ]);
+    } catch (err) {
+      if (/UNIQUE/i.test(String(err))) return c.json({ error: "An account with this email already exists: sign in instead" }, 409);
+      throw err;
+    }
+    await createSession(c, userId, ws.id);
+    const out: SignupDTO = { ok: true, verify: false, workspaceId: ws.id };
+    return c.json(out);
+  }
+
+  c.executionCtx.waitUntil(
+    (async () => {
+      const base = await baseUrl(c.env, c.req.url);
+      const existing = await db.prepare("SELECT id, email, status, is_demo FROM users WHERE email = ?").bind(email).first<{ id: string; email: string; status: string; is_demo: number }>();
+      if (existing && existing.status !== "pending") {
+        if (existing.status === "active" && !existing.is_demo) await sendEmail(c.env, signupExistingEmail(existing.email, `${base}/login`));
+        return;
+      }
+      // A pending sign-up with this email (never confirmed) is replaced: only the mailbox owner can confirm it.
+      const userId = existing?.id ?? newId("usr_");
+      const token = randomToken(32);
+      await db.batch([
+        existing
+          ? db.prepare("UPDATE users SET name = ?, password_hash = ?, updated_at = ? WHERE id = ? AND status = 'pending'").bind(name, passwordHash, t, userId)
+          : db
+              .prepare(`INSERT INTO users (id, email, name, password_hash, role_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)`)
+              .bind(userId, email, name, passwordHash, ROLE.instanceMember, t, t),
+        db.prepare("DELETE FROM magic_links WHERE user_id = ? AND purpose = 'verify'").bind(userId),
+        db
+          .prepare("INSERT INTO magic_links (token_hash, user_id, created_at, expires_at, purpose, data) VALUES (?, ?, ?, ?, 'verify', ?)")
+          .bind(await sha256Hex(token), userId, t, t + VERIFY_TTL_MS, JSON.stringify({ workspaceName })),
+      ]);
+      // The token goes in the fragment: never sent to a server, so it stays out of request logs.
+      await sendEmail(c.env, verifySignupEmail(email, `${base}/auth/verify#${token}`, VERIFY_TTL_MS / 3_600_000));
+    })().catch((err) => console.error("sign-up email failed", err?.code ?? "", err?.message ?? err)),
+  );
+  const out: SignupDTO = { ok: true, verify: true };
+  return c.json(out);
+});
+
+/**
+ * POST /api/auth/signup/verify {token} (the /auth/verify page, on click): activates the pending user, creates their
+ * workspace (trial when billing is on) and signs in. Single use. 404 while sign-up is off.
+ */
+authRoutes.post("/signup/verify", async (c) => {
+  if (!(await signupEnabled(c.env.DB))) return c.json({ error: SIGNUP_OFF }, 404);
+  const body = await c.req.json<{ token?: unknown }>().catch(() => ({}) as { token?: unknown });
+  const token = typeof body.token === "string" ? body.token.trim() : "";
+  if (!/^[\w-]{20,100}$/.test(token)) return c.json({ error: INVALID_VERIFY }, 400);
+  const db = c.env.DB;
+  const t = now();
+  const link = await db
+    .prepare("UPDATE magic_links SET used_at = ? WHERE token_hash = ? AND used_at IS NULL AND expires_at > ? AND purpose = 'verify' RETURNING user_id, data")
+    .bind(t, await sha256Hex(token), t)
+    .first<{ user_id: string; data: string | null }>();
+  if (!link) return c.json({ error: INVALID_VERIFY }, 400);
+  const user = await db.prepare("SELECT id, name, status FROM users WHERE id = ?").bind(link.user_id).first<{ id: string; name: string; status: string }>();
+  if (!user || user.status !== "pending") return c.json({ error: INVALID_VERIFY }, 400);
+  const workspaceName = normalizeName(parseJson<{ workspaceName?: string }>(link.data, {}).workspaceName) ?? `${user.name}'s workspace`;
+  const ws = createWorkspaceStatements(db, workspaceName, user.id);
+  // The link was claimed atomically above: a second click (or a concurrent one) cannot create a second workspace.
+  const [activated] = await db.batch([
+    db.prepare("UPDATE users SET status = 'active', updated_at = ?, last_login_at = ? WHERE id = ? AND status = 'pending'").bind(t, t, user.id),
+    ...ws.statements,
+  ]);
+  if (!activated.meta.changes) return c.json({ error: INVALID_VERIFY }, 400);
+  await createSession(c, user.id, ws.id);
+  return c.json({ ok: true, workspaceId: ws.id });
 });
 
 authRoutes.post("/logout", async (c) => {
