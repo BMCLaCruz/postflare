@@ -593,7 +593,9 @@ export const youtube: Provider = {
   docsUrl: googleDocsUrl,
   setupNotes: [
     "1. In the [Google Cloud console](https://console.cloud.google.com/) create a project and enable **YouTube Data API v3** and **YouTube Analytics API** (APIs & Services → Library).",
-    "2. Configure the **OAuth consent screen** (External), add the scopes `youtube.upload`, `youtube`, `youtube.force-ssl` (comments, captions), `youtube.readonly` and `yt-analytics.readonly` (analytics), and add your Google account as a test user.",
+    "2. Configure the **OAuth consent screen** (External) and add your Google account as a test user. Under **Data access → Add or remove scopes → Manually add scopes**, paste the full scope URLs (one per line): " +
+      SCOPES.map((s) => `\`${s}\``).join(", ") +
+      " (upload, manage, comments and captions, statistics, and YouTube Analytics).",
     "3. Create an **OAuth client ID** of type *Web application* with the authorized redirect URI `{{redirectUri}}`.",
     "4. Paste the client ID and secret here, then connect a channel (pick the brand channel on Google's account chooser).",
     "",
