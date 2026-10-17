@@ -238,6 +238,10 @@ const replaceAppUrls = (text: string, appStoreId: string, link: string) => {
 const isAppUrl = (v: unknown, appStoreId: string) => typeof v === "string" && findAppStoreUrls(v, appStoreId).length > 0 && findAppStoreUrls(v, appStoreId)[0].url === v.trim();
 const hasUrl = (text: string) => HAS_URL_RE.test(text) || new RegExp(URL_RE.source, "i").test(text);
 
+/** YouTube Shorts: links in the description and comments are not clickable (since Aug 2023), so nothing is inserted. */
+export const isYouTubeShort = (provider: string, settings: Record<string, unknown> | undefined, content = "") =>
+  provider === "youtube" && (settings?.shorts === true || settings?.shorts === "true" || /(^|\s)#shorts\b/i.test(content));
+
 /**
  * Auto-insert on a clickable platform: replace plain App Store URLs of the app (without their own ct=) by the tracked
  * link in the text and follow-ups (first comment, thread replies), fill Pinterest's destination link / Reddit's link
@@ -246,7 +250,7 @@ const hasUrl = (text: string) => HAS_URL_RE.test(text) || new RegExp(URL_RE.sour
  */
 export function rewriteForCampaign(provider: Provider, input: RewriteInput, link: string, appStoreId: string): RewriteResult {
   const out: RewriteResult = { content: input.content, thread: input.thread, settings: input.settings, changed: false, skipped: [] };
-  if (!isClickable(provider.id)) return out;
+  if (!isClickable(provider.id) || isYouTubeShort(provider.id, input.settings, input.content)) return out;
   const tooLong = (where: string) => out.skipped.push(`Tracked link not inserted in the ${where}: it would exceed ${provider.name}'s length limit`);
 
   // 1. Replace App Store URLs of the app.

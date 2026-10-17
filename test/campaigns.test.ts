@@ -104,6 +104,13 @@ describe("auto-insert / replace", () => {
     expect(r.thread[0].content).toBe(`Link: ${LINK}`);
   });
 
+  it("leaves YouTube Shorts alone (links in Shorts descriptions aren't clickable) but rewrites regular videos", () => {
+    const short = rewriteForCampaign(P("youtube"), { ...base, settings: { title: "T", shorts: true }, content: "Play tonight" }, LINK, APP);
+    expect(short.changed).toBe(false);
+    expect(rewriteForCampaign(P("youtube"), { ...base, content: "Play tonight #Shorts" }, LINK, APP).changed).toBe(false);
+    expect(rewriteForCampaign(P("youtube"), { ...base, settings: { title: "T" }, content: "Full walkthrough" }, LINK, APP).content).toBe(`Full walkthrough\n\n${LINK}`);
+  });
+
   it("appends the link when the post has no link, keeps the text when it has one", () => {
     expect(rewriteForCampaign(P("bluesky"), { ...base, content: "Tempo 2.0 is out" }, LINK, APP).content).toBe(`Tempo 2.0 is out\n\n${LINK}`);
     const other = rewriteForCampaign(P("bluesky"), { ...base, content: "Read https://blog.example.com" }, LINK, APP);
