@@ -370,6 +370,28 @@ public URL and user management are instance-wide and only for instance admins.
 The permission catalog is in [`worker/lib/permissions.ts`](worker/lib/permissions.ts), the design in
 [docs/workspaces-spec.md](docs/workspaces-spec.md).
 
+## Hosted mode (optional): sign-up, plans and billing
+
+The same code can run a hosted service: an instance admin turns on **public sign-up** and **selling plans**. Both are
+off by default, so a self-hosted instance looks and behaves exactly as before (no limits anywhere).
+
+- **Sign-up** (Admin → Settings): "Create an account" on the sign-in page. With email configured (`EMAIL` binding +
+  `EMAIL_FROM`, see the magic link notes in `wrangler.local.example.jsonc`) new accounts are confirmed by email first;
+  without it they are created right away, so configure email before opening sign-up on a public instance.
+- **Plans** (Admin → Billing) are data: limits (connected accounts, posts and X posts per month, members, media
+  storage, API/MCP access) plus monthly/yearly prices. Each workspace has its own plan; new workspaces start a trial
+  (default 7 days, no card), then fall back to the free plan you mark, or become read-only.
+- **Payment providers**: [Polar](https://polar.sh) (recommended: merchant of record, handles VAT and sales tax),
+  Stripe or Lemon Squeezy. Create the products in the provider's dashboard, paste their ids into the plans, paste the
+  webhook URL shown in Admin → Billing into the provider. Credentials are stored encrypted; only Web Crypto, no SDKs.
+- Workspaces that existed before billing was first turned on, and the demo, are never limited; instance admins can
+  comp any workspace or assign a plan by hand.
+- **Rate limiting**: if you put a Cloudflare rate limiting (or WAF / Bot Fight) rule in front of the instance, exclude
+  `/api/billing/webhooks/*`: providers retry blocked webhooks a few times and then give up (Polar even disables the
+  endpoint), and subscriptions would stop updating.
+
+Design and provider details: [docs/hosted-spec.md](docs/hosted-spec.md); endpoints: [docs/api.md](docs/api.md).
+
 ## Live demo (optional)
 
 An instance can host a public, password-less demo: set the var `DEMO_MODE` to `"true"` (it is **off** by default; set

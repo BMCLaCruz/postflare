@@ -6,8 +6,8 @@ session cookie (plus `X-Workspace-Id`), or `Authorization: Bearer pf_...` (an AP
 Profile). Every endpoint is workspace-scoped: ids of other workspaces answer 404. Permissions are listed per endpoint
 (catalog: [workspaces-spec.md](workspaces-spec.md)).
 
-This file documents the account group and App Store campaign endpoints in detail and lists the changes they brought to existing
-endpoints. The rest of the API (accounts, media, posts, analytics, playbooks, users, workspaces) is summarized in the
+This file documents the account group, App Store campaign and hosted mode (plans, billing, sign-up) endpoints in detail
+and lists the changes they brought to existing endpoints. The rest of the API (accounts, media, posts, analytics, playbooks, users, workspaces) is summarized in the
 README ("API & MCP", "Analytics", "Playbooks") and typed in `shared/types.ts`.
 
 ## Account groups
@@ -132,3 +132,110 @@ proceeds.
 Any Revflare workspace API key whose user can read the workspace (role viewer or above) works: Postflare only reads
 `/apps`, `/acquisition` and `/acquisition/campaigns`. Revflare must import Apple's App Analytics reports for the apps
 (App Store Connect key with the Admin role to create the report requests, see Revflare's docs).
+
+## Hosted mode: plans, billing and sign-up
+
+Design: [hosted-spec.md](hosted-spec.md). Everything is off by default (self-hosted instances see no difference). Billing
+is **on** when an instance admin turned it on AND the active provider is configured AND an active paid plan exists;
+only then are limits enforced, and never in exempt or demo workspaces. Types: `BillingDTO`, `PublicPlanDTO`,
+`AdminPlanDTO`, `AdminBillingDTO`, `AdminWorkspaceBillingDTO`, `PlanLimitErrorDTO`, `SignupDTO` in `shared/types.ts`.
+
+### Limit errors (402)
+
+Actions the workspace's plan does not allow answer **402**
+`{ error, code: "plan_limit", limit, used, max, upgradeUrl }` (`PlanLimitErrorDTO`). `limit` is a limit key or
+`"locked"` (no active plan: the workspace is read-only, nothing can be created, scheduled or published; reading,
+exporting and deleting still work). `upgradeUrl` = `<origin>/workspace?tab=billing`. MCP tools fail with the same
+`error` text; the CLI prints it with the URL.
+
+| key | counted as | checked by |
+|---|---|---|
+| `accounts` | accounts of the workspace that are not disabled | `POST /connect/:provider`, OAuth callbacks (only accounts new to the workspace; reconnects are free), `PATCH /accounts/:id {status: "active"}` of a disabled account |
+| `posts_per_month` | posts created this UTC month (one per account) | `POST /posts` (REST, MCP `create_post`, CLI, composer, duplicate) |
+| `x_posts_per_month` | the same, X accounts only | `POST /posts` |
+| `members` | members + pending invitations | `POST /invitations` (into a workspace), `POST /invitations/accept` (existing workspace) |
+| `storage_mb` | sum of media sizes | `POST /media`, `POST /media/from-url`, `POST /media/multipart`, upload links (`/u/:token/file`, `/u/:token/multipart`) |
+| `api` | boolean | `POST /keys`; every API-key request (REST, CLI, MCP) answers 402 when `false` |
+
+The locked state also blocks `PATCH /posts/:id` that schedules, `POST /posts/:id/retry`, `POST /posts/:id/comments`,
+`POST /posts/:id/resolve {published: false}`, `POST /upload-links`. The publish workflow fails posts of a locked
+workspace with "This workspace has no active plan…" (already scheduled posts are not held to the other limits).
+
+### Workspace
+
+- `GET /billing` (`posts.read`) → `BillingDTO` `{ enabled, exempt, state, plan, subscribedPlanId, status, trialEndsAt,
+  currentPeriodEnd, graceEndsAt, interval, provider, hasSubscription, usage, limits, plans, canManage }`.
+  `state`: `unlimited` · `plan` · `trial` · `free` · `locked`. `status`: `none` · `trialing` · `active` · `past_due` ·
+  `canceled` (paid until `currentPeriodEnd`) · `expired`. `usage` `{ accounts, postsThisMonth, xPostsThisMonth,
+  members, storageMb }` and `plans` (pricing cards) only while billing is on. `limits: null` = unlimited.
+- `POST /billing/checkout` `{ planId, interval: "month" | "year" }` (`billing.manage`) → `{ url }`: redirect there. The
+  checkout returns to `/workspace?tab=billing&checkout=success|canceled`; the plan changes when the provider's webhook
+  arrives (poll `GET /billing`). 409: billing off, exempt workspace, already subscribed through a provider (use the
+  portal to change plans) or no provider; 400: free plan or interval not offered (`PublicPlanDTO.checkoutIntervals`);
+  404: unknown or archived plan; 502: provider error (its message).
+- `POST /billing/portal` (`billing.manage`) → `{ url }` (provider's customer portal: change plan, payment method,
+  invoices, cancel). 409 without a provider subscription.
+
+### Public
+
+- `GET /billing/plans` → `PublicPlansDTO` `{ enabled, currency, plans }` (empty while billing is off): the pricing table
+  of the landing and sign-up pages.
+- `POST /billing/webhooks/:provider` (`polar` · `stripe` · `lemonsqueezy`): provider webhooks. No session, exempt from
+  the same-origin check (and must be excluded from Cloudflare rate limiting rules). 404 when the provider is not
+  configured, 400 on a bad signature, 200 otherwise (duplicates, ignored event types, unknown workspaces and stale
+  events included: `{ ok, duplicate? | ignored? | stale?, workspaceId? }`).
+- `GET /auth/status` adds `signup: true` while sign-up is on.
+- `POST /auth/signup` `{ name, email, password, workspaceName? }` → `SignupDTO`. With email configured:
+  `{ ok: true, verify: true }` (a link `/auth/verify#<token>` is mailed, valid 24 h; the same answer when the email
+  already has an account, whose owner gets a "sign in instead" email). Without email: `{ ok: true, verify: false,
+  workspaceId }`, signed in (409 for an existing email). 400 invalid input, 404 while off, 429 after 5 per IP per hour.
+  New users get the instance Member role and own their first workspace (trial when billing is on).
+- `POST /auth/signup/verify` `{ token }` → `{ ok, workspaceId }`, signed in (the `/auth/verify` page POSTs it on click).
+  400 invalid, used or expired; 404 while sign-up is off.
+- Pending (unverified) users cannot sign in (`POST /auth/login` → 403 "Confirm your email first…"), appear in
+  `GET /users` with `status: "pending"` (an admin can `PATCH /users/:id {status: "active"}` them), and are deleted after
+  7 days by the daily job.
+
+### Instance admin
+
+`instance.settings.manage`:
+- `GET /admin/billing` → `AdminBillingDTO` `{ enabled, active, problems, activeProvider, providers, trialDays,
+  pastDueGraceDays, signupEnabled, emailConfigured, limits }`. `providers[]`: `{ id, name, recommended, description,
+  configured, sandbox, webhookUrl, events, fields: [{ key, label, secret, help?, set, value }], dashboardUrl }`; secrets
+  are never returned (`set: true`, `value: null`). `limits`: the limit key catalog for the plan editor.
+- `PATCH /admin/billing` `{ enabled?, activeProvider?, trialDays? (0–365, 0 = no trial), pastDueGraceDays? (0–90),
+  signupEnabled? }` → `AdminBillingDTO`. Turning on is refused (400 `{ error, problems }`) until the active provider is
+  configured and an active paid plan exists. The first time billing goes on, every workspace without a plan becomes
+  exempt (the operator's own). Billing switches itself off (limits lifted) if the provider is removed or the last paid
+  plan archived.
+- `PUT /admin/billing/providers/:id` `{ values: { <field>: string }, sandbox? }` → `AdminBillingDTO`. Stored encrypted;
+  an empty secret keeps the stored one. Fields: Polar `accessToken`, `webhookSecret` (+ `sandbox`); Stripe `secretKey`,
+  `webhookSecret`; Lemon Squeezy `apiKey`, `storeId`, `webhookSecret`.
+- `DELETE /admin/billing/providers/:id` → `AdminBillingDTO` (409 for the provider of new sales while billing is on).
+- `POST /admin/billing/providers/:id/test` → `{ ok: true, account? } | { ok: false, error }` (one API call).
+- `GET /admin/billing/plans` → `AdminPlanDTO[]` (archived included, `workspaces` = workspaces on the plan).
+- `POST /admin/billing/plans` `PlanInput` → 201 `AdminPlanDTO`. `PlanInput`: `{ name, description?, features?:
+  string[], limits?: { accounts?, posts_per_month?, x_posts_per_month?, members?, storage_mb?: number | null, api?:
+  boolean | null }, priceMonth?, priceYear? (integer cents, null = not offered), currency? (ISO, default USD),
+  providerPrices?: { polar?: { month?, year? }, stripe?: …, lemonsqueezy?: … } (product / price / variant ids),
+  isFree?, isTrialDefault? (each on one plan at most: setting it clears the others), highlight?, position?, active? }`.
+- `POST /admin/billing/plans/suggested` → 201 `AdminPlanDTO[]` (Free, Creator, Team without provider ids).
+- `PATCH /admin/billing/plans/:id` (any `PlanInput` subset) → `AdminPlanDTO`.
+- `DELETE /admin/billing/plans/:id` → `{ ok }`, or `{ ok, archived: true }` when workspaces are on it.
+- `GET /admin/signup` / `PATCH /admin/signup { enabled }` → `AdminSignupDTO` `{ enabled, emailConfigured }`.
+- `GET /admin/overview` adds `billing: { enabled, paying, trialing, pastDue, manual, exempt, mrrCents, currency }` and
+  `counts.users.pending`.
+
+`instance.users.manage`:
+- `GET /admin/billing/workspaces?status=active,trialing` → `AdminWorkspaceBillingDTO[]` (newest first, max 500)
+  `{ workspaceId, workspaceName, demo, exempt, state, planId, planName, status, trialEndsAt, currentPeriodEnd, interval,
+  provider, customerId, subscriptionId, updatedAt, createdAt }`.
+- `GET /admin/workspaces/:id/billing` → `AdminWorkspaceBillingDTO`.
+- `PATCH /admin/workspaces/:id/billing` `{ exempt?, planId? (null removes), status?, trialEndsAt?, currentPeriodEnd? }`
+  → `AdminWorkspaceBillingDTO`. A plan set here gets provider `manual` and status `active` (or `trialing` with
+  `trialEndsAt`); a provider subscription that still runs takes over again with its next webhook.
+
+### Permissions
+
+New workspace permission `billing.manage` (migration 0013: built-in Owner only). Everyone with `posts.read` reads
+`GET /billing`.

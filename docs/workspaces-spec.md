@@ -34,6 +34,7 @@ Workspace scope:
 | `media.write` | upload, import, edit alt text, delete media, create upload links |
 | `playbooks.manage` | create, edit, duplicate and archive the workspace's own playbooks (reading needs `posts.read`) |
 | `apikeys.manage` | create/revoke **own** API keys for this workspace |
+| `billing.manage` | hosted mode: see plan and usage, upgrade (checkout), open the billing portal; built-in Owner only (migration 0013, docs/hosted-spec.md) |
 
 ## Built-in roles (`builtin = 1`, cannot be edited/deleted)
 

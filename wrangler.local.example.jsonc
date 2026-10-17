@@ -24,7 +24,8 @@
     // "true" hosts the public, sandboxed live demo at /demo. Leave it out unless you really want a public demo.
     "DEMO_MODE": "false"
     // Sign-in links by email: the sender ("Name <address>" or a bare address), plus the "send_email" binding below.
-    // Then turn them on in Admin → Instance settings. Needs Workers Paid and a domain onboarded to Email Sending
+    // Then turn them on in Admin → Instance settings. The same binding confirms public sign-ups by email (hosted mode,
+    // docs/hosted-spec.md). Needs Workers Paid and a domain onboarded to Email Sending
     // (npx wrangler email sending enable example.com); on the Free plan it only reaches your verified addresses.
     // "EMAIL_FROM": "Postflare <login@example.com>"
   },
