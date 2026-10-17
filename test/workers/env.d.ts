@@ -1,5 +1,7 @@
-declare module "cloudflare:test" {
-  interface ProvidedEnv extends Env {
+// Test-only bindings (test/workers/wrangler.test.jsonc), merged into the `env` of "cloudflare:test" / "cloudflare:workers".
+// Worker code types its bindings with the global `Env`, which does not see these.
+declare namespace Cloudflare {
+  interface Env {
     /** Second D1 used to test migrating a legacy (single password) install. */
     LEGACY_DB: D1Database;
     /** Own instance for the live demo tests (they need DEMO_MODE and their own first user). */

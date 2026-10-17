@@ -4,8 +4,8 @@ Thanks for helping! Bug reports, platform fixes, new platforms and docs improvem
 
 ## Development setup
 
-Requirements: Node.js 22 (20+ works), npm. No Cloudflare account is needed for development or tests: Vite runs the
-Worker locally with emulated D1, R2 and Workflows.
+Requirements: Node.js 22.12 or newer (Vitest 5 and Vite 8 need it), npm. No Cloudflare account is needed for
+development or tests: Vite runs the Worker locally with emulated D1, R2 and Workflows.
 
 ```bash
 git clone https://github.com/FerdiKT/postflare.git

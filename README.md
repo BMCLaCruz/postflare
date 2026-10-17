@@ -425,6 +425,8 @@ The MCP server above works too, without the CLI.
 
 ## Development
 
+Needs Node.js 22.12 or newer.
+
 ```bash
 npm install
 npm run dev        # Vite + local Worker (D1/R2/Workflows emulated)
