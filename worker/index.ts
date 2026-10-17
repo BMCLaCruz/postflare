@@ -1,4 +1,6 @@
 import { Hono } from "hono";
+import { billingAdminRoutes, billingPublicRoutes, billingRoutes } from "./billing/routes";
+import { PlanLimitError } from "./billing/entitlements";
 import { forbidDemoUser, isSessionValid, requireAuth, sameOriginMutations, type AppEnv } from "./lib/auth";
 import { APP_CSP, securityHeaders } from "./lib/headers";
 import { refreshExpiringAccounts } from "./lib/accounts";
@@ -40,6 +42,8 @@ api.post("/auth/demo", demoLogin);
 api.route("/auth", authRoutes);
 api.route("/invitations", invitationPublicRoutes);
 api.route("/version", versionRoute);
+// Public pricing table and payment provider webhooks (signed by the provider, no session).
+api.route("/billing", billingPublicRoutes);
 // Everything below needs a session or an API key; handlers scope by c.var.workspace and check permissions.
 api.use("*", requireAuth);
 api.post("/auth/password", forbidDemoUser, changePassword); // Old path of POST /api/me/password.
@@ -59,6 +63,8 @@ api.route("/", settingsRoutes);
 api.route("/", uploadLinkRoutes);
 api.route("/", updateRoutes);
 api.route("/", adminRoutes);
+api.route("/", billingRoutes);
+api.route("/", billingAdminRoutes);
 api.notFound((c) => c.json({ error: "Not found" }, 404));
 
 const app = new Hono<AppEnv>();
@@ -68,6 +74,8 @@ app.use("*", async (c, next) => {
   await next();
 });
 app.onError((err, c) => {
+  // Hosted mode: an action the workspace's plan does not allow (worker/billing/entitlements.ts).
+  if (err instanceof PlanLimitError) return c.json(err.body, 402);
   console.error(err);
   return c.json({ error: err.message || "Internal error" }, 500);
 });
@@ -186,12 +194,23 @@ export async function dailyJobs(env: Env): Promise<void> {
     env.DB.prepare("DELETE FROM sessions WHERE expires_at < ?").bind(now()).run(),
     env.DB.prepare("DELETE FROM magic_links WHERE expires_at < ?").bind(now()).run(),
     env.DB.prepare("DELETE FROM upload_links WHERE expires_at < ?").bind(now() - 7 * 24 * 60 * 60 * 1000).run(),
-    env.DB.prepare("DELETE FROM settings WHERE (key LIKE 'login_fail:%' OR key LIKE 'magic_link:%' OR key LIKE 'demo_login:%') AND json_extract(value, '$.until') < ?").bind(now()).run(),
+    env.DB.prepare(
+      "DELETE FROM settings WHERE (key LIKE 'login_fail:%' OR key LIKE 'magic_link:%' OR key LIKE 'demo_login:%' OR key LIKE 'signup:%') AND json_extract(value, '$.until') < ?",
+    )
+      .bind(now())
+      .run(),
     env.DB.prepare("DELETE FROM invitations WHERE accepted_at IS NULL AND expires_at < ?").bind(now() - 30 * 24 * 60 * 60 * 1000).run(),
     // Meta data deletion requests shown on /data-deletion/ (90 days).
     pruneDeletionsStatement(env.DB, now()).run(),
     // Usage events older than USAGE_RETENTION_DAYS (bounded per run).
     pruneUsageStatement(env.DB, now()).run(),
+    // Hosted mode: processed provider webhook events (90 days) and sign-ups never verified (7 days).
+    env.DB.prepare("DELETE FROM billing_events WHERE created_at < ?").bind(now() - 90 * 24 * 60 * 60 * 1000).run(),
+    env.DB.prepare(
+      "DELETE FROM users WHERE status = 'pending' AND created_at < ? AND NOT EXISTS (SELECT 1 FROM workspace_members m WHERE m.user_id = users.id)",
+    )
+      .bind(now() - 7 * 24 * 60 * 60 * 1000)
+      .run(),
   ]);
   await recordCronRun(env, "daily", started);
 }

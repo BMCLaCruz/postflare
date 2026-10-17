@@ -10,6 +10,7 @@ import {
   saveConnectedAccounts,
   type AccountRow,
 } from "../lib/accounts";
+import { PlanLimitError, enforce } from "../billing/entitlements";
 import { pkceChallenge } from "../lib/crypto";
 import { connectBlocked } from "../lib/settings";
 import { demoOptions } from "../lib/demo";
@@ -37,6 +38,11 @@ accountRoutes.patch("/accounts/:id", requirePermission("accounts.manage"), async
   if (hasGroup && groupId !== null && typeof groupId !== "string") return c.json({ error: "groupId must be a group id or null" }, 400);
   const ws = wsId(c);
   if (typeof groupId === "string" && !(await findGroup(c.env.DB, ws, groupId))) return c.json({ error: "Group not found" }, 404);
+  // Re-enabling a disabled account counts against the plan's account limit again.
+  if (status === "active") {
+    const current = await findAccount(c.env, ws, c.req.param("id"));
+    if (current?.status === "disabled") await enforce(c, { accounts: 1 });
+  }
   const sets: string[] = [];
   const binds: unknown[] = [];
   if (status !== undefined) sets.push("status = ?") && binds.push(status);
@@ -102,9 +108,10 @@ accountRoutes.post("/connect/:provider", requirePermission("accounts.manage"), f
   try {
     const ctx = await providerContext(c.env, provider, { requestUrl: c.req.url });
     const accounts = await provider.connect(ctx, values);
-    const ids = await saveConnectedAccounts(c.env, provider.id, accounts, { workspaceId: wsId(c), userId: c.var.user.id });
+    const ids = await saveConnectedAccounts(c.env, provider.id, accounts, { workspaceId: wsId(c), userId: c.var.user.id }, (adding) => enforce(c, { accounts: adding }));
     return c.json({ ids });
   } catch (err) {
+    if (err instanceof PlanLimitError) throw err;
     return c.json({ error: errorMessage(err) }, err instanceof AccountElsewhereError ? 409 : 400);
   }
 });

@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { enforceWorkspace } from "../billing/entitlements";
 import { sessionUser, workspaceAccess, type AppEnv } from "../lib/auth";
 import { providerContext, saveConnectedAccounts } from "../lib/accounts";
 import { META_PROVIDERS, deletionStatus, handleDataDeletion } from "../lib/meta-deletion";
@@ -74,7 +75,9 @@ oauthRoutes.on(["GET", "POST"], ["/:provider/callback", "/:provider/callback/"],
       params,
     });
     if (!accounts.length) return back({ error: `${provider.name}: no accounts found for this login` });
-    const ids = await saveConnectedAccounts(c.env, provider.id, accounts, { workspaceId: ws.id, userId: session.user.id });
+    const ids = await saveConnectedAccounts(c.env, provider.id, accounts, { workspaceId: ws.id, userId: session.user.id }, (adding) =>
+      enforceWorkspace(c.env.DB, ws.id, ws.billing, { accounts: adding }, c.req.url),
+    );
     return back({ connected: String(ids.length), provider: provider.id, workspaceId: ws.id });
   } catch (err) {
     return back({ error: `${provider.name}: ${errorMessage(err)}` });

@@ -6,6 +6,7 @@ import type {
   InvitationDTO,
   InvitationLookupDTO,
 } from "../../shared/types";
+import { enforceWorkspace, loadSnapshot, trialStatements } from "../billing/entitlements";
 import { createSession, forbidDemoUser, isInstanceAdmin, sessionUser, workspaceAccess, type AppEnv } from "../lib/auth";
 import { hashPassword } from "../lib/crypto";
 import { ROLE, isSubset, permissionError } from "../lib/permissions";
@@ -67,6 +68,8 @@ invitationRoutes.post("/invitations", forbidDemoUser, async (c) => {
         .first();
       if (member) return c.json({ error: `${email} is already a member of this workspace` }, 409);
     }
+    // Hosted mode: members + pending invitations count against the plan.
+    await enforceWorkspace(db, ws.id, ws.billing, { members: 1 }, c.req.url);
     workspaceId = ws.id;
     workspaceRoleId = role.id;
   } else {
@@ -188,6 +191,8 @@ invitationPublicRoutes.post("/accept", async (c) => {
     const origin = c.req.header("origin");
     if (origin && origin !== new URL(c.req.url).origin) return c.json({ error: "Cross-origin request blocked" }, 403);
   }
+  // Hosted mode: the plan of the workspace being joined must still have room (this invitation is already counted).
+  if (inv.workspace_id) await enforceWorkspace(db, inv.workspace_id, await loadSnapshot(db, inv.workspace_id), { members: 0 }, c.req.url);
   const t = now();
   let userId: string;
   const statements: D1PreparedStatement[] = [];
@@ -232,6 +237,8 @@ invitationPublicRoutes.post("/accept", async (c) => {
       db
         .prepare(`INSERT INTO workspaces (id, name, created_by, created_at, updated_at) SELECT ?, ?, ?, ?, ? ${claimed}`)
         .bind(workspaceId, wsName, userId, t, t, inv.id, userId),
+      // Hosted mode: the new workspace starts its trial (nothing happens while billing is off).
+      ...trialStatements(db, workspaceId, userId, t),
     );
   }
   statements.push(

@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import type { CreatePostsInput, ResolvePostInput, ThreadItem } from "../../shared/types";
 import type { Context } from "hono";
+import { assertNotLocked, enforce } from "../billing/entitlements";
 import { forbidInDemoWorkspace, requirePermission, wsId, type AppEnv } from "../lib/auth";
 import { findAccount, freshAccount, providerContext, type AccountRow } from "../lib/accounts";
 import { DEMO_POSTS_PER_DAY, demoPostsLeft, queueDemoPublish, simulateDueDemoPosts } from "../lib/demo";
@@ -255,6 +256,11 @@ postRoutes.post("/posts", requirePermission("posts.write"), async (c) => {
   if (errors.length) return c.json({ error: errors.join("\n"), errors }, 400);
   const pb = await attribution(c.env, workspaceId, body);
   if (pb && "error" in pb) return c.json({ error: pb.error }, pb.error.endsWith("not found") ? 404 : 400);
+  // Hosted mode: posts per month (one per account) and X posts per month. No query while billing is off.
+  await enforce(c, {
+    posts_per_month: normalized.length,
+    x_posts_per_month: normalized.filter((d) => refs.accounts.get(d.accountId)?.provider === "x").length,
+  });
   if (isDemo(c) && (await demoPostsLeft(c.env, workspaceId)) < normalized.length) {
     return c.json(
       { error: `The live demo has reached today's limit of ${DEMO_POSTS_PER_DAY} new posts. It resets daily: come back tomorrow, or deploy your own Postflare.` },
@@ -334,6 +340,8 @@ postRoutes.patch("/posts/:id", requirePermission("posts.write"), async (c) => {
       ? resolveSchedule(body.scheduledAt)
       : { status: row.status === "scheduled" ? "scheduled" : ("draft" as PostRow["status"]), at: row.scheduled_at };
   if (!sched) return c.json({ error: "Invalid scheduledAt" }, 400);
+  // A locked workspace (hosted mode, no active plan) can edit drafts but not schedule them.
+  if (sched.status === "scheduled") await assertNotLocked(c);
 
   // App Store campaign: the app (kept, changed or removed), the auto-insert override, the post's tracked link.
   if (body.appId !== undefined && body.appId !== null && typeof body.appId !== "string") return c.json({ error: "appId must be a string" }, 400);
@@ -412,6 +420,7 @@ postRoutes.post("/posts/:id/retry", requirePermission("posts.write"), async (c) 
   const row = await findPost(c.env, wsId(c), c.req.param("id"));
   if (!row) return c.json({ error: "Not found" }, 404);
   if (row.status !== "failed" && row.status !== "cancelled") return c.json({ error: "Only failed or cancelled posts can be retried" }, 409);
+  await assertNotLocked(c);
   const revision = row.revision + 1;
   const res = await c.env.DB.prepare(
     "UPDATE posts SET status = 'scheduled', scheduled_at = ?, error = NULL, revision = ?, workflow_id = NULL, updated_at = ? WHERE id = ? AND revision = ? AND status = ?",
@@ -443,6 +452,7 @@ postRoutes.post("/posts/:id/comments", requirePermission("posts.write"), forbidI
   if (!/^[\w.:-]{1,200}$/.test(parentId)) return c.json({ error: "replyTo must be a platform post id" }, 400);
   const text = content?.trim();
   if (!text) return c.json({ error: "content is required" }, 400);
+  await assertNotLocked(c);
   const accountRow = await findAccount(c.env, wsId(c), row.account_id);
   const provider = accountRow && getProvider(accountRow.provider);
   if (!accountRow || !provider) return c.json({ error: "The post's account no longer exists" }, 409);
@@ -501,6 +511,7 @@ postRoutes.post("/posts/:id/resolve", requirePermission("posts.write"), async (c
     if (!res.meta.changes) return c.json({ error: "The post changed meanwhile, reload and try again" }, 409);
     await logPost(c.env, row.id, "info", `Marked as published by ${c.var.user.name ?? "a user"}${url ? `: ${url}` : ""}`);
   } else {
+    await assertNotLocked(c);
     const res = await c.env.DB.prepare(
       "UPDATE posts SET status = 'scheduled', scheduled_at = ?, error = NULL, revision = ?, workflow_id = NULL, updated_at = ? WHERE id = ? AND workspace_id = ? AND revision = ? AND status = 'needs_check'",
     )

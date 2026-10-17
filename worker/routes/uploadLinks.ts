@@ -1,4 +1,5 @@
 import { Hono, type Context } from "hono";
+import { BILLING_COLUMNS, assertNotLocked, enforceWorkspace, snapshotFromRow, type BillingColumnsRow, type BillingSnapshot } from "../billing/entitlements";
 import { forbidInDemoWorkspace, requirePermission, wsId, type AppEnv } from "../lib/auth";
 import { mediaDto, safeFilename, type MediaRow } from "../lib/media";
 import { baseUrl } from "../lib/settings";
@@ -20,6 +21,8 @@ interface LinkRow {
   expires_at: number;
   workspace_id: string;
   created_by: string | null;
+  /** Billing state of the link's workspace (read with the link). */
+  billing?: BillingSnapshot;
 }
 
 const DEFAULT_TTL_MIN = 120;
@@ -44,6 +47,7 @@ export const uploadLinkRoutes = new Hono<AppEnv>();
 uploadLinkRoutes.post("/upload-links", requirePermission("media.write"), forbidInDemoWorkspace("Uploading media"), async (c) => {
   const body = await c.req.json<{ expiresMinutes?: number; note?: string }>().catch(() => ({}) as { expiresMinutes?: number; note?: string });
   const ttl = Math.min(Math.max(Number(body.expiresMinutes) || DEFAULT_TTL_MIN, 5), MAX_TTL_MIN);
+  await assertNotLocked(c);
   const token = randomToken(24);
   const id = newId("upl_");
   const t = now();
@@ -84,14 +88,15 @@ export const uploadLinkPublic = new Hono<AppEnv>();
 async function findLink(c: Context<AppEnv>): Promise<LinkRow | null> {
   const token = c.req.param("token") ?? "";
   if (token.length < 20) return null;
-  const row = await c.env.DB.prepare(
-    "SELECT l.*, w.is_demo FROM upload_links l LEFT JOIN workspaces w ON w.id = l.workspace_id WHERE l.token_hash = ?",
-  )
+  const row = await c.env.DB.prepare(`SELECT l.*, w.is_demo, ${BILLING_COLUMNS} FROM upload_links l LEFT JOIN workspaces w ON w.id = l.workspace_id WHERE l.token_hash = ?`)
     .bind(await sha256Hex(token))
-    .first<LinkRow & { is_demo: number | null }>();
+    .first<LinkRow & BillingColumnsRow>();
   // Media uploaded through the link goes into the link's workspace (never a demo workspace).
-  return row && row.expires_at > now() && row.workspace_id && !row.is_demo ? row : null;
+  return row && row.expires_at > now() && row.workspace_id && !row.is_demo ? { ...row, billing: snapshotFromRow(row) } : null;
 }
+
+/** Hosted mode: the link's workspace must have storage left for `bytes` (402 otherwise; no query while billing is off). */
+const checkStorage = (c: Context<AppEnv>, link: LinkRow, bytes: number) => enforceWorkspace(c.env.DB, link.workspace_id, link.billing, { storage_mb: bytes }, c.req.url);
 
 const linkOwner = (link: LinkRow) => ({ workspaceId: link.workspace_id, userId: link.created_by });
 
@@ -126,6 +131,7 @@ uploadLinkPublic.on(["PUT", "POST"], "/:token/file", async (c) => {
   const err = checkMeta(meta);
   if (err) return c.json({ error: err }, 400);
   if (meta.size > SINGLE_UPLOAD_MAX) return c.json({ error: "File too large for a single upload, use multipart" }, 413);
+  await checkStorage(c, link, meta.size);
   const id = newId("med_");
   const key = `${id}/${safeFilename(meta.filename)}`;
   await c.env.MEDIA.put(key, c.req.raw.body, { httpMetadata: { contentType: meta.mime } });
@@ -141,6 +147,7 @@ uploadLinkPublic.post("/:token/multipart", async (c) => {
   const meta = await c.req.json<Meta>();
   const err = checkMeta(meta);
   if (err) return c.json({ error: err }, 400);
+  await checkStorage(c, link, meta.size);
   const id = newId("med_");
   const key = `${id}/${safeFilename(meta.filename)}`;
   const upload = await c.env.MEDIA.createMultipartUpload(key, { httpMetadata: { contentType: meta.mime } });

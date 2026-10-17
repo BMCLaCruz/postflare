@@ -3,7 +3,7 @@ import type { InstancePermission, PermissionInfo, PermissionKey, WorkspacePermis
 /**
  * The permission catalog: every permission the app checks, with the text shown in the UI and in 403 errors.
  * Roles (table `roles`) are named bundles of these keys. Built-in roles are seeded by migrations/0003
- * (`instance.overview.view` is added to the instance Admin by migrations/0007).
+ * (`instance.overview.view` is added to the instance Admin by migrations/0007, `billing.manage` to the Owner by 0013).
  */
 export const PERMISSIONS: ReadonlyArray<PermissionInfo & { action: string }> = [
   {
@@ -100,6 +100,13 @@ export const PERMISSIONS: ReadonlyArray<PermissionInfo & { action: string }> = [
     description: "Create and revoke your own API keys for this workspace.",
     action: "manage API keys",
   },
+  {
+    key: "billing.manage",
+    scope: "workspace",
+    label: "Manage billing",
+    description: "See the plan and usage, upgrade, open the billing portal and cancel (hosted mode; everyone who can view posts sees the plan and limits).",
+    action: "manage billing of this workspace",
+  },
 ];
 
 export const INSTANCE_PERMISSIONS = PERMISSIONS.filter((p) => p.scope === "instance").map((p) => p.key as InstancePermission);
@@ -125,12 +132,13 @@ export const ROLE = {
   viewer: "role_ws_viewer",
 } as const;
 
-/** Mirrors the seed rows of migrations/0003 plus 0007 and 0008 (a test checks they match). */
+/** Mirrors the seed rows of migrations/0003 plus 0007, 0008 and 0013 (a test checks they match). */
 export const BUILTIN_ROLES: Record<string, { scope: "instance" | "workspace"; name: string; permissions: PermissionKey[] }> = {
   [ROLE.instanceAdmin]: { scope: "instance", name: "Admin", permissions: [...INSTANCE_PERMISSIONS] },
   [ROLE.instanceMember]: { scope: "instance", name: "Member", permissions: ["instance.workspaces.create"] },
   [ROLE.owner]: { scope: "workspace", name: "Owner", permissions: [...WORKSPACE_PERMISSIONS] },
-  [ROLE.admin]: { scope: "workspace", name: "Admin", permissions: WORKSPACE_PERMISSIONS.filter((p) => p !== "workspace.delete") },
+  // Billing stays with the Owner (docs/hosted-spec.md "Permissions").
+  [ROLE.admin]: { scope: "workspace", name: "Admin", permissions: WORKSPACE_PERMISSIONS.filter((p) => p !== "workspace.delete" && p !== "billing.manage") },
   [ROLE.editor]: {
     scope: "workspace",
     name: "Editor",

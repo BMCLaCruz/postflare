@@ -148,6 +148,8 @@ export async function saveConnectedAccounts(
   providerId: string,
   accounts: ConnectedAccount[],
   owner: { workspaceId: string; userId: string },
+  /** Plan limit check for the accounts that are new to the workspace (reconnects don't count); throws to refuse. */
+  limit?: (adding: number) => Promise<void>,
 ): Promise<string[]> {
   const existing = new Map<string, { id: string; workspace_id: string | null }>();
   if (accounts.length) {
@@ -167,6 +169,10 @@ export async function saveConnectedAccounts(
     throw new AccountElsewhereError(
       `${names} ${elsewhere.length > 1 ? "are" : "is"} already connected in another workspace. Remove ${elsewhere.length > 1 ? "them" : "it"} there first.`,
     );
+  }
+  if (limit) {
+    const adding = accounts.filter((a) => !existing.has(a.externalId)).length;
+    if (adding) await limit(adding);
   }
   // One batch whatever the number of accounts (a Facebook login may return dozens of pages): D1 query budget.
   const ids: string[] = [];

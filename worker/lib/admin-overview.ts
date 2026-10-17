@@ -57,6 +57,10 @@ export function quotaLevel(used: number, limit: number): QuotaLevel {
 
 const startOfUtcDay = (t: number) => Math.floor(t / DAY) * DAY;
 
+/** Billed workspaces (not exempt, not the demo) and those of them paid until now (?1 = now). */
+const BILLED = "(w.billing_exempt = 0 AND w.is_demo = 0)";
+const PAYING = `(${BILLED} AND (w.billing_status IN ('active', 'past_due') OR (w.billing_status = 'canceled' AND w.current_period_end > ?1)))`;
+
 interface WorkspaceRow {
   id: string;
   name: string;
@@ -179,11 +183,27 @@ export async function adminOverview(env: Env, requestedDays: number): Promise<Ad
     db
       .prepare("SELECT key, value FROM settings WHERE key IN (?, ?, ?, ?, ?, ?)")
       .bind(UPDATE_SETTING, MEDIA_RETENTION_SETTING, EXPERIMENTAL_SETTING, ...CRONS.map((c) => cronLastRunKey(c.name))),
-    // 11. First metered day.
-    db.prepare("SELECT MIN(day) AS day FROM usage_events"),
+    // 11. First metered day, and hosted mode: subscriptions of billed workspaces and the MRR estimate (docs/hosted-spec.md).
+    db
+      .prepare(
+        `SELECT (SELECT MIN(day) FROM usage_events) AS day, (SELECT value FROM settings WHERE key = 'billing_on') AS billing_on,
+           SUM(w.billing_exempt = 1 AND w.is_demo = 0) AS exempt,
+           SUM(${PAYING} AND w.billing_provider != 'manual') AS paying,
+           SUM(${PAYING} AND w.billing_provider = 'manual') AS manual,
+           SUM(${BILLED} AND w.billing_status = 'trialing' AND w.trial_ends_at > ?1) AS trialing,
+           SUM(${BILLED} AND w.billing_status = 'past_due') AS past_due,
+           SUM(CASE WHEN ${PAYING} AND w.billing_provider != 'manual'
+             THEN CASE WHEN w.billing_interval = 'year' THEN COALESCE(p.price_year, 0) / 12.0 ELSE COALESCE(p.price_month, 0) END ELSE 0 END) AS mrr,
+           (SELECT currency FROM plans GROUP BY currency ORDER BY COUNT(*) DESC LIMIT 1) AS currency
+         FROM workspaces w LEFT JOIN plans p ON p.id = w.plan_id`,
+      )
+      .bind(t),
   ]);
 
   const workspaces = wsRes.results as WorkspaceRow[];
+  const bill = sinceRes.results[0] as
+    | { billing_on: string | null; exempt: number | null; paying: number | null; manual: number | null; trialing: number | null; past_due: number | null; mrr: number | null; currency: string | null }
+    | undefined;
   const postAgg = new Map((postRes.results as PostAgg[]).map((r) => [r.workspace_id, r]));
   const demoIds = new Set(workspaces.filter((w) => w.is_demo).map((w) => w.id));
   const real = (postRes.results as PostAgg[]).filter((r) => !r.workspace_id || !demoIds.has(r.workspace_id));
@@ -191,10 +211,11 @@ export async function adminOverview(env: Env, requestedDays: number): Promise<Ad
   const sum = (rows: PostAgg[], k: keyof PostAgg) => rows.reduce((n, r) => n + (Number(r[k]) || 0), 0);
 
   // Users / accounts.
-  const users = { active: 0, disabled: 0, demo: 0 };
+  const users = { active: 0, disabled: 0, demo: 0, pending: 0 };
   for (const r of userRes.results as Array<{ status: string; is_demo: number; n: number }>) {
     if (r.is_demo) users.demo += r.n;
     else if (r.status === "disabled") users.disabled += r.n;
+    else if (r.status === "pending") users.pending += r.n;
     else users.active += r.n;
   }
   const byProviderAcc = new Map<string, { provider: string; active: number; reconnect: number; disabled: number }>();
@@ -408,5 +429,15 @@ export async function adminOverview(env: Env, requestedDays: number): Promise<Ad
       meteringSince: (sinceRes.results[0] as { day: string | null } | undefined)?.day ?? null,
     },
     workspaces: workspaceRows,
+    billing: {
+      enabled: bill?.billing_on === "1",
+      paying: bill?.paying ?? 0,
+      trialing: bill?.trialing ?? 0,
+      pastDue: bill?.past_due ?? 0,
+      manual: bill?.manual ?? 0,
+      exempt: bill?.exempt ?? 0,
+      mrrCents: Math.round(bill?.mrr ?? 0),
+      currency: bill?.currency ?? "USD",
+    },
   };
 }

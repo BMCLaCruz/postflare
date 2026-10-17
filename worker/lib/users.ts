@@ -1,4 +1,5 @@
 import type { RoleScope } from "../../shared/types";
+import { trialStatements } from "../billing/entitlements";
 import { terminateWorkflow } from "./posts";
 import { ROLE, isDemoRole, parsePermissions } from "./permissions";
 import { newId, now } from "./util";
@@ -82,7 +83,7 @@ export function lastOwnerMessage(who: string, workspaces: Array<{ name: string }
   return `${who} the last owner of ${names}. Make someone else owner or delete the workspace first.`;
 }
 
-/** Statements creating a workspace with `userId` as its Owner. */
+/** Statements creating a workspace with `userId` as its Owner (and its trial, in hosted mode with billing on). */
 export function createWorkspaceStatements(db: D1Database, name: string, userId: string, id = newId("ws_")) {
   const t = now();
   return {
@@ -92,6 +93,7 @@ export function createWorkspaceStatements(db: D1Database, name: string, userId: 
       db
         .prepare("INSERT INTO workspace_members (workspace_id, user_id, role_id, created_at) VALUES (?, ?, ?, ?)")
         .bind(id, userId, ROLE.owner, t),
+      ...trialStatements(db, id, userId, t),
     ],
   };
 }

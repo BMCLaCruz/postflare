@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import type { MediaUsageDTO } from "../../shared/types";
+import { enforce } from "../billing/entitlements";
 import { forbidInDemoWorkspace, isInstanceAdmin, requirePermission, wsId, type AppEnv } from "../lib/auth";
 import { verifySignature } from "../lib/crypto";
 import { mediaDto, safeFilename, type MediaRow } from "../lib/media";
@@ -131,6 +132,7 @@ mediaRoutes.post("/media", requirePermission("media.write"), noDemo, async (c) =
   const err = checkMeta(meta);
   if (err) return c.json({ error: err }, 400);
   if (meta.size > SINGLE_UPLOAD_MAX) return c.json({ error: "File too large for a single upload, use multipart" }, 413);
+  await enforce(c, { storage_mb: meta.size });
   const id = newId("med_");
   const key = `${id}/${safeFilename(meta.filename)}`;
   await c.env.MEDIA.put(key, c.req.raw.body, { httpMetadata: { contentType: meta.mime } });
@@ -148,6 +150,8 @@ mediaRoutes.post("/media/from-url", requirePermission("media.write"), noDemo, as
     return c.json({ error: "Invalid url" }, 400);
   }
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return c.json({ error: "Invalid url" }, 400);
+  // Locked workspaces cannot import; the size is checked once the server tells it.
+  await enforce(c, {});
   const res = await fetch(parsed.toString(), { redirect: "follow" });
   if (!res.ok || !res.body) return c.json({ error: `Download failed: ${res.status}` }, 400);
   const length = res.headers.get("content-length");
@@ -161,6 +165,14 @@ mediaRoutes.post("/media/from-url", requirePermission("media.write"), noDemo, as
   if (err) {
     await res.body.cancel();
     return c.json({ error: err }, 400);
+  }
+  if (length) {
+    try {
+      await enforce(c, { storage_mb: meta.size });
+    } catch (e) {
+      await res.body.cancel();
+      throw e;
+    }
   }
   // R2 needs a known length for streams; buffer when the server did not send one, within the Worker's memory.
   const body = length ? res.body : await readAtMost(res.body, SINGLE_UPLOAD_MAX);
@@ -176,6 +188,7 @@ mediaRoutes.post("/media/multipart", requirePermission("media.write"), noDemo, a
   const meta = await c.req.json<Meta>();
   const err = checkMeta(meta);
   if (err) return c.json({ error: err }, 400);
+  await enforce(c, { storage_mb: meta.size });
   const id = newId("med_");
   const key = `${id}/${safeFilename(meta.filename)}`;
   const upload = await c.env.MEDIA.createMultipartUpload(key, { httpMetadata: { contentType: meta.mime } });

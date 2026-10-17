@@ -361,7 +361,8 @@ export type WorkspacePermission =
   | "media.read"
   | "media.write"
   | "playbooks.manage"
-  | "apikeys.manage";
+  | "apikeys.manage"
+  | "billing.manage";
 
 export type PermissionKey = InstancePermission | WorkspacePermission;
 
@@ -403,7 +404,8 @@ export interface RoleInput {
   permissions: PermissionKey[];
 }
 
-export type UserStatus = "active" | "disabled";
+/** `pending`: signed up, email not verified yet (cannot sign in; deleted after 7 days, see docs/hosted-spec.md). */
+export type UserStatus = "active" | "disabled" | "pending";
 
 /** A workspace as seen by the current user (GET /api/me `workspaces`). */
 export interface MeWorkspace {
@@ -525,6 +527,8 @@ export interface AuthStatusDTO {
   setupToken?: true;
   /** Present (true) when sign-in links by email are on (EMAIL binding + EMAIL_FROM, turned on by an instance admin). */
   magicLink?: true;
+  /** Present (true) when public sign-up is on (instance setting signup_enabled): show "Create an account". */
+  signup?: true;
 }
 
 /** GET / PATCH /api/admin/email: sign-in links by email (Cloudflare Email Sending). */
@@ -798,7 +802,7 @@ export interface AdminOverviewDTO {
     /** Excluding demo workspaces. */
     workspaces: number;
     demoWorkspaces: number;
-    users: { active: number; disabled: number; demo: number };
+    users: { active: number; disabled: number; demo: number; pending: number };
     apiKeys: number;
     accounts: { total: number; byStatus: { active: number; reconnect: number; disabled: number }; byProvider: Array<{ provider: string; active: number; reconnect: number; disabled: number }> };
   };
@@ -838,6 +842,24 @@ export interface AdminOverviewDTO {
     meteringSince: string | null;
   };
   workspaces: AdminWorkspaceRowDTO[];
+  /** Hosted mode (docs/hosted-spec.md): subscription numbers of non-demo, non-exempt workspaces. */
+  billing: AdminOverviewBillingDTO;
+}
+
+export interface AdminOverviewBillingDTO {
+  /** Billing is on (enabled, provider configured, a paid plan exists). */
+  enabled: boolean;
+  /** Paid through a provider: active, past_due, or canceled before the end of the paid period. */
+  paying: number;
+  trialing: number;
+  pastDue: number;
+  /** Plan assigned by an instance admin (provider "manual"), not counted in MRR. */
+  manual: number;
+  exempt: number;
+  /** Monthly recurring revenue estimate in cents: monthly prices + yearly prices / 12 of paying workspaces. */
+  mrrCents: number;
+  /** Currency of the MRR estimate (the most used plan currency; plans in other currencies are summed as is). */
+  currency: string;
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -1074,3 +1096,269 @@ export interface CampaignSyncDTO {
  */
 export const CAMPAIGN_DATA_NOTE =
   "App Store numbers come from Apple App Analytics (via Revflare): they lag 2-3 days, Apple withholds small numbers (fewer than 5 users) for privacy, and proceeds are Apple's estimate.";
+
+// ---------------------------------------------------------------------------------------------------------------
+// Hosted mode: sign-up, plans, subscriptions and billing (docs/hosted-spec.md, worker/billing/). Off by default.
+
+export type BillingProviderId = "polar" | "stripe" | "lemonsqueezy";
+/** `manual`: plan assigned by an instance admin (Admin → Workspaces), no provider subscription. */
+export type BillingSource = BillingProviderId | "manual";
+export type BillingInterval = "month" | "year";
+/** canceled = paid until `currentPeriodEnd`, then the free plan / locked. expired = ended. */
+export type BillingStatus = "none" | "trialing" | "active" | "past_due" | "canceled" | "expired";
+/**
+ * Effective state of a workspace: unlimited (billing off or exempt), plan (paid or manual), trial, free (the plan marked
+ * free), locked (read-only: nothing new can be created, scheduled or published).
+ */
+export type BillingState = "unlimited" | "plan" | "trial" | "free" | "locked";
+
+/** Limit keys of Postflare plans (`plans.limits`; absent or null = unlimited). */
+export type PlanLimitKey = "accounts" | "posts_per_month" | "x_posts_per_month" | "members" | "storage_mb" | "api";
+export type PlanLimits = Partial<Record<Exclude<PlanLimitKey, "api">, number | null>> & { api?: boolean | null };
+
+/** Catalog entry of a limit key (GET /api/admin/billing `limits`, for the plan editor). */
+export interface PlanLimitInfo {
+  key: PlanLimitKey;
+  label: string;
+  /** "count" limits are whole numbers (0 allowed), "boolean" ones on/off. */
+  kind: "count" | "boolean";
+  description: string;
+}
+
+/** Product / price / variant ids of a plan per provider and interval (pasted from the provider's dashboard). */
+export type ProviderPrices = Partial<Record<BillingProviderId, Partial<Record<BillingInterval, string>>>>;
+
+/** A plan as shown on pricing tables (GET /api/billing/plans, GET /api/billing `plans`). */
+export interface PublicPlanDTO {
+  id: string;
+  name: string;
+  description: string;
+  /** Display strings ("10 accounts", "Priority support"). */
+  features: string[];
+  limits: PlanLimits;
+  /** Integer cents; null = interval not offered. */
+  priceMonth: number | null;
+  priceYear: number | null;
+  currency: string;
+  isFree: boolean;
+  isTrialDefault: boolean;
+  /** "Most popular" badge. */
+  highlight: boolean;
+  position: number;
+  /** Intervals that can be bought right now (price set and a product id for the active provider). */
+  checkoutIntervals: BillingInterval[];
+}
+
+/** A plan in Admin → Billing (GET/POST/PATCH /api/admin/billing/plans). */
+export interface AdminPlanDTO extends Omit<PublicPlanDTO, "checkoutIntervals"> {
+  providerPrices: ProviderPrices;
+  /** Archived plans (false) keep their subscribers but are not sold. */
+  active: boolean;
+  /** Workspaces on this plan (any status). */
+  workspaces: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** Body of POST /api/admin/billing/plans (all fields) and PATCH /api/admin/billing/plans/:id (any subset). */
+export interface PlanInput {
+  name: string;
+  description?: string;
+  features?: string[];
+  limits?: PlanLimits;
+  priceMonth?: number | null;
+  priceYear?: number | null;
+  currency?: string;
+  providerPrices?: ProviderPrices;
+  /** At most one plan is free and one is the trial default: setting it clears the others. */
+  isFree?: boolean;
+  isTrialDefault?: boolean;
+  highlight?: boolean;
+  position?: number;
+  active?: boolean;
+}
+
+/** GET /api/billing/plans (public): the pricing table. `plans` is empty while billing is off. */
+export interface PublicPlansDTO {
+  enabled: boolean;
+  /** Currency of the first plan (USD when there is none). */
+  currency: string;
+  plans: PublicPlanDTO[];
+}
+
+/** Usage of a workspace next to its limits (GET /api/billing `usage`). */
+export interface BillingUsageDTO {
+  accounts: number;
+  postsThisMonth: number;
+  xPostsThisMonth: number;
+  /** Members + pending invitations. */
+  members: number;
+  storageMb: number;
+}
+
+/** GET /api/billing: the current workspace's plan, status, usage and the plans it can buy. */
+export interface BillingDTO {
+  /** Billing is on for the instance. When false everything else is informational and the UI hides billing. */
+  enabled: boolean;
+  /** Comped workspace (or the demo): never limited. */
+  exempt: boolean;
+  state: BillingState;
+  /** Effective plan (the trial plan while trialing, the free plan when it applies), null when unlimited or locked. */
+  plan: PublicPlanDTO | null;
+  /** Plan stored on the workspace (subscription / trial / manual), even when it no longer applies. */
+  subscribedPlanId: string | null;
+  status: BillingStatus;
+  trialEndsAt: number | null;
+  currentPeriodEnd: number | null;
+  /** End of the past-due grace period (past_due only). */
+  graceEndsAt: number | null;
+  interval: BillingInterval | null;
+  provider: BillingSource | null;
+  /** A provider subscription exists: change plans in the portal ("Manage billing"), not through checkout. */
+  hasSubscription: boolean;
+  /** Null while billing is off. */
+  usage: BillingUsageDTO | null;
+  /** Effective limits; null = unlimited. Locked workspaces get null too (check `state`). */
+  limits: PlanLimits | null;
+  plans: PublicPlanDTO[];
+  /** The user has billing.manage (upgrade, portal). */
+  canManage: boolean;
+}
+
+/** Body of POST /api/billing/checkout → `{ url }` (redirect the browser there). */
+export interface CheckoutInput {
+  planId: string;
+  interval: BillingInterval;
+}
+
+/** 402 answer of an action blocked by the plan (locked workspace or limit reached). */
+export interface PlanLimitErrorDTO {
+  error: string;
+  code: "plan_limit";
+  /** The limit key, or "locked" when the workspace has no active plan. */
+  limit: PlanLimitKey | "locked";
+  used: number | null;
+  max: number | boolean | null;
+  /** Billing tab of the workspace settings. */
+  upgradeUrl: string;
+}
+
+/** A credential field of a provider card in Admin → Billing. */
+export interface BillingProviderFieldDTO {
+  key: string;
+  label: string;
+  secret: boolean;
+  help?: string;
+  /** A value is stored (secrets are never returned). */
+  set: boolean;
+  /** Current value of non-secret fields (null for secrets and unset fields). */
+  value: string | null;
+}
+
+export interface AdminBillingProviderDTO {
+  id: BillingProviderId;
+  name: string;
+  /** Polar: merchant of record, handles VAT/sales tax, no Stripe account needed. */
+  recommended: boolean;
+  description: string;
+  /** Every required field is set. */
+  configured: boolean;
+  /** Polar sandbox (sandbox-api.polar.sh); null for providers without a separate sandbox API. */
+  sandbox: boolean | null;
+  /** Paste into the provider's webhook settings. */
+  webhookUrl: string;
+  /** Webhook events to subscribe to. */
+  events: string[];
+  fields: BillingProviderFieldDTO[];
+  /** The provider's dashboard page where products/prices and webhooks are created. */
+  dashboardUrl: string;
+}
+
+/** GET / PATCH /api/admin/billing (instance.settings.manage). */
+export interface AdminBillingDTO {
+  /** The admin switch (setting billing_enabled). */
+  enabled: boolean;
+  /** Billing is in effect: enabled AND the active provider is configured AND an active paid plan exists. */
+  active: boolean;
+  /** Why billing cannot be (or is not) in effect; empty when active. */
+  problems: string[];
+  /** Provider used for new checkouts (null = none chosen). */
+  activeProvider: BillingProviderId | null;
+  providers: AdminBillingProviderDTO[];
+  trialDays: number;
+  pastDueGraceDays: number;
+  signupEnabled: boolean;
+  /** EMAIL binding + EMAIL_FROM: sign-ups are verified by email (otherwise immediate). */
+  emailConfigured: boolean;
+  limits: PlanLimitInfo[];
+}
+
+/** Body of PATCH /api/admin/billing (any subset). Enabling is refused (400) until a provider and a paid plan exist. */
+export interface AdminBillingInput {
+  enabled?: boolean;
+  activeProvider?: BillingProviderId | null;
+  trialDays?: number;
+  pastDueGraceDays?: number;
+  signupEnabled?: boolean;
+}
+
+/** Body of PUT /api/admin/billing/providers/:id. Omitted or empty secret fields keep their stored value. */
+export interface BillingProviderInput {
+  values: Record<string, string>;
+  /** Polar only. */
+  sandbox?: boolean;
+}
+
+/** POST /api/admin/billing/providers/:id/test */
+export type BillingProviderTestDTO = { ok: true; account?: string } | { ok: false; error: string };
+
+/** Billing of one workspace for instance admins (GET/PATCH /api/admin/workspaces/:id/billing, GET /api/admin/billing/workspaces). */
+export interface AdminWorkspaceBillingDTO {
+  workspaceId: string;
+  workspaceName: string;
+  demo: boolean;
+  exempt: boolean;
+  state: BillingState;
+  planId: string | null;
+  planName: string | null;
+  status: BillingStatus;
+  trialEndsAt: number | null;
+  currentPeriodEnd: number | null;
+  interval: BillingInterval | null;
+  provider: BillingSource | null;
+  customerId: string | null;
+  subscriptionId: string | null;
+  updatedAt: number | null;
+  createdAt: number;
+}
+
+/** Body of PATCH /api/admin/workspaces/:id/billing (instance.users.manage). A plan set here is provider "manual". */
+export interface AdminWorkspaceBillingInput {
+  exempt?: boolean;
+  /** null removes the plan (status none). */
+  planId?: string | null;
+  status?: BillingStatus;
+  trialEndsAt?: number | null;
+  currentPeriodEnd?: number | null;
+}
+
+/** GET / PATCH /api/admin/signup (instance.settings.manage): the "Public sign-up" card. */
+export interface AdminSignupDTO {
+  enabled: boolean;
+  /** Without email, sign-up is immediate (no verification): hosted instances should configure email first. */
+  emailConfigured: boolean;
+}
+
+/** Body of POST /api/auth/signup */
+export interface SignupInput {
+  name: string;
+  email: string;
+  password: string;
+  workspaceName?: string;
+}
+
+/**
+ * POST /api/auth/signup → `{ ok: true, verify: true }` (a confirmation link was emailed; the same answer whether or not
+ * the email already has an account) or `{ ok: true, verify: false, workspaceId }` (no email configured: signed in).
+ */
+export type SignupDTO = { ok: true; verify: true } | { ok: true; verify: false; workspaceId: string };

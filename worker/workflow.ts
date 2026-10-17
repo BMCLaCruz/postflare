@@ -1,5 +1,6 @@
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep, type WorkflowStepConfig } from "cloudflare:workers";
 import { freshAccount, getAccountRow, markReconnect, providerContext } from "./lib/accounts";
+import { BILLING_COLUMNS, entitlements, LOCKED_MESSAGE, snapshotFromRow, type BillingColumnsRow } from "./billing/entitlements";
 import { isDemoPost, publishDemoPosts } from "./lib/demo";
 import { loadMediaItems } from "./lib/media";
 import { nextCheckpoint } from "./lib/metrics";
@@ -54,6 +55,22 @@ function normalize<T>(v: unknown): Outcome<T> {
   return { ok: true, value: v as T };
 }
 
+/**
+ * One query for the "sandbox check" step: is the post in a demo workspace, and is its workspace locked (hosted mode:
+ * billing on, not exempt, no active plan and no free plan)? Already scheduled posts are not held to the plan's limits.
+ */
+export async function publishGate(db: D1Database, postId: string): Promise<{ demo: boolean; locked: boolean }> {
+  const row = await db
+    .prepare(
+      `SELECT w.is_demo, ${BILLING_COLUMNS} FROM posts p LEFT JOIN accounts a ON a.id = p.account_id
+       JOIN workspaces w ON w.id = p.workspace_id OR w.id = a.workspace_id WHERE p.id = ? ORDER BY w.is_demo DESC LIMIT 1`,
+    )
+    .bind(postId)
+    .first<BillingColumnsRow>();
+  if (!row) return { demo: false, locked: false };
+  return { demo: !!row.is_demo, locked: entitlements(snapshotFromRow(row)).state === "locked" };
+}
+
 export const needsCheckMessage = (platform: string, detail?: string) =>
   `We couldn't confirm whether ${platform} accepted the post. Check your profile, then mark it as published or retry.${detail ? ` (${detail})` : ""}`;
 
@@ -92,7 +109,24 @@ export class PublishWorkflow extends WorkflowEntrypoint<Env, PublishParams> {
     if (!claimed) return { skipped: true };
 
     // Demo workspace (sandboxed): simulate, never call the platform. Demo posts normally get no workflow at all.
-    const demo = await step.do("sandbox check", async () => isDemoPost(this.env.DB, postId));
+    // Same query: hosted mode's locked state (no active plan) fails the post instead of publishing it. Instances that
+    // ran this step before returned a plain boolean (demo).
+    const gate = await step.do("sandbox check", async () => publishGate(this.env.DB, postId));
+    const demo = typeof gate === "boolean" ? gate : gate.demo;
+    if (typeof gate !== "boolean" && gate.locked && !demo) {
+      await step.do("mark locked", async () => {
+        const db = this.env.DB;
+        const t = now();
+        await db.batch([
+          db
+            .prepare("UPDATE posts SET status = 'failed', error = ?, updated_at = ? WHERE id = ? AND revision = ? AND status = 'publishing'")
+            .bind(LOCKED_MESSAGE, t, postId, revision),
+          guardedLog(db, postId, revision, "failed", t, "error", `Publishing failed: ${LOCKED_MESSAGE}`),
+          publishEventStatement(db, { postId, revision, status: "failed", t, meter, message: LOCKED_MESSAGE }),
+        ]);
+      });
+      return { failed: true };
+    }
     if (demo) {
       await step.sleep("simulated publish", "2 seconds");
       await step.do("simulate publish", async () => {

@@ -20,5 +20,11 @@ declare namespace Cloudflare {
     CAMPAIGNS_DB: D1Database;
     /** Own instance for the sign-in link tests (they configure EMAIL_FROM and a fake EMAIL binding). */
     MAGIC_LINK_DB: D1Database;
+    /** Own instance for hosted mode: plans, limits, trials, checkout/portal with mocked fetch, admin billing. */
+    BILLING_DB: D1Database;
+    /** Own instance for the payment provider webhooks (signatures, idempotency, status transitions). */
+    WEBHOOKS_DB: D1Database;
+    /** Own instance for public sign-up (with a fake EMAIL binding, and without email). */
+    SIGNUP_DB: D1Database;
   }
 }

@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import type { ApiKeyDTO } from "../../shared/types";
+import { enforce } from "../billing/entitlements";
 import { createApiKey, forbidDemoUser, isInstanceAdmin, requireInstancePermission, requirePermission, wsId, type AppEnv } from "../lib/auth";
 import { EXPERIMENTAL_SETTING, MEDIA_RETENTION_SETTING, baseUrl, experimentalEnabled, getSetting, mediaRetentionDays, setSetting } from "../lib/settings";
 
@@ -65,6 +66,8 @@ settingsRoutes.post("/keys", forbidDemoUser, requirePermission("apikeys.manage")
   if (c.var.auth !== "session") return c.json({ error: "Create API keys in the web app" }, 403);
   const { name } = await c.req.json<{ name: string }>();
   if (!name?.trim()) return c.json({ error: "Name is required" }, 400);
+  // Hosted mode: the plan must include API access.
+  await enforce(c, { api: 1 });
   return c.json(await createApiKey(c.env, name.trim().slice(0, 100), c.var.user.id, wsId(c)), 201);
 });
 

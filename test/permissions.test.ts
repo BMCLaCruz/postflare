@@ -17,6 +17,7 @@ describe("permission catalog", () => {
       "media.write",
       "playbooks.manage",
       "apikeys.manage",
+      "billing.manage",
     ]);
     for (const p of PERMISSIONS) expect(p.description && p.label && p.action, p.key).toBeTruthy();
   });
@@ -26,7 +27,9 @@ describe("permission catalog", () => {
     expect(BUILTIN_ROLES.role_instance_member.permissions).toEqual(["instance.workspaces.create"]);
     expect(BUILTIN_ROLES.role_ws_owner.permissions).toEqual(WORKSPACE_PERMISSIONS);
     expect(BUILTIN_ROLES.role_ws_admin.permissions).not.toContain("workspace.delete");
-    expect(BUILTIN_ROLES.role_ws_admin.permissions.length).toBe(WORKSPACE_PERMISSIONS.length - 1);
+    // Admin: everything but deleting the workspace and billing (Owner only, docs/hosted-spec.md).
+    expect(BUILTIN_ROLES.role_ws_admin.permissions).not.toContain("billing.manage");
+    expect(BUILTIN_ROLES.role_ws_admin.permissions.length).toBe(WORKSPACE_PERMISSIONS.length - 2);
     expect(BUILTIN_ROLES.role_ws_viewer.permissions).toEqual(["accounts.read", "posts.read", "media.read"]);
     // Admins cannot grant Owner; Editors cannot grant Admin.
     expect(isSubset(BUILTIN_ROLES.role_ws_owner.permissions, BUILTIN_ROLES.role_ws_admin.permissions)).toBe(false);

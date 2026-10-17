@@ -1,6 +1,7 @@
 import type { Context, MiddlewareHandler } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import type { InstancePermission, RoleRef, WorkspacePermission } from "../../shared/types";
+import { BILLING_COLUMNS, entitlements, snapshotFromRow, upgradeUrl, type BillingColumnsRow, type BillingSnapshot } from "../billing/entitlements";
 import { demoEnabled } from "./demo";
 import { DEMO_WORKSPACE_PERMISSIONS, ROLE, WORKSPACE_PERMISSIONS, parsePermissions, permissionError } from "./permissions";
 import { newId, now, randomToken, sha256Hex } from "./util";
@@ -12,7 +13,7 @@ export interface CurrentUser {
   id: string;
   name: string;
   email: string;
-  status: "active" | "disabled";
+  status: "active" | "disabled" | "pending";
   role: RoleRef;
   /** The shared demo visitor (worker/lib/demo.ts): no instance permissions, only reaches demo workspaces. */
   demo: boolean;
@@ -28,6 +29,8 @@ export interface CurrentWorkspace {
   viaAdmin: boolean;
   /** Sandboxed demo workspace: nothing is published, no accounts can be connected, no media uploaded. */
   demo: boolean;
+  /** Subscription state read with the workspace (worker/billing/entitlements.ts): limits need no extra query to know billing is off. */
+  billing: BillingSnapshot;
 }
 
 export type AppEnv = {
@@ -54,7 +57,7 @@ interface UserRow {
   id: string;
   name: string;
   email: string;
-  status: "active" | "disabled";
+  status: "active" | "disabled" | "pending";
   role_id: string;
   role_name: string;
   role_permissions: string;
@@ -147,7 +150,7 @@ export async function createApiKey(env: Env, name: string, userId: string, works
   return { id, token };
 }
 
-interface WorkspaceRow {
+interface WorkspaceRow extends BillingColumnsRow {
   id: string;
   name: string;
   role_id: string | null;
@@ -158,8 +161,8 @@ interface WorkspaceRow {
   user_demo: number | null;
 }
 
-/** Columns every workspace-access query selects besides the role (`?` = the user id). */
-const WS_COLUMNS = "w.id, w.name, w.is_demo, (SELECT is_demo FROM users WHERE id = ?) AS user_demo";
+/** Columns every workspace-access query selects besides the role (`?` = the user id), with the billing state. */
+const WS_COLUMNS = `w.id, w.name, w.is_demo, (SELECT is_demo FROM users WHERE id = ?) AS user_demo, ${BILLING_COLUMNS}`;
 
 export function toWorkspace(row: WorkspaceRow, admin: boolean): CurrentWorkspace | null {
   if (row.user_demo) {
@@ -167,7 +170,15 @@ export function toWorkspace(row: WorkspaceRow, admin: boolean): CurrentWorkspace
     // to another workspace or gives it a bigger role).
     if (!row.is_demo || !row.role_id) return null;
     const perms = parsePermissions(row.permissions, "workspace").filter((p) => DEMO_WORKSPACE_PERMISSIONS.includes(p as WorkspacePermission));
-    return { id: row.id, name: row.name, role: { id: row.role_id, name: row.role_name ?? row.role_id }, permissions: perms as WorkspacePermission[], viaAdmin: false, demo: true };
+    return {
+      id: row.id,
+      name: row.name,
+      role: { id: row.role_id, name: row.role_name ?? row.role_id },
+      permissions: perms as WorkspacePermission[],
+      viaAdmin: false,
+      demo: true,
+      billing: snapshotFromRow(row),
+    };
   }
   if (!row.role_id && !admin) return null;
   return {
@@ -178,6 +189,7 @@ export function toWorkspace(row: WorkspaceRow, admin: boolean): CurrentWorkspace
     permissions: admin ? [...WORKSPACE_PERMISSIONS] : (parsePermissions(row.permissions, "workspace") as WorkspacePermission[]),
     viaAdmin: !row.role_id,
     demo: !!row.is_demo,
+    billing: snapshotFromRow(row),
   };
 }
 
@@ -214,7 +226,10 @@ export async function firstWorkspace(db: D1Database, userId: string, instancePer
   if (row) return toWorkspace(row, admin);
   if (!admin) return null;
   const any = await db
-    .prepare("SELECT id, name, is_demo, 0 AS user_demo, NULL AS role_id, NULL AS role_name, NULL AS permissions FROM workspaces w ORDER BY is_demo, created_at LIMIT 1")
+    .prepare(
+      `SELECT w.id, w.name, w.is_demo, 0 AS user_demo, NULL AS role_id, NULL AS role_name, NULL AS permissions, ${BILLING_COLUMNS}
+       FROM workspaces w ORDER BY w.is_demo, w.created_at LIMIT 1`,
+    )
     .first<WorkspaceRow>();
   return any ? toWorkspace(any, true) : null;
 }
@@ -232,6 +247,20 @@ export async function authenticate(c: Ctx): Promise<Response | null> {
     // permissions (users, roles, platform secrets, settings) and no admin override, even for an instance admin.
     const ws = key.workspaceId ? await workspaceAccess(db, key.user.id, [], key.workspaceId) : null;
     if (!ws) return c.json({ error: "This API key no longer has access to its workspace" }, 401);
+    // Hosted mode: plans without API access refuse API keys (and so the CLI and MCP) with 402.
+    if (entitlements(ws.billing).limits?.api === false) {
+      return c.json(
+        {
+          error: "This workspace's plan doesn't include API access (API keys, the CLI and MCP). Upgrade the plan in Workspace settings → Billing.",
+          code: "plan_limit",
+          limit: "api",
+          used: null,
+          max: false,
+          upgradeUrl: upgradeUrl(c.req.url),
+        },
+        402,
+      );
+    }
     c.set("auth", "api_key");
     c.set("apiKeyId", key.apiKeyId);
     c.set("user", key.user);
@@ -279,6 +308,8 @@ export function isCrossSiteMutation(c: Ctx): boolean {
  * receive the social accounts the victim connects) or sign them out.
  */
 export const sameOriginMutations: MiddlewareHandler<AppEnv> = async (c, next) => {
+  // Payment provider webhooks (public, signed, never from a browser) are exempt.
+  if (c.req.path.startsWith("/api/billing/webhooks/")) return next();
   if (isCrossSiteMutation(c)) return c.json({ error: "Cross-origin request blocked" }, 403);
   return next();
 };
