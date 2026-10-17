@@ -305,6 +305,21 @@ describe("trials and limits", () => {
     await run("DELETE FROM accounts WHERE id = ?", disabled);
   });
 
+  it("accounts: an OAuth callback over the limit names it in the redirect (the app opens the upgrade dialog)", async () => {
+    expect((await call(ada, "/api/platforms/x", { method: "PUT", body: { values: { clientId: "cid", clientSecret: "secret" } } })).status).toBe(200);
+    const bobId = (await call(bob, "/api/me")).json.user.id;
+    await run("INSERT INTO oauth_states (state, provider, code_verifier, user_id, workspace_id, created_at) VALUES ('state-over', 'x', 'v', ?, ?, ?)", bobId, trialWs, Date.now());
+    mockFetch((url) =>
+      url.includes("/oauth2/token") ? { access_token: "at", refresh_token: "rt", expires_in: 7200, token_type: "bearer" } : { data: { id: "x-over-1", username: "over", name: "Over" } },
+    );
+    const res = await call(bob, "/oauth/x/callback?state=state-over&code=c");
+    expect(res.status).toBe(302);
+    const q = new URL(res.headers.get("location")!, ORIGIN).searchParams;
+    expect(q.get("planLimit")).toBe("accounts");
+    expect(q.get("error")).toMatch(/connected accounts/);
+    expect(await one("SELECT id FROM accounts WHERE external_id = 'x-over-1'")).toBeNull();
+  });
+
   it("posts per month: drafts are free, scheduled posts count in their month", async () => {
     const c = { ...bob, ws: trialWs };
     const acc = await trialAccount();

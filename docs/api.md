@@ -150,7 +150,7 @@ exporting and deleting still work). `upgradeUrl` = `<origin>/workspace?tab=billi
 
 | key | counted as | checked by |
 |---|---|---|
-| `accounts` | accounts of the workspace that are not disabled | `POST /connect/:provider`, OAuth callbacks (only accounts new to the workspace; reconnects are free), `PATCH /accounts/:id {status: "active"}` of a disabled account |
+| `accounts` | accounts of the workspace that are not disabled | `POST /connect/:provider`, OAuth callbacks (only accounts new to the workspace; reconnects are free; over the limit they redirect to `/accounts?error=…&planLimit=accounts`), `PATCH /accounts/:id {status: "active"}` of a disabled account |
 | `posts_per_month` | posts published or scheduled in a UTC calendar month, one per account (drafts and failed posts are free; deleting a published post does not free its slot, deleting or cancelling a scheduled one does) | `POST /posts` with a schedule or `"now"` (REST, MCP `create_post`, CLI, composer, duplicate), `PATCH /posts/:id` that schedules a draft/failed/cancelled post or moves it to another month, `POST /posts/:id/retry`; checked against the month each post is scheduled in |
 | `x_posts_per_month` | the same, X accounts only | the same |
 | `members` | members + pending invitations | `POST /invitations` (into a workspace), `POST /invitations/accept` (existing workspace) |

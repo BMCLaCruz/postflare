@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { enforceWorkspace } from "../billing/entitlements";
+import { PlanLimitError, enforceWorkspace } from "../billing/entitlements";
 import { sessionUser, workspaceAccess, type AppEnv } from "../lib/auth";
 import { providerContext, saveConnectedAccounts } from "../lib/accounts";
 import { META_PROVIDERS, deletionStatus, handleDataDeletion } from "../lib/meta-deletion";
@@ -80,6 +80,8 @@ oauthRoutes.on(["GET", "POST"], ["/:provider/callback", "/:provider/callback/"],
     );
     return back({ connected: String(ids.length), provider: provider.id, workspaceId: ws.id });
   } catch (err) {
+    // A plan limit (402 elsewhere) names its key so the app opens the upgrade dialog instead of a plain error.
+    if (err instanceof PlanLimitError) return back({ error: err.body.error, planLimit: err.body.limit });
     return back({ error: `${provider.name}: ${errorMessage(err)}` });
   }
 });
