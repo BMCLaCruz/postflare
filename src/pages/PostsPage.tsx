@@ -1,11 +1,13 @@
 import { useMemo, useState } from "react";
 import { useSearchParams } from "react-router";
 import { Ban, ExternalLink, Film, Image as ImageIcon, Layers, ListChecks, Pencil, PenSquare, RotateCcw, Search, Trash2 } from "lucide-react";
+import { AccountFilterSelect } from "../components/accounts/AccountFilterSelect";
 import { AccountAvatar } from "../components/ProviderLogo";
 import { EDITABLE, usePostActions, usePostDrawer } from "../components/posts/PostDrawer";
 import { Button, IconButton } from "../components/ui/Button";
 import { Input, Select } from "../components/ui/Form";
 import { Card, EmptyState, PageHeader, Skeleton, StatusBadge } from "../components/ui/Misc";
+import { parseAccountFilter } from "../lib/accountGroups";
 import { api } from "../lib/api";
 import { useApp } from "../lib/app";
 import { cn, truncate } from "../lib/format";
@@ -31,13 +33,15 @@ export function PostsPage() {
   const canWrite = useSession().can("posts.write");
   const [params, setParams] = useSearchParams();
   const status = (params.get("status") ?? "") as "" | PostStatus;
-  const accountId = params.get("account") ?? "";
+  // An account id or `group:<id>` (AccountFilterSelect).
+  const accountFilter = params.get("account") ?? "";
+  const { accountId, groupId: accountGroupId } = parseAccountFilter(accountFilter);
   const playbookId = params.get("playbook") ?? "";
   const playbooks = usePlaybookList();
   const [q, setQ] = useState("");
   const { accounts, accountMap, providerMap, tz } = useApp();
   const composer = useComposer();
-  const posts = useFetch(`posts:${accountId}`, () => api.posts.list({ order: "desc", limit: 1000, accountId: accountId || undefined }), ["posts"]);
+  const posts = useFetch(`posts:${accountFilter}`, () => api.posts.list({ order: "desc", limit: 1000, accountId, accountGroupId }), ["posts"]);
 
   const setParam = (k: string, v: string) => {
     const next = new URLSearchParams(params);
@@ -139,14 +143,7 @@ export function PostsPage() {
             </Select>
           )}
           {accounts.length > 0 && (
-            <Select value={accountId} onChange={(e) => setParam("account", e.target.value)} className="w-44" aria-label="Filter by account">
-              <option value="">All accounts</option>
-              {accounts.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name}
-                </option>
-              ))}
-            </Select>
+            <AccountFilterSelect value={accountFilter} onChange={(v) => setParam("account", v)} className="w-44" />
           )}
         </div>
       </div>

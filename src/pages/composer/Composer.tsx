@@ -170,6 +170,20 @@ export default function Composer({ options, onClose }: { options: ComposerOption
     );
   }
 
+  const selectAccounts = (list: AccountDTO[], on: boolean) => {
+    const ids = new Set(list.map((a) => a.id));
+    if (!on && ids.has(tab)) setTab("shared");
+    update((s) => {
+      if (!on) return { ...s, selected: s.selected.filter((x) => !ids.has(x)) };
+      const settings = { ...s.settings };
+      for (const a of list) {
+        const p = providerOf(a);
+        if (!settings[a.id] && p) settings[a.id] = defaultValues(p.settingsFields);
+      }
+      return { ...s, selected: [...s.selected, ...list.map((a) => a.id).filter((id) => !s.selected.includes(id))], settings };
+    });
+  };
+
   const toggleAccount = (a: AccountDTO) => {
     if (state.selected.includes(a.id) && tab === a.id) setTab("shared");
     update((s) => {
@@ -347,7 +361,7 @@ export default function Composer({ options, onClose }: { options: ComposerOption
                 <span className="text-xs text-zinc-400">{selectedAccounts.length ? `${selectedAccounts.length} selected` : "Select one or more accounts"}</span>
               )}
             </div>
-            <AccountPicker selected={state.selected} onToggle={toggleAccount} locked={!!editing} onNavigate={onClose} />
+            <AccountPicker selected={state.selected} onToggle={toggleAccount} onSelectMany={selectAccounts} locked={!!editing} onNavigate={onClose} />
           </section>
 
           <PlaybookPicker value={playbook} variant={variant} onChange={setPlaybook} onVariant={setVariant} onNavigate={onClose} />

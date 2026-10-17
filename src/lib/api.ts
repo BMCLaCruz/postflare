@@ -1,5 +1,7 @@
 import type {
   AccountDTO,
+  AccountGroupDTO,
+  AccountGroupInput,
   AdminOverviewDTO,
   AppDTO,
   CampaignLinkDTO,
@@ -108,6 +110,8 @@ export interface PostQuery {
   to?: number;
   status?: string;
   accountId?: string;
+  /** Posts of the accounts in this account group ("none" = ungrouped accounts). */
+  accountGroupId?: string;
   groupId?: string;
   order?: "asc" | "desc";
   limit?: number;
@@ -181,6 +185,10 @@ export const api = {
   accounts: {
     list: () => get<AccountDTO[]>("/accounts"),
     setStatus: (id: string, status: "active" | "disabled") => request<AccountDTO>("PATCH", `/accounts/${id}`, { status }),
+    setGroup: (id: string, groupId: string | null) => request<AccountDTO>("PATCH", `/accounts/${id}`, { groupId }),
+    /** Move many accounts at once (one request); `groupId: null` ungroups them. */
+    moveToGroup: (accountIds: string[], groupId: string | null) =>
+      request<{ ok: true; updated: number; groupId: string | null }>("POST", "/accounts/group", { accountIds, groupId }),
     remove: (id: string) => request<{ ok: true }>("DELETE", `/accounts/${id}`),
     refresh: (id: string) => request<AccountDTO>("POST", `/accounts/${id}/refresh`),
     options: (id: string, key: string, settings: Record<string, unknown>) =>
@@ -209,6 +217,12 @@ export const api = {
     resolve: (id: string, input: ResolvePostInput) => request<PostDTO>("POST", `/posts/${id}/resolve`, input),
     cancel: (id: string) => request<PostDTO>("POST", `/posts/${id}/cancel`),
     remove: (id: string) => request<{ ok: true }>("DELETE", `/posts/${id}`),
+  },
+  accountGroups: {
+    list: () => get<AccountGroupDTO[]>("/account-groups"),
+    create: (input: AccountGroupInput) => request<AccountGroupDTO>("POST", "/account-groups", input),
+    update: (id: string, input: AccountGroupInput) => request<AccountGroupDTO>("PATCH", `/account-groups/${encodeURIComponent(id)}`, input),
+    remove: (id: string) => request<{ ok: true; ungrouped: number }>("DELETE", `/account-groups/${encodeURIComponent(id)}`),
   },
   overview: () => get<Overview>("/overview"),
   playbooks: {

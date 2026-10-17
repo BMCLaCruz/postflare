@@ -1,4 +1,4 @@
-import { forwardRef, useId, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from "react";
+import { forwardRef, useEffect, useId, useRef, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes } from "react";
 import { ChevronDown } from "lucide-react";
 import { cn } from "../../lib/format";
 
@@ -110,9 +110,14 @@ export function Switch({
   );
 }
 
-export function Checkbox({ className, ...rest }: InputHTMLAttributes<HTMLInputElement>) {
+export function Checkbox({ className, indeterminate, ...rest }: InputHTMLAttributes<HTMLInputElement> & { indeterminate?: boolean }) {
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = !!indeterminate;
+  }, [indeterminate]);
   return (
     <input
+      ref={ref}
       type="checkbox"
       className={cn(
         "size-4 rounded border-zinc-300 text-brand-600 accent-brand-600 focus:ring-brand-500 dark:border-zinc-600",

@@ -1,6 +1,9 @@
-import { Check, Plus } from "lucide-react";
+import { useMemo } from "react";
+import { Check, Layers, Plus } from "lucide-react";
 import { Link } from "react-router";
-import { AccountAvatar } from "../../components/ProviderLogo";
+import { GroupDot } from "../../components/accounts/AccountGroups";
+import { AccountAvatar, ProviderLogo } from "../../components/ProviderLogo";
+import { pickerSections, selectable, selectionState, type AccountSection } from "../../lib/accountGroups";
 import { useApp } from "../../lib/app";
 import { cn } from "../../lib/format";
 import type { AccountDTO } from "../../lib/types";
@@ -8,16 +11,21 @@ import type { AccountDTO } from "../../lib/types";
 export function AccountPicker({
   selected,
   onToggle,
+  onSelectMany,
   locked,
   onNavigate,
 }: {
   selected: string[];
   onToggle: (account: AccountDTO) => void;
+  /** "Select all in group": select (or deselect) these accounts at once. */
+  onSelectMany?: (accounts: AccountDTO[], on: boolean) => void;
   locked?: boolean;
   onNavigate: () => void;
 }) {
-  const { accounts, providerMap } = useApp();
+  const { accounts, providerMap, groups } = useApp();
   const list = locked ? accounts.filter((a) => selected.includes(a.id)) : accounts;
+  // By group when the workspace has groups, else by platform.
+  const sections = useMemo(() => pickerSections(list, groups, (id) => providerMap.get(id)?.name ?? id), [list, groups, providerMap]);
 
   if (!accounts.length)
     return (
@@ -29,16 +37,17 @@ export function AccountPicker({
       </div>
     );
 
-  const groups = new Map<string, AccountDTO[]>();
-  for (const a of list) groups.set(a.provider, [...(groups.get(a.provider) ?? []), a]);
+  // Labels only help when there is something to tell apart (or groups to select at once).
+  const labelled = !locked && (groups.length > 0 || sections.length > 1);
 
   return (
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-3">
-      {[...groups.entries()].map(([pid, accs]) => {
-        const provider = providerMap.get(pid);
-        return (
-          <div key={pid} className="flex items-center gap-1.5" role="group" aria-label={provider?.name ?? pid}>
-            {accs.map((a) => {
+    <div className={cn("flex flex-wrap items-start", labelled ? "gap-x-6 gap-y-3" : "gap-x-4 gap-y-3")}>
+      {sections.map((s) => (
+        <div key={s.key} role="group" aria-label={s.title} className="min-w-0">
+          {labelled && <SectionLabel section={s} selected={selected} onSelectMany={onSelectMany} provider={s.provider ? providerMap.get(s.provider) : undefined} />}
+          <div className="flex flex-wrap items-center gap-1.5">
+            {s.accounts.map((a) => {
+              const provider = providerMap.get(a.provider);
               const on = selected.includes(a.id);
               const disabled = a.status === "disabled";
               return (
@@ -48,7 +57,7 @@ export function AccountPicker({
                   disabled={disabled || locked}
                   onClick={() => onToggle(a)}
                   aria-pressed={on}
-                  title={`${a.name}${a.username ? ` (@${a.username})` : ""} · ${provider?.name ?? pid}${disabled ? " · disabled" : a.status === "reconnect" ? " · needs reconnect" : ""}`}
+                  title={`${a.name}${a.username ? ` (@${a.username})` : ""} · ${provider?.name ?? a.provider}${disabled ? " · disabled" : a.status === "reconnect" ? " · needs reconnect" : ""}`}
                   className={cn(
                     "relative rounded-full p-0.5 transition disabled:cursor-not-allowed",
                     on ? "ring-2 ring-brand-500" : "ring-2 ring-transparent hover:ring-zinc-300 dark:hover:ring-zinc-600",
@@ -70,8 +79,45 @@ export function AccountPicker({
               );
             })}
           </div>
-        );
-      })}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function SectionLabel({
+  section: s,
+  selected,
+  onSelectMany,
+  provider,
+}: {
+  section: AccountSection;
+  selected: string[];
+  onSelectMany?: (accounts: AccountDTO[], on: boolean) => void;
+  provider: Parameters<typeof ProviderLogo>[0]["provider"];
+}) {
+  const state = selectionState(s.accounts, selected);
+  const pool = selectable(s.accounts);
+  return (
+    <div className="mb-1.5 flex items-center gap-1.5 text-xs">
+      {s.kind === "platform" ? (
+        <ProviderLogo provider={provider} size="xs" />
+      ) : s.kind === "group" ? (
+        <GroupDot color={s.group?.color} className="size-2" />
+      ) : (
+        <Layers className="size-3 text-zinc-400" />
+      )}
+      <span className="max-w-40 truncate font-medium text-zinc-600 dark:text-zinc-300">{s.title}</span>
+      {onSelectMany && pool.length > 1 && (
+        <button
+          type="button"
+          onClick={() => onSelectMany(pool, state !== "all")}
+          className="rounded px-1 font-medium text-brand-600 hover:bg-brand-50 hover:underline dark:text-brand-400 dark:hover:bg-brand-950/40"
+          title={state === "all" ? `Deselect every account in ${s.title}` : `Select every account in ${s.title}`}
+        >
+          {state === "all" ? "None" : "All"}
+        </button>
+      )}
     </div>
   );
 }

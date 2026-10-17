@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { ChevronLeft, ChevronRight, PenSquare } from "lucide-react";
+import { AccountFilterSelect } from "../components/accounts/AccountFilterSelect";
 import { AccountAvatar, ProviderLogo } from "../components/ProviderLogo";
 import { usePostDrawer } from "../components/posts/PostDrawer";
 import { Button, IconButton } from "../components/ui/Button";
-import { Select } from "../components/ui/Form";
 import { STATUS_META, Tabs } from "../components/ui/Misc";
 import { useToast } from "../components/ui/Toast";
+import { parseAccountFilter, selectable } from "../lib/accountGroups";
 import { api, errorMessage } from "../lib/api";
 import { useApp } from "../lib/app";
 import { cn, truncate } from "../lib/format";
@@ -52,7 +53,11 @@ export function CalendarPage() {
   const toast = useToast();
   const [view, setView] = useState<View>(() => (localStorage.getItem("pf:calendar-view") as View) || "month");
   const [anchor, setAnchor] = useState(() => Date.now());
-  const [accountId, setAccountId] = useState("");
+  // An account id or `group:<id>` (AccountFilterSelect).
+  const [accountFilter, setAccountFilter] = useState("");
+  const { accountId, groupId: accountGroupId } = parseAccountFilter(accountFilter);
+  // New posts from a filtered calendar start with those accounts selected.
+  const filterAccountIds = accountId ? [accountId] : accountGroupId ? selectable(accounts.filter((a) => a.groupId === accountGroupId)).map((a) => a.id) : undefined;
   useEffect(() => localStorage.setItem("pf:calendar-view", view), [view]);
 
   const range = useMemo(() => {
@@ -71,8 +76,8 @@ export function CalendarPage() {
   }, [view, anchor, tz]);
 
   const posts = useFetch(
-    `calendar:${range.from}:${range.to}:${accountId}`,
-    () => api.posts.list({ from: range.from, to: range.to, accountId: accountId || undefined, limit: 1000 }),
+    `calendar:${range.from}:${range.to}:${accountFilter}`,
+    () => api.posts.list({ from: range.from, to: range.to, accountId, accountGroupId, limit: 1000 }),
     ["posts"],
   );
 
@@ -147,7 +152,7 @@ export function CalendarPage() {
       at = zonedTime(y, m, d, p.hour + 1, 0, tz);
     }
     if (at < now) return;
-    composer.open({ at, accountIds: accountId ? [accountId] : undefined });
+    composer.open({ at, accountIds: filterAccountIds });
   };
 
   const title =
@@ -170,14 +175,7 @@ export function CalendarPage() {
         </div>
         <div className="flex-1" />
         {accounts.length > 1 && (
-          <Select value={accountId} onChange={(e) => setAccountId(e.target.value)} aria-label="Filter by account" className="w-48">
-            <option value="">All accounts</option>
-            {accounts.map((a) => (
-              <option key={a.id} value={a.id}>
-                {a.name}
-              </option>
-            ))}
-          </Select>
+          <AccountFilterSelect value={accountFilter} onChange={setAccountFilter} className="w-48" />
         )}
         <Tabs
           value={view}
@@ -188,7 +186,7 @@ export function CalendarPage() {
           ]}
         />
         {canWrite && (
-          <Button variant="primary" icon={<PenSquare className="size-4" />} onClick={() => composer.open({ accountIds: accountId ? [accountId] : undefined })}>
+          <Button variant="primary" icon={<PenSquare className="size-4" />} onClick={() => composer.open({ accountIds: filterAccountIds })}>
             New post
           </Button>
         )}
