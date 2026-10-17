@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import type { SetupInput, SignupDTO, SignupInput } from "../../shared/types";
 import { signupEnabled } from "../billing/config";
 import { trialStatements } from "../billing/entitlements";
@@ -8,6 +8,7 @@ import { emailConfigured, magicLinkEmail, magicLinkEnabled, sendEmail, signupExi
 import { hashPassword, needsRehash, verifyPassword } from "../lib/crypto";
 import { ROLE } from "../lib/permissions";
 import { baseUrl, getSetting, setSetting } from "../lib/settings";
+import { CAPTCHA_UNAVAILABLE, allowedHostnames, turnstileConfig, turnstileSiteKey, verifyTurnstile, type TurnstileAction } from "../lib/turnstile";
 import { createWorkspaceStatements, normalizeEmail, normalizeName, passwordError } from "../lib/users";
 import { newId, now, parseJson, randomToken, sha256Hex } from "../lib/util";
 
@@ -20,7 +21,13 @@ async function hasUsers(db: D1Database) {
 }
 
 authRoutes.get("/status", async (c) => {
-  const [setup, session, magicLink, signup] = await Promise.all([hasUsers(c.env.DB), sessionUser(c), magicLinkEnabled(c.env), signupEnabled(c.env.DB)]);
+  const [setup, session, magicLink, signup, turnstile] = await Promise.all([
+    hasUsers(c.env.DB),
+    sessionUser(c),
+    magicLinkEnabled(c.env),
+    signupEnabled(c.env.DB),
+    turnstileSiteKey(c.env),
+  ]);
   // Demo visitors are signed in even on an instance that has no real user yet.
   const demo = !!session?.user.demo;
   return c.json({
@@ -34,8 +41,30 @@ authRoutes.get("/status", async (c) => {
     ...(setup && magicLink ? { magicLink: true } : {}),
     // Public sign-up (hosted mode, docs/hosted-spec.md): the sign-in page offers "Create an account".
     ...(setup && signup ? { signup: true } : {}),
+    // Cloudflare Turnstile is configured: sign-up, sign-in links and sign-in after 3 failures need a widget token.
+    ...(turnstile ? { turnstileSiteKey: turnstile } : {}),
   });
 });
+
+/**
+ * Bot check (worker/lib/turnstile.ts) of a public auth form, before any expensive work: null when it passes or
+ * Turnstile is not configured, else the error response (400 code "captcha", 503 when Cloudflare cannot be reached).
+ */
+async function botCheck(c: Context<AppEnv>, action: TurnstileAction, token: unknown, extra: Record<string, unknown> = {}): Promise<Response | null> {
+  const cfg = await turnstileConfig(c.env, { secret: true });
+  if (!cfg.siteKey || !cfg.secretSet) return null;
+  // A stored secret that no longer decrypts (SECRET_KEY changed): fail closed rather than silently turning the check off.
+  if (!cfg.secretKey) return c.json({ error: CAPTCHA_UNAVAILABLE, code: "captcha_unavailable" }, 503);
+  const v = await verifyTurnstile({
+    secret: cfg.secretKey,
+    token,
+    action,
+    hostnames: allowedHostnames(c.req.url, c.env.PUBLIC_URL),
+    remoteip: c.req.header("cf-connecting-ip"),
+  });
+  if (v.ok) return null;
+  return c.json({ error: v.error, code: v.code, ...extra }, v.status);
+}
 
 /** First run: creates the first user (instance Admin) and their workspace (Owner), then signs in. */
 authRoutes.post("/setup", async (c) => {
@@ -91,16 +120,22 @@ async function failures(env: Env, key: string): Promise<Failures> {
   return parseJson<Failures>(await getSetting(env.DB, key), { n: 0, until: 0 });
 }
 
-async function recordFailure(env: Env, key: string, f: Failures) {
+/** Counts one more failure (the window restarts); returns the new count. */
+async function recordFailure(env: Env, key: string, f: Failures): Promise<number> {
   const n = (f.until > Date.now() ? f.n : 0) + 1;
   await setSetting(env.DB, key, JSON.stringify({ n, until: Date.now() + LOCK_MS }));
+  return n;
 }
+
+/** Failed sign-ins (per IP or per email) after which the bot check is required, when Turnstile is configured. */
+const CAPTCHA_AFTER_FAILURES = 3;
 
 // Verified for unknown emails so they cost the same PBKDF2 as wrong passwords (no user enumeration by timing).
 const DUMMY_HASH = "pbkdf2$20000$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
 authRoutes.post("/login", async (c) => {
-  const body = await c.req.json<{ email?: string; password?: string }>().catch(() => ({}) as { email?: string; password?: string });
+  type LoginBody = { email?: string; password?: string; turnstileToken?: unknown };
+  const body = await c.req.json<LoginBody>().catch(() => ({}) as LoginBody);
   const ipKey = `login_fail:${throttleIp(c.req.header("cf-connecting-ip"))}`;
   const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
   const emailKey = `login_fail:email:${email}`;
@@ -108,6 +143,11 @@ authRoutes.post("/login", async (c) => {
   const locked = (f: Failures, max: number) => f.n >= max && f.until > Date.now();
   if (locked(ipF, MAX_FAILURES_IP) || locked(emailF, MAX_FAILURES_EMAIL)) {
     return c.json({ error: "Too many attempts, try again in a few minutes" }, 429);
+  }
+  const recent = (f: Failures) => (f.until > Date.now() ? f.n : 0);
+  if (Math.max(recent(ipF), recent(emailF)) >= CAPTCHA_AFTER_FAILURES) {
+    const blocked = await botCheck(c, "login", body.turnstileToken, { captchaRequired: true });
+    if (blocked) return blocked;
   }
   const user = email
     ? await c.env.DB.prepare("SELECT id, password_hash, status FROM users WHERE email = ? AND is_demo = 0")
@@ -117,8 +157,10 @@ authRoutes.post("/login", async (c) => {
   const password = typeof body.password === "string" ? body.password : "";
   const ok = await verifyPassword(password, user?.password_hash ?? DUMMY_HASH);
   if (!user || !ok) {
-    await Promise.all([recordFailure(c.env, ipKey, ipF), email ? recordFailure(c.env, emailKey, emailF) : null]);
-    return c.json({ error: "Wrong email or password" }, 401);
+    const [ipN, emailN] = await Promise.all([recordFailure(c.env, ipKey, ipF), email ? recordFailure(c.env, emailKey, emailF) : 0]);
+    // From now on this IP or email needs the bot check: the sign-in form shows the widget.
+    const captcha = Math.max(ipN, emailN) >= CAPTCHA_AFTER_FAILURES && !!(await turnstileSiteKey(c.env));
+    return c.json({ error: "Wrong email or password", ...(captcha ? { captchaRequired: true } : {}) }, 401);
   }
   if (user.status === "pending") return c.json({ error: "Confirm your email first: open the link we sent you when you signed up" }, 403);
   if (user.status !== "active") return c.json({ error: "This account is disabled" }, 403);
@@ -146,7 +188,7 @@ const NOT_ENABLED = "Sign-in links by email are not turned on for this instance"
  */
 authRoutes.post("/magic-link", async (c) => {
   if (!(await magicLinkEnabled(c.env))) return c.json({ error: NOT_ENABLED }, 404);
-  const body = await c.req.json<{ email?: unknown }>().catch(() => ({}) as { email?: unknown });
+  const body = await c.req.json<{ email?: unknown; turnstileToken?: unknown }>().catch(() => ({}) as { email?: unknown; turnstileToken?: unknown });
   const email = normalizeEmail(body.email);
   if (!email) return c.json({ error: "A valid email is required" }, 400);
   const ipKey = `magic_link:${throttleIp(c.req.header("cf-connecting-ip"))}`;
@@ -154,6 +196,8 @@ authRoutes.post("/magic-link", async (c) => {
   const [ipF, emailF] = await Promise.all([failures(c.env, ipKey), failures(c.env, emailKey)]);
   const over = (f: Failures, max: number) => f.n >= max && f.until > Date.now();
   if (over(ipF, MAX_LINKS_IP) || over(emailF, MAX_LINKS_EMAIL)) return c.json({ error: "Too many sign-in links requested. Try again in 15 minutes." }, 429);
+  const blocked = await botCheck(c, "magic_link", body.turnstileToken);
+  if (blocked) return blocked;
   await Promise.all([recordFailure(c.env, ipKey, ipF), recordFailure(c.env, emailKey, emailF)]);
 
   c.executionCtx.waitUntil(
@@ -229,6 +273,9 @@ authRoutes.post("/signup", async (c) => {
   const ipKey = `signup:${throttleIp(c.req.header("cf-connecting-ip"))}`;
   const ipF = await failures(c.env, ipKey);
   if (ipF.n >= MAX_SIGNUPS_IP && ipF.until > Date.now()) return c.json({ error: "Too many sign-ups from your network. Try again in an hour." }, 429);
+  // Before the throttle write, PBKDF2 and the user/email work.
+  const blocked = await botCheck(c, "signup", body.turnstileToken);
+  if (blocked) return blocked;
   const n = (ipF.until > Date.now() ? ipF.n : 0) + 1;
   await setSetting(c.env.DB, ipKey, JSON.stringify({ n, until: ipF.until > Date.now() ? ipF.until : Date.now() + SIGNUP_WINDOW_MS }));
 

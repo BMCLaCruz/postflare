@@ -16,6 +16,8 @@ export interface AuthStatus {
   magicLink?: true;
   /** Public sign-up is on: "Create an account" on the sign-in page, /signup. */
   signup?: true;
+  /** Cloudflare Turnstile is on: the widget's site key (sign-up, sign-in links, sign-in after failures). */
+  turnstileSiteKey?: string;
 }
 
 export interface Overview {

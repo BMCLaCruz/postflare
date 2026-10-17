@@ -6,7 +6,7 @@ session cookie (plus `X-Workspace-Id`), or `Authorization: Bearer pf_...` (an AP
 Profile). Every endpoint is workspace-scoped: ids of other workspaces answer 404. Permissions are listed per endpoint
 (catalog: [workspaces-spec.md](workspaces-spec.md)).
 
-This file documents the account group, App Store campaign and hosted mode (plans, billing, sign-up) endpoints in detail
+This file documents the account group, App Store campaign, hosted mode (plans, billing, sign-up) and bot protection endpoints in detail
 and lists the changes they brought to existing endpoints. The rest of the API (accounts, media, posts, analytics, playbooks, users, workspaces) is summarized in the
 README ("API & MCP", "Analytics", "Playbooks") and typed in `shared/types.ts`.
 
@@ -240,3 +240,32 @@ workspace with "This workspace has no active plan…" (already scheduled posts a
 
 New workspace permission `billing.manage` (migration 0013: built-in Owner only). Everyone with `posts.read` reads
 `GET /billing`.
+
+## Bot protection (Cloudflare Turnstile)
+
+Off unless configured: both a site key and a secret key, from Admin → Settings or the `TURNSTILE_SITE_KEY` var +
+`TURNSTILE_SECRET_KEY` secret (each env value wins over the stored one). Not used for API keys, invitations or the
+first-run `POST /auth/setup`.
+
+- `GET /auth/status` adds `turnstileSiteKey` (the widget's site key) while it is on.
+- The widget token goes in the body as `turnstileToken`:
+  - `POST /auth/signup` (widget action `signup`) and `POST /auth/magic-link` (action `magic_link`): always required.
+  - `POST /auth/login` (action `login`): only once the IP (IPv6 /64) or the email has 3 or more failed sign-ins in the
+    current 15 minute window. The 401 of the failure that reaches 3 carries `captchaRequired: true`; until the counters
+    clear (a successful sign-in or 15 minutes) a request without a valid token answers 400 with `captchaRequired: true`.
+- The token is checked with Cloudflare's siteverify (5 s timeout, `remoteip` from `cf-connecting-ip`, an
+  `idempotency_key`) before any password hashing, database write or email: it must succeed, be solved on the request's
+  hostname (or `PUBLIC_URL`'s) and carry the expected action. Answers to Turnstile's test secret keys skip the hostname
+  and action checks (local testing).
+- Failure: 400 `{ error: "The bot check failed. Try again.", code: "captcha" }`. Cloudflare unreachable (timeout,
+  network error, 5xx, `internal-error`): 503 `{ error, code: "captcha_unavailable" }` (fails closed).
+
+`instance.settings.manage`:
+- `GET /admin/turnstile` → `AdminTurnstileDTO` `{ configured, siteKey, siteKeyFromEnv, secretSet, secretFromEnv }`.
+  The secret is never returned.
+- `PUT /admin/turnstile` `{ siteKey, secretKey? }` → `AdminTurnstileDTO`. The secret is stored encrypted; an empty or
+  missing `secretKey` keeps the stored one. Values set by the env are ignored.
+- `DELETE /admin/turnstile` → `AdminTurnstileDTO` (removes the stored keys; env keys stay in effect).
+- `POST /admin/turnstile/test` `{ secretKey? }` (default: the effective secret) → `{ ok: true, testing? } | { ok: false,
+  error }`: siteverify with a dummy token. `invalid-input-response` means the secret is valid, `invalid-input-secret`
+  that it is wrong; `testing: true` for a Turnstile test secret (always passes).

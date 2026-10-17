@@ -26,5 +26,7 @@ declare namespace Cloudflare {
     WEBHOOKS_DB: D1Database;
     /** Own instance for public sign-up (with a fake EMAIL binding, and without email). */
     SIGNUP_DB: D1Database;
+    /** Own instance for the Turnstile bot check (sign-up, sign-in links, login after failures; mocked siteverify). */
+    TURNSTILE_DB: D1Database;
   }
 }

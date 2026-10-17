@@ -4,20 +4,27 @@ import { CalendarClock, KeyRound, Lock, Mail, MailCheck, Sparkles, Users } from 
 import { Wordmark } from "../components/Logo";
 import { Button } from "../components/ui/Button";
 import { Field, Input } from "../components/ui/Form";
+import { Turnstile } from "../components/Turnstile";
 import { ApiError, api, errorMessage } from "../lib/api";
 
-/** `magicLink`: the instance can email sign-in links, offered next to the password. `signup`: public sign-up is on. */
+/**
+ * `magicLink`: the instance can email sign-in links, offered next to the password. `signup`: public sign-up is on.
+ * `turnstileSiteKey`: the bot check is on: always for sign-in links, for the password once the server answers
+ * `captchaRequired` (3 recent failures). Never for the first-run setup.
+ */
 export function AuthPage({
   mode,
   setupToken: askToken = false,
   magicLink = false,
   signup = false,
+  turnstileSiteKey,
   onDone,
 }: {
   mode: "setup" | "login";
   setupToken?: boolean;
   magicLink?: boolean;
   signup?: boolean;
+  turnstileSiteKey?: string;
   onDone: () => void;
 }) {
   const [name, setName] = useState("");
@@ -32,6 +39,10 @@ export function AuthPage({
   const [useLink, setUseLink] = useState(false);
   const [sentTo, setSentTo] = useState<string | null>(null);
   const linkMode = !setup && magicLink && useLink;
+  const [loginCaptcha, setLoginCaptcha] = useState(false);
+  const [captcha, setCaptcha] = useState<string | null>(null);
+  const [captchaReset, setCaptchaReset] = useState(0);
+  const captchaAction = setup || !turnstileSiteKey ? null : linkMode ? "magic_link" : loginCaptcha ? "login" : null;
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -39,19 +50,25 @@ export function AuthPage({
     if (setup && !name.trim()) return setError({ message: "Enter your name.", tone: "red" });
     if (setup && password.length < 8) return setError({ message: "Use at least 8 characters for the password.", tone: "red" });
     if (setup && password !== confirm) return setError({ message: "Passwords do not match.", tone: "red" });
+    if (captchaAction && !captcha) return setError({ message: "Wait for the bot check to finish.", tone: "amber" });
+    const turnstileToken = captchaAction ? (captcha ?? undefined) : undefined;
     setBusy(true);
     try {
       if (linkMode) {
-        await api.auth.magicLink(email.trim());
+        await api.auth.magicLink(email.trim(), turnstileToken);
         return setSentTo(email.trim());
       }
       if (setup) await api.auth.setup({ name: name.trim(), email: email.trim(), password, workspaceName: workspaceName.trim() || undefined, ...(askToken ? { setupToken: token.trim() } : {}) });
-      else await api.auth.login(email.trim(), password);
+      else await api.auth.login(email.trim(), password, turnstileToken);
       onDone();
     } catch (err) {
       // 429: throttled, 403: disabled account: both are not "wrong password" and deserve a calmer tone.
       const status = err instanceof ApiError ? err.status : 0;
       setError({ message: errorMessage(err), tone: status === 429 || status === 403 ? "amber" : "red" });
+      // After 3 failed sign-ins the server wants the bot check too: show the widget, the next try sends its token.
+      if (!setup && !linkMode && err instanceof ApiError && (err.captchaRequired || err.code === "captcha")) setLoginCaptcha(true);
+      // Tokens are single use: a new one for the next try.
+      if (captchaAction) setCaptchaReset((n) => n + 1);
     } finally {
       setBusy(false);
     }
@@ -153,8 +170,18 @@ export function AuthPage({
             )}
           </>
         )}
+        {captchaAction && turnstileSiteKey && (
+          <Turnstile
+            key={captchaAction}
+            siteKey={turnstileSiteKey}
+            action={captchaAction}
+            onToken={setCaptcha}
+            onError={(message) => setError({ message, tone: "red" })}
+            resetKey={captchaReset}
+          />
+        )}
         {error && <FormError tone={error.tone}>{error.message}</FormError>}
-        <Button type="submit" variant="primary" size="lg" className="w-full" loading={busy} disabled={!email || (!linkMode && !password)}>
+        <Button type="submit" variant="primary" size="lg" className="w-full" loading={busy} disabled={!email || (!linkMode && !password) || (!!captchaAction && !captcha)}>
           {setup ? "Create account & continue" : linkMode ? "Email me a sign-in link" : "Sign in"}
         </Button>
         {!setup && magicLink && (

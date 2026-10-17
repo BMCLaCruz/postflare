@@ -178,8 +178,13 @@ provider retry forever). `billing_events` keeps 90 days (daily cleanup).
     your email, sign in instead" email.
   - Without email configured, sign-up is immediate (status active, signed in). The admin settings card warns that
     hosted instances should configure email first.
-  - Throttled: 5 sign-ups per IP per hour (settings-table counter like the magic-link throttle). Optional Cloudflare
-    Turnstile later (not now).
+  - Throttled: 5 sign-ups per IP per hour (settings-table counter like the magic-link throttle).
+  - Bot protection: optional Cloudflare Turnstile (Admin → Settings "Bot protection", or the `TURNSTILE_SITE_KEY` var +
+    `TURNSTILE_SECRET_KEY` secret, which win). When configured, sign-up (action `signup`) and sign-in links (action
+    `magic_link`) need a `turnstileToken`, and so does sign-in (action `login`) once the IP or email has 3 recent
+    failures (the 401 then says `captchaRequired: true`). Checked server side in `worker/lib/turnstile.ts` (siteverify:
+    success, hostname, action; 5 s timeout, fails closed with 503) before any hashing, write or email. The Public
+    sign-up card warns while sign-up is on without it. Endpoints: docs/api.md "Bot protection".
   - New users get the instance **Member** role (can create workspaces); first workspace = Owner.
 - Landing page: the "Sign up — coming soon" button becomes "Sign up" → `/signup` when `signup` is true (the landing
   already reads `/api/auth/status`).
@@ -246,7 +251,7 @@ transactions/events, members.
 
 Usage-based credits (see the credit design in the cost report), coupons (the providers have them; checkout pages accept
 them), invoices UI (provider portal), taxes (merchant-of-record providers handle them; Stripe users must enable Stripe
-Tax themselves), Turnstile, per-workspace platform apps (own X keys).
+Tax themselves), per-workspace platform apps (own X keys).
 
 ## Implementation notes (deviations from the text above)
 

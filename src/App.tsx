@@ -86,7 +86,7 @@ export function App() {
             {/* Public: opened from a sign-in link email (signed in too: the link may be for another user). */}
             <Route path="/auth/link" element={<MagicLinkPage />} />
             {/* Public sign-up (hosted mode, off by default): the form, and the email confirmation link. */}
-            <Route path="/signup" element={status.setup && !status.authenticated && status.signup ? <SignupPage onDone={() => window.location.assign("/")} /> : <Navigate to="/" replace />} />
+            <Route path="/signup" element={status.setup && !status.authenticated && status.signup ? <SignupPage onDone={() => window.location.assign("/")} turnstileSiteKey={status.turnstileSiteKey} /> : <Navigate to="/" replace />} />
             <Route path="/auth/verify" element={<VerifySignupPage />} />
             <Route
               path="*"
@@ -97,6 +97,7 @@ export function App() {
                     setupToken={!!status.setupToken}
                     magicLink={!!status.magicLink}
                     signup={!!status.signup}
+                    turnstileSiteKey={status.turnstileSiteKey}
                     onDone={() => {
                       const next = nextPath();
                       if (window.location.pathname === "/login" || window.location.pathname === "/setup" || next !== "/") navigate(next, { replace: true });

@@ -15,4 +15,8 @@ interface Env {
   EMAIL_FROM?: string;
   /** Optional Cloudflare `send_email` binding (Email Sending) for sign-in link emails; an instance admin turns them on. */
   EMAIL?: SendEmail;
+  /** Optional Cloudflare Turnstile site key (var) for the bot check on sign-up, sign-in links and repeated failed sign-ins. Wins over Admin → Settings. */
+  TURNSTILE_SITE_KEY?: string;
+  /** Optional Turnstile secret key (secret), with TURNSTILE_SITE_KEY. Wins over the one stored in Admin → Settings. */
+  TURNSTILE_SECRET_KEY?: string;
 }

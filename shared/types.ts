@@ -529,7 +529,33 @@ export interface AuthStatusDTO {
   magicLink?: true;
   /** Present (true) when public sign-up is on (instance setting signup_enabled): show "Create an account". */
   signup?: true;
+  /**
+   * Present when Cloudflare Turnstile is configured: the widget's site key. Sign-up and sign-in links then need a
+   * `turnstileToken`, and sign-in too once the login answers `captchaRequired: true` (after 3 recent failures).
+   */
+  turnstileSiteKey?: string;
 }
+
+/** GET / PUT / DELETE /api/admin/turnstile: bot protection (Cloudflare Turnstile). The secret is never returned. */
+export interface AdminTurnstileDTO {
+  /** Both keys are present: the bot check is on. */
+  configured: boolean;
+  siteKey: string | null;
+  /** The TURNSTILE_SITE_KEY var is set (wins over the stored key; read-only in the UI). */
+  siteKeyFromEnv: boolean;
+  secretSet: boolean;
+  /** The TURNSTILE_SECRET_KEY secret is set (wins over the stored one; read-only in the UI). */
+  secretFromEnv: boolean;
+}
+
+/** Body of PUT /api/admin/turnstile: omitted or empty `secretKey` keeps the stored secret. */
+export interface AdminTurnstileInput {
+  siteKey?: string;
+  secretKey?: string;
+}
+
+/** POST /api/admin/turnstile/test: siteverify with a dummy token. `testing`: a Turnstile test secret (always passes). */
+export type TurnstileTestDTO = { ok: true; testing?: true } | { ok: false; error: string };
 
 /** GET / PATCH /api/admin/email: sign-in links by email (Cloudflare Email Sending). */
 export interface AdminEmailDTO {
@@ -1356,6 +1382,8 @@ export interface SignupInput {
   email: string;
   password: string;
   workspaceName?: string;
+  /** Cloudflare Turnstile token, required when the status has `turnstileSiteKey`. */
+  turnstileToken?: string;
 }
 
 /**

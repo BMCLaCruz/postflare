@@ -8,6 +8,8 @@ import type {
   AdminOverviewDTO,
   AdminPlanDTO,
   AdminSignupDTO,
+  AdminTurnstileDTO,
+  AdminTurnstileInput,
   AdminWorkspaceBillingDTO,
   AdminWorkspaceBillingInput,
   BillingDTO,
@@ -21,6 +23,7 @@ import type {
   PublicPlansDTO,
   SignupDTO,
   SignupInput,
+  TurnstileTestDTO,
   AppDTO,
   CampaignLinkDTO,
   CampaignSettingsDTO,
@@ -70,10 +73,16 @@ import type {
 export class ApiError extends Error {
   status: number;
   errors: string[];
-  constructor(message: string, status: number, errors: string[] = []) {
+  /** The `code` of the error body (e.g. "captcha": the Turnstile bot check failed). */
+  code?: string;
+  /** Sign-in only: the bot check is required from now on (Turnstile configured, 3 recent failures). */
+  captchaRequired?: boolean;
+  constructor(message: string, status: number, errors: string[] = [], extra: { code?: string; captchaRequired?: boolean } = {}) {
     super(message);
     this.status = status;
     this.errors = errors;
+    this.code = extra.code;
+    this.captchaRequired = extra.captchaRequired;
   }
 }
 
@@ -127,11 +136,14 @@ export async function request<T>(method: string, path: string, body?: unknown, i
   const data = await res.json().catch(() => null);
   if (!res.ok) {
     if (res.status === 401 && !path.startsWith("/auth/") && !path.startsWith("/invitations/")) window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
-    const d = (data ?? {}) as { error?: string; errors?: string[] };
+    const d = (data ?? {}) as { error?: string; errors?: string[]; code?: unknown; captchaRequired?: unknown };
     if (res.status === 404 && d.error === "Workspace not found" && currentWorkspaceId) window.dispatchEvent(new Event(WORKSPACE_NOT_FOUND_EVENT));
     const limit = planLimitError(res.status, data);
     if (limit) throw limit;
-    throw new ApiError(d.error || `Request failed (${res.status})`, res.status, d.errors ?? []);
+    throw new ApiError(d.error || `Request failed (${res.status})`, res.status, d.errors ?? [], {
+      code: typeof d.code === "string" ? d.code : undefined,
+      captchaRequired: d.captchaRequired === true,
+    });
   }
   return data as T;
 }
@@ -181,9 +193,9 @@ export const api = {
   auth: {
     status: () => get<AuthStatus>("/auth/status"),
     setup: (input: SetupInput) => request<{ ok: true }>("POST", "/auth/setup", input),
-    login: (email: string, password: string) => request<{ ok: true }>("POST", "/auth/login", { email, password }),
+    login: (email: string, password: string, turnstileToken?: string) => request<{ ok: true }>("POST", "/auth/login", { email, password, turnstileToken }),
     logout: () => request<{ ok: true }>("POST", "/auth/logout"),
-    magicLink: (email: string) => request<{ ok: true }>("POST", "/auth/magic-link", { email }),
+    magicLink: (email: string, turnstileToken?: string) => request<{ ok: true }>("POST", "/auth/magic-link", { email, turnstileToken }),
     verifyMagicLink: (token: string) => request<{ ok: true }>("POST", "/auth/magic-link/verify", { token }),
     signup: (input: SignupInput) => request<SignupDTO>("POST", "/auth/signup", input),
     verifySignup: (token: string) => request<{ ok: true; workspaceId: string }>("POST", "/auth/signup/verify", { token }),
@@ -320,6 +332,10 @@ export const api = {
     testEmail: () => request<{ ok: true; to: string }>("POST", "/admin/email/test", {}),
     signup: () => get<AdminSignupDTO>("/admin/signup"),
     setSignup: (enabled: boolean) => request<AdminSignupDTO>("PATCH", "/admin/signup", { enabled }),
+    turnstile: () => get<AdminTurnstileDTO>("/admin/turnstile"),
+    saveTurnstile: (input: AdminTurnstileInput) => request<AdminTurnstileDTO>("PUT", "/admin/turnstile", input),
+    removeTurnstile: () => request<AdminTurnstileDTO>("DELETE", "/admin/turnstile"),
+    testTurnstile: (secretKey?: string) => request<TurnstileTestDTO>("POST", "/admin/turnstile/test", { secretKey }),
     billing: {
       get: () => get<AdminBillingDTO>("/admin/billing"),
       update: (input: AdminBillingInput) => request<AdminBillingDTO>("PATCH", "/admin/billing", input),

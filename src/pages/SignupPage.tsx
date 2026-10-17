@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { Link } from "react-router";
 import { MailCheck } from "lucide-react";
 import { PricingCards } from "../components/billing/PricingCards";
+import { Turnstile } from "../components/Turnstile";
 import { Button } from "../components/ui/Button";
 import { Field, Input } from "../components/ui/Form";
 import { ApiError, api, errorMessage } from "../lib/api";
@@ -13,8 +14,9 @@ import { AuthShell, FormError } from "./AuthPage";
  * `/signup` (public sign-up on, signed out): name, email, password and workspace name. With email configured the server
  * mails a confirmation link (`/auth/verify#<token>`) and the page says so; without it the account is active at once and
  * `onDone` reloads the app into the new workspace. While billing is on, the plans are previewed under the form.
+ * `turnstileSiteKey`: the bot check (Cloudflare Turnstile) is on and its token goes with the form.
  */
-export function SignupPage({ onDone }: { onDone: () => void }) {
+export function SignupPage({ onDone, turnstileSiteKey }: { onDone: () => void; turnstileSiteKey?: string }) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -24,6 +26,8 @@ export function SignupPage({ onDone }: { onDone: () => void }) {
   const [busy, setBusy] = useState(false);
   const [sentTo, setSentTo] = useState<string | null>(null);
   const [plans, setPlans] = useState<PublicPlanDTO[]>([]);
+  const [captcha, setCaptcha] = useState<string | null>(null);
+  const [captchaReset, setCaptchaReset] = useState(0);
 
   useEffect(() => {
     api.billing.plans().then((p) => setPlans(p.enabled ? p.plans : []), () => {});
@@ -35,9 +39,16 @@ export function SignupPage({ onDone }: { onDone: () => void }) {
     if (!name.trim()) return setError({ message: "Enter your name.", tone: "red" });
     if (password.length < 8) return setError({ message: "Use at least 8 characters for the password.", tone: "red" });
     if (password !== confirm) return setError({ message: "Passwords do not match.", tone: "red" });
+    if (turnstileSiteKey && !captcha) return setError({ message: "Wait for the bot check to finish.", tone: "amber" });
     setBusy(true);
     try {
-      const res = await api.auth.signup({ name: name.trim(), email: email.trim(), password, workspaceName: workspaceName.trim() || undefined });
+      const res = await api.auth.signup({
+        name: name.trim(),
+        email: email.trim(),
+        password,
+        workspaceName: workspaceName.trim() || undefined,
+        ...(turnstileSiteKey && captcha ? { turnstileToken: captcha } : {}),
+      });
       if (res.verify) return setSentTo(email.trim());
       rememberWorkspace(res.workspaceId);
       onDone();
@@ -45,6 +56,8 @@ export function SignupPage({ onDone }: { onDone: () => void }) {
       // 429: too many sign-ups from this network, 409: the email has an account (instances without email only).
       const status = err instanceof ApiError ? err.status : 0;
       setError({ message: errorMessage(err), tone: status === 429 || status === 409 ? "amber" : "red" });
+      // Tokens are single use: a new one for the next try.
+      if (turnstileSiteKey) setCaptchaReset((n) => n + 1);
     } finally {
       setBusy(false);
     }
@@ -111,8 +124,11 @@ export function SignupPage({ onDone }: { onDone: () => void }) {
         <Field label="Workspace name" help="Accounts, posts and media live in a workspace. You can rename it later.">
           {(id) => <Input id={id} value={workspaceName} onChange={(e) => setWorkspaceName(e.target.value)} placeholder="My workspace" maxLength={100} />}
         </Field>
+        {turnstileSiteKey && (
+          <Turnstile siteKey={turnstileSiteKey} action="signup" onToken={setCaptcha} onError={(message) => setError({ message, tone: "red" })} resetKey={captchaReset} />
+        )}
         {error && <FormError tone={error.tone}>{error.message}</FormError>}
-        <Button type="submit" variant="primary" size="lg" className="w-full" loading={busy} disabled={!email || !password}>
+        <Button type="submit" variant="primary" size="lg" className="w-full" loading={busy} disabled={!email || !password || (!!turnstileSiteKey && !captcha)}>
           Create account
         </Button>
         <p className="text-center text-xs text-zinc-500 dark:text-zinc-400">

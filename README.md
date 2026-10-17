@@ -378,6 +378,10 @@ off by default, so a self-hosted instance looks and behaves exactly as before (n
 - **Sign-up** (Admin → Settings): "Create an account" on the sign-in page. With email configured (`EMAIL` binding +
   `EMAIL_FROM`, see the magic link notes in `wrangler.local.example.jsonc`) new accounts are confirmed by email first;
   without it they are created right away, so configure email before opening sign-up on a public instance.
+- **Bot protection** (Admin → Settings): Cloudflare Turnstile (free) on sign-up, sign-in links by email and sign-in
+  after 3 failed attempts. Create a widget for your hostname in the Cloudflare dashboard → Turnstile and paste its
+  site key and secret key (or set the `TURNSTILE_SITE_KEY` var and `TURNSTILE_SECRET_KEY` secret). Off until
+  configured; do not open sign-up on a hosted instance without it.
 - **Plans** (Admin → Billing) are data: limits (connected accounts, posts and X posts per month, members, media
   storage, API/MCP access) plus monthly/yearly prices. Each workspace has its own plan; new workspaces start a trial
   (default 7 days, no card), then fall back to the free plan you mark, or become read-only.

@@ -27,7 +27,12 @@
     // Then turn them on in Admin → Instance settings. The same binding confirms public sign-ups by email (hosted mode,
     // docs/hosted-spec.md). Needs Workers Paid and a domain onboarded to Email Sending
     // (npx wrangler email sending enable example.com); on the Free plan it only reaches your verified addresses.
-    // "EMAIL_FROM": "Postflare <login@example.com>"
+    // "EMAIL_FROM": "Postflare <login@example.com>",
+    // Bot protection (Cloudflare Turnstile) on sign-up, sign-in links and sign-in after 3 failures: the widget's site
+    // key (Cloudflare dashboard → Turnstile, add your hostname), plus its secret key as a secret:
+    //   npx wrangler secret put TURNSTILE_SECRET_KEY
+    // Both win over the keys you can also paste in Admin → Instance settings → Bot protection.
+    // "TURNSTILE_SITE_KEY": "0x4AAAAAAA..."
   },
   // "send_email": [{ "name": "EMAIL", "remote": true }],
 

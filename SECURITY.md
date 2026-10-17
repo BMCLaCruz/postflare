@@ -35,6 +35,12 @@ redeploying from an up-to-date checkout.
   owner is told to sign in instead). Without email, sign-up is immediate and reveals whether an email is registered
   (409): configure email before opening sign-up publicly. Sign-ups are throttled to 5 per IP (IPv6 /64) per hour;
   unverified accounts are deleted after 7 days.
+- Bot protection (Cloudflare Turnstile) is off unless configured (Admin → Settings, or the `TURNSTILE_SITE_KEY` var
+  and `TURNSTILE_SECRET_KEY` secret). Then sign-up and sign-in links need a widget token, and sign-in does too once an
+  IP or email has 3 recent failures. Tokens are verified server side (siteverify: success, hostname, action) before
+  any password hashing, write or email, and the check fails closed (503) when Cloudflare cannot be reached. The stored
+  secret is encrypted like platform tokens and never returned by the API. The app's Content-Security-Policy allows
+  `https://challenges.cloudflare.com` for scripts and frames (Turnstile's `api.js` and challenge iframe), nothing else.
 - Payment provider webhooks (`/api/billing/webhooks/:provider`) are public and authenticated only by their signature:
   HMAC-SHA256 checked in constant time (`crypto.subtle.verify`) against the provider's signing secret (Polar: Standard
   Webhooks with a 5 minute timestamp tolerance; Stripe: `Stripe-Signature`, 5 minutes; Lemon Squeezy: `X-Signature`,

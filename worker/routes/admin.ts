@@ -1,9 +1,10 @@
 import { Hono } from "hono";
-import type { AdminEmailDTO } from "../../shared/types";
+import type { AdminEmailDTO, AdminTurnstileDTO, AdminTurnstileInput, TurnstileTestDTO } from "../../shared/types";
 import { adminOverview } from "../lib/admin-overview";
 import { requireInstancePermission, type AppEnv } from "../lib/auth";
 import { MAGIC_LINK_SETTING, emailConfigured, sendEmail, testEmail } from "../lib/email";
 import { baseUrl, getSetting, setSetting } from "../lib/settings";
+import { saveTurnstileConfig, testTurnstileSecret, turnstileConfig, validTurnstileKey } from "../lib/turnstile";
 
 /** Instance administration pages that are not about users, plus the email (sign-in links) settings. */
 export const adminRoutes = new Hono<AppEnv>();
@@ -52,4 +53,43 @@ adminRoutes.post("/admin/email/test", manageSettings, async (c) => {
     return c.json({ error: `Sending failed${e?.code ? ` (${e.code})` : ""}: ${e?.message ?? String(err)}` }, 502);
   }
   return c.json({ ok: true, to });
+});
+
+// ---------- Bot protection (Cloudflare Turnstile): off until both keys are set here or in the env ----------
+
+async function turnstileState(env: Env): Promise<AdminTurnstileDTO> {
+  const cfg = await turnstileConfig(env);
+  return { configured: !!cfg.siteKey && cfg.secretSet, siteKey: cfg.siteKey, siteKeyFromEnv: cfg.siteKeyFromEnv, secretSet: cfg.secretSet, secretFromEnv: cfg.secretFromEnv };
+}
+
+adminRoutes.get("/admin/turnstile", manageSettings, async (c) => c.json(await turnstileState(c.env)));
+
+/** PUT /api/admin/turnstile {siteKey, secretKey?}: an empty secret keeps the stored one. Keys set by the env cannot be changed here. */
+adminRoutes.put("/admin/turnstile", manageSettings, async (c) => {
+  const body = await c.req.json<AdminTurnstileInput>().catch(() => ({}) as AdminTurnstileInput);
+  const siteKey = typeof body.siteKey === "string" ? body.siteKey.trim() : "";
+  const secretKey = typeof body.secretKey === "string" ? body.secretKey.trim() : "";
+  const cfg = await turnstileConfig(c.env);
+  if (!cfg.siteKeyFromEnv && !validTurnstileKey(siteKey)) return c.json({ error: "Enter the widget's site key (from Cloudflare dashboard → Turnstile)" }, 400);
+  if (!cfg.secretFromEnv && secretKey && !validTurnstileKey(secretKey)) return c.json({ error: "That does not look like a Turnstile secret key" }, 400);
+  if (!cfg.secretFromEnv && !secretKey && !cfg.secretSet) return c.json({ error: "Enter the widget's secret key" }, 400);
+  await saveTurnstileConfig(c.env, { ...(cfg.siteKeyFromEnv ? {} : { siteKey }), ...(cfg.secretFromEnv || !secretKey ? {} : { secretKey }) });
+  return c.json(await turnstileState(c.env));
+});
+
+/** DELETE /api/admin/turnstile: removes the stored keys (the bot check stays on while the env sets both). */
+adminRoutes.delete("/admin/turnstile", manageSettings, async (c) => {
+  await saveTurnstileConfig(c.env, { siteKey: null, secretKey: null });
+  return c.json(await turnstileState(c.env));
+});
+
+/** POST /api/admin/turnstile/test {secretKey?}: checks the given secret (before saving) or the effective one. */
+adminRoutes.post("/admin/turnstile/test", manageSettings, async (c) => {
+  const body = await c.req.json<{ secretKey?: unknown }>().catch(() => ({}) as { secretKey?: unknown });
+  const cfg = await turnstileConfig(c.env, { secret: true });
+  const given = typeof body.secretKey === "string" && !cfg.secretFromEnv ? body.secretKey.trim() : "";
+  const secret = given || cfg.secretKey;
+  if (!secret) return c.json({ error: cfg.secretSet ? "The stored secret key cannot be decrypted (SECRET_KEY changed?): enter it again" : "Enter the secret key first" }, 400);
+  const out: TurnstileTestDTO = await testTurnstileSecret(secret);
+  return c.json(out);
 });

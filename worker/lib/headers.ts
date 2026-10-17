@@ -18,8 +18,11 @@ const COMMON = [
   "frame-ancestors 'none'",
 ];
 
-/** The React app (Vite build): no inline scripts. */
-export const APP_CSP = ["script-src 'self'", ...COMMON].join("; ");
+/** Cloudflare Turnstile (bot check on the sign-up / sign-in forms): its script and its challenge iframe. */
+const TURNSTILE = "https://challenges.cloudflare.com";
+
+/** The React app (Vite build): no inline scripts; Turnstile's api.js and iframe. */
+export const APP_CSP = [`script-src 'self' ${TURNSTILE}`, ...COMMON, `frame-src ${TURNSTILE}`].join("; ");
 
 /** Pages written by hand or by the Worker (landing, upload page, demo notice): static inline scripts, no user markup. */
 export const PAGE_CSP = ["script-src 'self' 'unsafe-inline'", ...COMMON].join("; ");

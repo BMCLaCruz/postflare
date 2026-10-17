@@ -17,7 +17,8 @@
     { "binding": "MAGIC_LINK_DB", "database_name": "postflare-magic-link", "database_id": "magic-link" },
     { "binding": "BILLING_DB", "database_name": "postflare-billing", "database_id": "billing" },
     { "binding": "WEBHOOKS_DB", "database_name": "postflare-webhooks", "database_id": "webhooks" },
-    { "binding": "SIGNUP_DB", "database_name": "postflare-signup", "database_id": "signup" }
+    { "binding": "SIGNUP_DB", "database_name": "postflare-signup", "database_id": "signup" },
+    { "binding": "TURNSTILE_DB", "database_name": "postflare-turnstile", "database_id": "turnstile" }
   ],
   "r2_buckets": [{ "binding": "MEDIA", "bucket_name": "postflare-media" }],
   "workflows": [{ "name": "postflare-publish", "binding": "PUBLISH_WORKFLOW", "class_name": "PublishWorkflow" }]

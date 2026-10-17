@@ -1,10 +1,11 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useLocation } from "react-router";
-import { AlertTriangle, ArrowUpCircle, ExternalLink, FlaskConical, Globe, HardDrive, Info, Lock, Mail, RefreshCw, Send, ShieldCheck, UserPlus } from "lucide-react";
+import { AlertTriangle, ArrowUpCircle, Bot, CheckCircle2, ExternalLink, FlaskConical, Globe, HardDrive, Info, Lock, Mail, RefreshCw, Send, ShieldCheck, Trash2, UserPlus } from "lucide-react";
 import { StorageUsage } from "../components/media/StorageUsage";
 import { Button } from "../components/ui/Button";
 import { Field, Input, Select, Switch } from "../components/ui/Form";
 import { Badge, CodeBlock, PageHeader, Skeleton } from "../components/ui/Misc";
+import { useConfirm } from "../components/ui/Confirm";
 import { Section } from "../components/ui/Section";
 import { useToast } from "../components/ui/Toast";
 import { api } from "../lib/api";
@@ -15,7 +16,7 @@ import { useSession } from "../lib/session";
 import { invalidate, useFetch } from "../lib/useFetch";
 import { CHANGELOG_URL, COMMIT, REPO_URL, UPDATING_URL, VERSION, releaseUrl } from "@shared/version";
 
-/** Admin → Instance settings: public URL and default timezone (API keys moved to the profile), integrations, sign-in links by email, public sign-up, version and updates. */
+/** Admin → Instance settings: public URL and default timezone (API keys moved to the profile), integrations, sign-in links by email, public sign-up, bot protection, version and updates. */
 export function InstanceSettingsPage() {
   const { hash } = useLocation();
   // Links from the sidebar (#about, #updating) land on the section.
@@ -30,6 +31,7 @@ export function InstanceSettingsPage() {
         <IntegrationsSection />
         <EmailSection />
         <SignupSection />
+        <TurnstileSection />
         <StorageSection />
         <AboutSection />
         <UpdatingSection />
@@ -414,6 +416,7 @@ function EmailSection() {
 function SignupSection() {
   const toast = useToast();
   const { data, setData } = useFetch("admin-signup", api.admin.signup, ["settings"]);
+  const turnstile = useFetch("admin-turnstile", api.admin.turnstile, ["settings"]);
   const [busy, setBusy] = useState(false);
 
   async function toggle(next: boolean) {
@@ -460,7 +463,189 @@ function SignupSection() {
                 </span>
               </p>
             )}
+            {data.enabled && turnstile.data && !turnstile.data.configured && (
+              <p className="flex gap-2 rounded-lg bg-amber-50 px-3 py-2 text-amber-900 ring-1 ring-amber-200 dark:bg-amber-950/40 dark:text-amber-200 dark:ring-amber-900">
+                <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+                <span>
+                  Sign-up is open without a bot check: scripts can create accounts and send confirmation emails from your domain. Set up{" "}
+                  <a href="#bot-protection" className="font-medium underline">
+                    Bot protection
+                  </a>{" "}
+                  before opening sign-up on a hosted instance.
+                </span>
+              </p>
+            )}
           </div>
+        )}
+      </Section>
+    </div>
+  );
+}
+
+/** Bot protection (Cloudflare Turnstile): site key + secret key, stored here (secret encrypted) or set by the env. */
+function TurnstileSection() {
+  const toast = useToast();
+  const confirm = useConfirm();
+  const { data, setData } = useFetch("admin-turnstile", api.admin.turnstile, ["settings"]);
+  const [siteKey, setSiteKey] = useState("");
+  const [secretKey, setSecretKey] = useState("");
+  const [busy, setBusy] = useState<"save" | "test" | "remove" | null>(null);
+  const [test, setTest] = useState<{ ok: boolean; message: string } | null>(null);
+  useEffect(() => {
+    if (data) setSiteKey(data.siteKey ?? "");
+  }, [data]);
+
+  async function save(e: FormEvent) {
+    e.preventDefault();
+    setBusy("save");
+    try {
+      const res = await api.admin.saveTurnstile({ ...(data?.siteKeyFromEnv ? {} : { siteKey: siteKey.trim() }), ...(secretKey.trim() ? { secretKey: secretKey.trim() } : {}) });
+      setData(() => res);
+      setSecretKey("");
+      setTest(null);
+      toast.success(res.configured ? "Bot protection is on" : "Saved");
+      invalidate("settings");
+    } catch (err) {
+      toast.error(err);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function runTest() {
+    setBusy("test");
+    try {
+      const res = await api.admin.testTurnstile(secretKey.trim() || undefined);
+      setTest(
+        res.ok
+          ? { ok: true, message: res.testing ? "Turnstile test secret: every check passes, so it does not stop bots. Use it for local testing only." : "Cloudflare accepted the secret key." }
+          : { ok: false, message: res.error },
+      );
+    } catch (err) {
+      setTest({ ok: false, message: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function remove() {
+    if (!(await confirm({ title: "Remove bot protection?", message: "Sign-up and sign-in links will no longer ask for the bot check.", confirmLabel: "Remove", danger: true }))) return;
+    setBusy("remove");
+    try {
+      const res = await api.admin.removeTurnstile();
+      setData(() => res);
+      setSiteKey("");
+      setSecretKey("");
+      setTest(null);
+      toast.success(res.configured ? "Stored keys removed (the deployment still sets them)" : "Bot protection removed");
+      invalidate("settings");
+    } catch (err) {
+      toast.error(err);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const envNote = "Set by the deployment";
+  const stored = !!data && ((!data.siteKeyFromEnv && !!data.siteKey) || (!data.secretFromEnv && data.secretSet));
+
+  return (
+    <div id="bot-protection" className="scroll-mt-6">
+      <Section
+        icon={<Bot />}
+        title="Bot protection (Cloudflare Turnstile)"
+        description="A free, privacy-friendly bot check on sign-up, on sign-in links by email, and on sign-in after 3 failed attempts."
+      >
+        {!data ? (
+          <Skeleton className="h-9 w-full max-w-xl" />
+        ) : (
+          <form onSubmit={save} className="max-w-xl space-y-5 text-sm">
+            <div className="flex items-center gap-2">
+              {data.configured ? (
+                <Badge tone="green">
+                  <CheckCircle2 className="size-3" /> On
+                </Badge>
+              ) : (
+                <Badge>Off</Badge>
+              )}
+              <span className="text-zinc-500">{data.configured ? "Visitors solve the check before these forms are accepted." : "Nothing is checked until both keys are set."}</span>
+            </div>
+            <div className="space-y-1 text-zinc-600 dark:text-zinc-300">
+              <p>
+                Create a widget in the <ExtLink href="https://dash.cloudflare.com/?to=/:account/turnstile">Cloudflare dashboard → Turnstile</ExtLink> (free): add this
+                instance&rsquo;s hostname <code className="font-mono text-xs">{window.location.hostname}</code>, keep the Managed mode, then paste its keys here.
+                Without it, do not open public sign-up on a hosted instance.
+              </p>
+            </div>
+            <Field label="Site key" help={data.siteKeyFromEnv ? `${envNote} (TURNSTILE_SITE_KEY var).` : "Public: shown to the browser."}>
+              {(id) => (
+                <div className="flex items-center gap-2">
+                  <Input id={id} value={data.siteKeyFromEnv ? (data.siteKey ?? "") : siteKey} disabled={data.siteKeyFromEnv} onChange={(e) => setSiteKey(e.target.value)} placeholder="0x4AAAAAAA…" autoComplete="off" />
+                  {data.siteKeyFromEnv && (
+                    <Badge>
+                      <Lock className="size-3" /> Locked
+                    </Badge>
+                  )}
+                </div>
+              )}
+            </Field>
+            <Field
+              label="Secret key"
+              help={
+                data.secretFromEnv
+                  ? `${envNote} (TURNSTILE_SECRET_KEY secret).`
+                  : data.secretSet
+                    ? "Set (stored encrypted, never shown again). Leave empty to keep it."
+                    : "Stored encrypted; never shown again."
+              }
+            >
+              {(id) => (
+                <div className="flex items-center gap-2">
+                  <Input
+                    id={id}
+                    type="password"
+                    autoComplete="off"
+                    value={secretKey}
+                    disabled={data.secretFromEnv}
+                    onChange={(e) => setSecretKey(e.target.value)}
+                    placeholder={data.secretFromEnv || data.secretSet ? "•••••••• (set)" : "0x4AAAAAAA…"}
+                  />
+                  {data.secretFromEnv && (
+                    <Badge>
+                      <Lock className="size-3" /> Locked
+                    </Badge>
+                  )}
+                </div>
+              )}
+            </Field>
+            {test && (
+              <p
+                className={
+                  test.ok
+                    ? "flex gap-2 rounded-lg bg-emerald-50 px-3 py-2 text-emerald-800 ring-1 ring-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-200 dark:ring-emerald-900"
+                    : "flex gap-2 rounded-lg bg-red-50 px-3 py-2 text-red-700 ring-1 ring-red-200 dark:bg-red-950/40 dark:text-red-300 dark:ring-red-900"
+                }
+              >
+                {test.ok ? <CheckCircle2 className="mt-0.5 size-4 shrink-0" /> : <AlertTriangle className="mt-0.5 size-4 shrink-0" />}
+                <span>{test.message}</span>
+              </p>
+            )}
+            <div className="flex flex-wrap items-center gap-2">
+              {!(data.siteKeyFromEnv && data.secretFromEnv) && (
+                <Button type="submit" variant="primary" loading={busy === "save"} disabled={busy !== null}>
+                  Save
+                </Button>
+              )}
+              <Button variant="outline" loading={busy === "test"} disabled={busy !== null || (!secretKey.trim() && !data.secretSet)} icon={<ShieldCheck className="size-3.5" />} onClick={runTest}>
+                Test
+              </Button>
+              {stored && (
+                <Button variant="ghost" loading={busy === "remove"} disabled={busy !== null} icon={<Trash2 className="size-3.5" />} onClick={remove}>
+                  Remove
+                </Button>
+              )}
+            </div>
+          </form>
         )}
       </Section>
     </div>

@@ -111,7 +111,11 @@ describe("security headers", () => {
     const landing = await call(null, "/");
     expect(landing.headers.get("content-security-policy")).toContain("script-src 'self' 'unsafe-inline'");
     const app = await call(owner, "/");
-    expect(app.headers.get("content-security-policy")).toMatch(/^script-src 'self';/);
+    // Scripts from 'self' plus Cloudflare Turnstile's api.js and its challenge iframe (bot check), nothing else.
+    expect(app.headers.get("content-security-policy")).toMatch(/^script-src 'self' https:\/\/challenges\.cloudflare\.com;/);
+    expect(app.headers.get("content-security-policy")).toContain("frame-src https://challenges.cloudflare.com");
+    expect(app.headers.get("content-security-policy")).toContain("connect-src 'self';");
+    expect(landing.headers.get("content-security-policy")).not.toContain("challenges.cloudflare.com");
     expect(app.headers.get("x-frame-options")).toBe("DENY");
   });
 });
