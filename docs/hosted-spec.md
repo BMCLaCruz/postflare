@@ -61,8 +61,8 @@ trial, start on the free plan or locked). No card needed (simplest across provid
 | key | counted as | enforced at |
 |---|---|---|
 | `accounts` | connected accounts in the workspace (not disabled) | connecting a new account (OAuth callback, webhook/Bluesky/Mastodon credential connect) |
-| `posts_per_month` | posts created in the current UTC calendar month (count rows by `created_at`; one per account post, i.e. what the user sees as a post card) | create post (REST, MCP, CLI, composer), duplicate |
-| `x_posts_per_month` | same, platform `x` only (X API costs money per post, $0.015, $0.20 with a URL) | create post with an X account |
+| `posts_per_month` | posts published or scheduled in a UTC calendar month (one per account post, i.e. what the user sees as a post card), see "Monthly posts" below | create post (REST, MCP, CLI, composer, publish now, duplicate), `PATCH` that schedules a draft/failed/cancelled post or moves a post to another month, retry |
+| `x_posts_per_month` | same, platform `x` only (X API costs money per post, $0.015, $0.20 with a URL) | the same, for X accounts |
 | `members` | workspace members + pending invitations to this workspace | invite, accept |
 | `storage_mb` | sum of media bytes in the workspace | media upload / import |
 | `api` | boolean: API keys and MCP allowed | create API key; API-key/MCP requests answer 402 when false |
@@ -74,6 +74,23 @@ posts `failed` with "This workspace has no active plan" (one extra query, read i
 
 Counting must stay cheap (Free plan: ≤50 D1 queries per invocation, 10 ms CPU): each check is one `COUNT(*)` on an
 indexed column, run only when billing is on and the workspace is not exempt.
+
+**Monthly posts** (deletion-proof). A post counts toward the UTC calendar month it is published or scheduled in, not
+the month it was created in. `used(month)` = the distinct posts of the workspace that have a publish outcome
+`published` or `needs_check` in that month in `usage_events` (`kind = 'publish'`, one row per post card per publish
+attempt; thread replies and comments are `kind = 'reply'` and never count; the rows survive deleting the post or its
+account) UNION the posts still to publish (`scheduled`, `publishing`, and `needs_check`, which the stuck-publishing
+sweep sets without a usage event) whose `scheduled_at` falls in that month. So:
+- drafts are free until scheduled; failed posts don't count (a retry takes a slot again);
+- deleting, cancelling or un-scheduling a post that is not published yet frees its slot; deleting a published one
+  does not;
+- a post re-published after a `needs_check` counts once per month (UNION dedupes by post id);
+- every check is against the target month of each post: a batch create or a reschedule into next month counts
+  against next month (rescheduling within the same month takes no new slot), the 402 names the month.
+One query per limit key and month: the `usage_events` part reads the partial covering index
+`usage_events_ws_published` (migration 0014), the posts part `posts_workspace (workspace_id, scheduled_at)`.
+`GET /api/billing` reports the current month with the same definition. `POST /posts/:id/resolve {published: false}`
+(re-publish a `needs_check` post) is only checked for the locked state: the post already holds its slot.
 
 ## Plans (table `plans`)
 
@@ -234,7 +251,7 @@ Tax themselves), Turnstile, per-workspace platform apps (own X keys).
 ## Implementation notes (deviations from the text above)
 
 Code: `worker/billing/` (`host.ts` is the Postflare adapter: limit keys, labels, counters, suggested plans; everything
-else is product-neutral), migration `0013_billing.sql`, tests `test/workers/billing*.test.ts`, `signup.test.ts`,
+else is product-neutral), migrations `0013_billing.sql` and `0014_billing_post_counts.sql`, tests `test/workers/billing*.test.ts`, `signup.test.ts`,
 `test/billing-entitlements.test.ts`. Endpoints: docs/api.md "Hosted mode".
 
 - **Billing on is derived.** The admin switch is `billing_enabled`; `billing_on` = "1" is recomputed after every admin
@@ -260,8 +277,8 @@ else is product-neutral), migration `0013_billing.sql`, tests `test/workers/bill
 - **Locked** blocks: new posts, scheduling (`PATCH` that schedules, retry, resolve-and-republish, comments), connecting
   accounts, media uploads/imports/multipart and upload links, invitations, API keys. Playbooks, account groups and
   apps can still be edited. Reconnecting an existing account is allowed.
-- **Counting posts by rows** means deleting posts frees monthly quota (also for X). Usage events would be exact but
-  cost more; revisit if abused.
+- **Monthly posts are counted from usage events plus pending posts** (see "Monthly posts" above), not post rows by
+  `created_at`: an earlier draft of this implementation let users publish, delete and get the quota back.
 - **Sign-up details:** verification links last 24 hours (sign-in links 15 minutes); signing up again with a pending
   email replaces its password and link (only the mailbox owner can confirm it); without email configured an existing
   email answers 409 (no way to stay enumeration-safe without sending mail). `POST /api/auth/signup/verify` activates.

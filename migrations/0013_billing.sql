@@ -56,9 +56,6 @@ UPDATE workspaces SET billing_exempt = 1;
 -- One local trial per user.
 ALTER TABLE users ADD COLUMN trial_used_at INTEGER;
 
--- Monthly post counters of the limits (posts created this UTC month).
-CREATE INDEX posts_workspace_created ON posts (workspace_id, created_at);
-
 -- Email links: sign-in ("login") or sign-up verification ("verify", `data` = JSON {"workspaceName": ...}).
 ALTER TABLE magic_links ADD COLUMN purpose TEXT NOT NULL DEFAULT 'login';
 ALTER TABLE magic_links ADD COLUMN data TEXT;

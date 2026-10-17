@@ -1189,6 +1189,7 @@ export interface PublicPlansDTO {
 /** Usage of a workspace next to its limits (GET /api/billing `usage`). */
 export interface BillingUsageDTO {
   accounts: number;
+  /** Posts published or scheduled in the current UTC month (the `posts_per_month` count). */
   postsThisMonth: number;
   xPostsThisMonth: number;
   /** Members + pending invitations. */

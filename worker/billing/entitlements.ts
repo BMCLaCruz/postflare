@@ -7,7 +7,7 @@
 import type { BillingState, BillingStatus, PlanLimitErrorDTO, PlanLimitKey, PlanLimits } from "../../shared/types";
 import { now, parseJson } from "../lib/util";
 import { DEFAULT_GRACE_DAYS, DEFAULT_TRIAL_DAYS, SETTING, parseDays } from "./config";
-import { BILLING_PATH, countUsage, limitInfo, limitMax } from "./host";
+import { BILLING_PATH, countUsage, limitInfo, limitMax, periodOf } from "./host";
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -123,16 +123,29 @@ export const LOCKED_MESSAGE =
 
 const fmt = (n: number) => n.toLocaleString("en-US");
 
+/** `n` new units used at time `at` (for the monthly keys: the publish or scheduled time, which picks the month). */
+export interface TimedAdd {
+  at: number;
+  n: number;
+}
+
 /**
- * Throws PlanLimitError when the workspace is locked or adding `adds` (per limit key: how many new items; bytes for
- * storage_mb; anything for the boolean `api`) would exceed the plan. No query unless billing applies; then one COUNT per
- * key that has a limit.
+ * Per limit key: how many new items (now; bytes for storage_mb; anything for the boolean `api`), or a list of timed
+ * adds, each checked against the period (month) it falls in.
+ */
+export type LimitAdds = Partial<Record<PlanLimitKey, number | TimedAdd[]>>;
+
+const MONTH_NAME = new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric", timeZone: "UTC" });
+
+/**
+ * Throws PlanLimitError when the workspace is locked or adding `adds` would exceed the plan. No query unless billing
+ * applies; then one COUNT per key that has a limit (and per period of its timed adds).
  */
 export async function enforceWorkspace(
   db: D1Database,
   workspaceId: string,
   snapshot: BillingSnapshot | null | undefined,
-  adds: Partial<Record<PlanLimitKey, number>>,
+  adds: LimitAdds,
   requestUrl: string,
   t = now(),
 ): Promise<void> {
@@ -142,7 +155,7 @@ export async function enforceWorkspace(
   if (ent.state === "locked") throw new PlanLimitError({ error: LOCKED_MESSAGE, code: "plan_limit", limit: "locked", used: null, max: null, upgradeUrl: url });
   const limits = ent.limits ?? {};
   const planName = ent.plan?.name ?? "Your plan";
-  for (const [key, adding] of Object.entries(adds) as Array<[PlanLimitKey, number]>) {
+  for (const [key, value] of Object.entries(adds) as Array<[PlanLimitKey, number | TimedAdd[]]>) {
     if (key === "api") {
       if (limits.api === false) {
         throw new PlanLimitError({
@@ -157,19 +170,31 @@ export async function enforceWorkspace(
       continue;
     }
     const max = limits[key];
-    if (max === null || max === undefined || !(adding >= 0)) continue;
-    const used = await countUsage(db, workspaceId, key, t);
-    if (used + adding <= limitMax(key, max)) continue;
-    const info = limitInfo(key);
-    const shown = key === "storage_mb" ? Math.round((used / (1024 * 1024)) * 10) / 10 : used;
-    throw new PlanLimitError({
-      error: `Plan limit reached: ${planName} allows ${fmt(max)} ${info.noun} (used: ${fmt(shown)}). Upgrade the plan in Workspace settings → Billing.`,
-      code: "plan_limit",
-      limit: key,
-      used: shown,
-      max,
-      upgradeUrl: url,
-    });
+    if (max === null || max === undefined) continue;
+    // Group the adds by period: a batch scheduled across months is checked against each month.
+    const periods = new Map<number, TimedAdd>();
+    for (const a of Array.isArray(value) ? value : [{ at: t, n: value }]) {
+      if (!(a.n >= 0) || !Number.isFinite(a.at)) continue;
+      const p = periodOf(key, a.at);
+      const cur = periods.get(p);
+      periods.set(p, { at: cur?.at ?? a.at, n: (cur?.n ?? 0) + a.n });
+    }
+    for (const [period, { at, n: adding }] of [...periods].sort((a, b) => a[0] - b[0])) {
+      const used = await countUsage(db, workspaceId, key, at);
+      if (used + adding <= limitMax(key, max)) continue;
+      const info = limitInfo(key);
+      const shown = key === "storage_mb" ? Math.round((used / (1024 * 1024)) * 10) / 10 : used;
+      // Another month than the current one: "allows 30 posts in November 2026".
+      const noun = period && periodOf(key, t) !== period ? info.noun.replace("this month", `in ${MONTH_NAME.format(period)}`) : info.noun;
+      throw new PlanLimitError({
+        error: `Plan limit reached: ${planName} allows ${fmt(max)} ${noun} (used: ${fmt(shown)}). Upgrade the plan in Workspace settings → Billing.`,
+        code: "plan_limit",
+        limit: key,
+        used: shown,
+        max,
+        upgradeUrl: url,
+      });
+    }
   }
 }
 
@@ -181,7 +206,7 @@ interface Ctx {
 }
 
 /** `enforceWorkspace` for the request's workspace (behind requirePermission). */
-export function enforce(c: Ctx, adds: Partial<Record<PlanLimitKey, number>> = {}): Promise<void> {
+export function enforce(c: Ctx, adds: LimitAdds = {}): Promise<void> {
   const ws = c.var.workspace;
   if (!ws) return Promise.resolve();
   return enforceWorkspace(c.env.DB, ws.id, ws.billing, adds, c.req.url);

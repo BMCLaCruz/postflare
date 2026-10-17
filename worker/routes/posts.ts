@@ -1,7 +1,8 @@
 import { Hono } from "hono";
 import type { CreatePostsInput, ResolvePostInput, ThreadItem } from "../../shared/types";
 import type { Context } from "hono";
-import { assertNotLocked, enforce } from "../billing/entitlements";
+import { assertNotLocked, enforce, entitlements, type LimitAdds } from "../billing/entitlements";
+import { monthStart } from "../billing/host";
 import { forbidInDemoWorkspace, requirePermission, wsId, type AppEnv } from "../lib/auth";
 import { findAccount, freshAccount, providerContext, type AccountRow } from "../lib/accounts";
 import { DEMO_POSTS_PER_DAY, demoPostsLeft, queueDemoPublish, simulateDueDemoPosts } from "../lib/demo";
@@ -168,6 +169,19 @@ function resolveSchedule(scheduledAt: CreatePostsInput["scheduledAt"]): { status
   return { status: "scheduled", at: Math.max(at, now()) };
 }
 
+/** Monthly post limits of posts scheduled at `at` on accounts of these providers (one per post). */
+function postSlots(at: number, providers: Array<string | null | undefined>): LimitAdds {
+  const x = providers.filter((p) => p === "x").length;
+  return { posts_per_month: [{ at, n: providers.length }], ...(x ? { x_posts_per_month: [{ at, n: x }] } : {}) };
+}
+
+/** Provider of an account of the request's workspace, only looked up when limits apply (no query otherwise). */
+async function accountProvider(c: Context<AppEnv>, accountId: string): Promise<string | null> {
+  if (!entitlements(c.var.workspace?.billing).billing) return null;
+  const r = await c.env.DB.prepare("SELECT provider FROM accounts WHERE id = ? AND workspace_id = ?").bind(accountId, wsId(c)).first<{ provider: string }>();
+  return r?.provider ?? null;
+}
+
 /**
  * Demo workspace: posts never get a Workflow. Immediate ones are "published" a few seconds later in the background,
  * later ones when they are due (`simulateDueDemoPosts`: cron, and whenever the demo's posts are listed).
@@ -256,11 +270,9 @@ postRoutes.post("/posts", requirePermission("posts.write"), async (c) => {
   if (errors.length) return c.json({ error: errors.join("\n"), errors }, 400);
   const pb = await attribution(c.env, workspaceId, body);
   if (pb && "error" in pb) return c.json({ error: pb.error }, pb.error.endsWith("not found") ? 404 : 400);
-  // Hosted mode: posts per month (one per account) and X posts per month. No query while billing is off.
-  await enforce(c, {
-    posts_per_month: normalized.length,
-    x_posts_per_month: normalized.filter((d) => refs.accounts.get(d.accountId)?.provider === "x").length,
-  });
+  // Hosted mode: posts per month (one per account) and X posts per month, counted in the month they are scheduled in
+  // (drafts are free until scheduled). No query while billing is off.
+  await enforce(c, status === "scheduled" ? postSlots(at!, normalized.map((d) => refs.accounts.get(d.accountId)?.provider)) : {});
   if (isDemo(c) && (await demoPostsLeft(c.env, workspaceId)) < normalized.length) {
     return c.json(
       { error: `The live demo has reached today's limit of ${DEMO_POSTS_PER_DAY} new posts. It resets daily: come back tomorrow, or deploy your own Postflare.` },
@@ -340,8 +352,11 @@ postRoutes.patch("/posts/:id", requirePermission("posts.write"), async (c) => {
       ? resolveSchedule(body.scheduledAt)
       : { status: row.status === "scheduled" ? "scheduled" : ("draft" as PostRow["status"]), at: row.scheduled_at };
   if (!sched) return c.json({ error: "Invalid scheduledAt" }, 400);
-  // A locked workspace (hosted mode, no active plan) can edit drafts but not schedule them.
-  if (sched.status === "scheduled") await assertNotLocked(c);
+  // A locked workspace (hosted mode, no active plan) can edit drafts but not schedule them. Scheduling a post that
+  // holds no slot yet (draft, failed, cancelled) or moving it to another month takes one in the target month.
+  const takesSlot =
+    sched.status === "scheduled" && (row.status !== "scheduled" || row.scheduled_at === null || monthStart(row.scheduled_at) !== monthStart(sched.at!));
+  if (sched.status === "scheduled") await enforce(c, takesSlot ? postSlots(sched.at!, [await accountProvider(c, row.account_id)]) : {});
 
   // App Store campaign: the app (kept, changed or removed), the auto-insert override, the post's tracked link.
   if (body.appId !== undefined && body.appId !== null && typeof body.appId !== "string") return c.json({ error: "appId must be a string" }, 400);
@@ -420,12 +435,14 @@ postRoutes.post("/posts/:id/retry", requirePermission("posts.write"), async (c) 
   const row = await findPost(c.env, wsId(c), c.req.param("id"));
   if (!row) return c.json({ error: "Not found" }, 404);
   if (row.status !== "failed" && row.status !== "cancelled") return c.json({ error: "Only failed or cancelled posts can be retried" }, 409);
-  await assertNotLocked(c);
+  // Failed and cancelled posts hold no slot: publishing now takes one this month.
+  const at = now();
+  await enforce(c, postSlots(at, [await accountProvider(c, row.account_id)]));
   const revision = row.revision + 1;
   const res = await c.env.DB.prepare(
     "UPDATE posts SET status = 'scheduled', scheduled_at = ?, error = NULL, revision = ?, workflow_id = NULL, updated_at = ? WHERE id = ? AND revision = ? AND status = ?",
   )
-    .bind(now(), revision, now(), row.id, row.revision, row.status)
+    .bind(at, revision, at, row.id, row.revision, row.status)
     .run();
   if (!res.meta.changes) return c.json({ error: "The post changed meanwhile, reload and try again" }, 409);
   if (isDemo(c)) {

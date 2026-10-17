@@ -2,13 +2,21 @@ import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import worker from "../../worker/index";
 import { publishGate } from "../../worker/workflow";
+import { enforceWorkspace, loadSnapshot, type LimitAdds } from "../../worker/billing/entitlements";
+import { newMeter, publishEventStatement } from "../../worker/lib/usage";
 import { ORIGIN, sessionCookie, type CallOptions, type Client } from "./helpers";
 
 // Hosted mode (docs/hosted-spec.md): billing off changes nothing, enabling is refused until configured, plans CRUD,
 // trials (start, one per user, expiry), every limit key, the locked state, exempt / manual overrides, permissions,
 // checkout and portal of the three providers with a mocked fetch, the admin overview numbers. Own D1 (BILLING_DB).
 
-const E = { ...env, DB: env.BILLING_DB } as unknown as Env;
+// Scheduled posts get a stub workflow: nothing here publishes, and terminating real sleeping instances is noisy.
+const workflowStub = {
+  create: async ({ id }: { id: string }) => ({ id }),
+  createBatch: async (list: Array<{ id: string }>) => list.map(({ id }) => ({ id })),
+  get: async (id: string) => ({ id, status: async () => ({ status: "waiting" }), terminate: async () => {} }),
+};
+const E = { ...env, DB: env.BILLING_DB, PUBLISH_WORKFLOW: workflowStub } as unknown as Env;
 const PW = "password123";
 
 async function call(client: Client | null, path: string, opts: CallOptions = {}) {
@@ -59,6 +67,46 @@ let freeId: string;
 const billing = (client: Client, ws?: string) => call(ws ? { ...client, ws } : client, "/api/billing");
 const connectWebhook = (client: Client, url: string) => call(client, "/api/connect/webhook", { body: { values: { name: "Hook", url } } });
 const draft = (client: Client, accountIds: string[]) => call(client, "/api/posts", { body: { posts: accountIds.map((accountId) => ({ accountId, content: "Hello" })), scheduledAt: null } });
+
+/** A time later in the current UTC month (flaky only in its last minute). */
+const soon = () => Date.now() + 60_000;
+/** Mid UTC month `k` months from now. */
+const inMonths = (k: number) => {
+  const d = new Date();
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + k, 15);
+};
+const nextMonth = () => inMonths(1);
+const monthName = (t: number) => new Intl.DateTimeFormat("en-US", { month: "long", year: "numeric", timeZone: "UTC" }).format(t);
+const schedule = (client: Client, accountIds: string[], scheduledAt: number | "now") =>
+  call(client, "/api/posts", { body: { posts: accountIds.map((accountId) => ({ accountId, content: "Hello" })), scheduledAt } });
+const patch = (client: Client, id: string, body: Record<string, unknown>) => call(client, `/api/posts/${id}`, { method: "PATCH", body });
+const usage = async (ws: string) => (await billing(bob, ws)).json.usage;
+const trialAccount = async () => (await one<{ id: string }>("SELECT id FROM accounts WHERE workspace_id = ? AND provider = 'webhook'", trialWs))!.id;
+
+/** Ids of the workspace's posts in `status` (scheduled ones: in the month of `month`, default this month). */
+async function postsIn(ws: string, status: string, month = soon()) {
+  const d = new Date(month);
+  const from = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1);
+  const to = Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1);
+  const inMonth = status === "scheduled";
+  const { results } = await E.DB.prepare(
+    `SELECT id FROM posts WHERE workspace_id = ? AND status = ? ${inMonth ? "AND scheduled_at >= ? AND scheduled_at < ?" : ""} ORDER BY created_at, id`,
+  )
+    .bind(...(inMonth ? [ws, status, from, to] : [ws, status]))
+    .all<{ id: string }>();
+  return results.map((r) => r.id);
+}
+
+/** What the publish workflow's final batch does: the post's outcome plus its usage event (worker/lib/usage.ts). */
+async function finish(postId: string, status: "published" | "failed" | "needs_check") {
+  const row = (await one<{ revision: number }>("SELECT revision FROM posts WHERE id = ?", postId))!;
+  const t = Date.now();
+  await E.DB.batch([
+    E.DB.prepare("UPDATE posts SET status = ?, updated_at = ?, published_at = ? WHERE id = ?").bind(status, t, status === "published" ? t : null, postId),
+    publishEventStatement(E.DB, { postId, revision: row.revision, status, t, meter: newMeter() }),
+  ]);
+  expect(await one("SELECT id FROM usage_events WHERE post_id = ? AND outcome = ?", postId, status)).not.toBeNull();
+}
 
 async function insertAccount(workspaceId: string, provider: string, status = "active") {
   const id = `acc_${provider}_${Math.random().toString(36).slice(2, 10)}`;
@@ -257,21 +305,106 @@ describe("trials and limits", () => {
     await run("DELETE FROM accounts WHERE id = ?", disabled);
   });
 
-  it("posts per month (one per account post) and X posts", async () => {
+  it("posts per month: drafts are free, scheduled posts count in their month", async () => {
     const c = { ...bob, ws: trialWs };
-    const acc = (await one<{ id: string }>("SELECT id FROM accounts WHERE workspace_id = ? AND provider = 'webhook'", trialWs))!.id;
-    expect((await draft(c, [acc, acc])).status).toBe(201);
-    const over = await draft(c, [acc]);
+    const acc = await trialAccount();
+    expect((await draft(c, [acc, acc, acc])).status).toBe(201);
+    expect((await usage(trialWs)).postsThisMonth).toBe(0);
+    const two = await schedule(c, [acc, acc], soon());
+    expect(two.status, two.text).toBe(201);
+    const over = await schedule(c, [acc], soon());
     expect(over.status).toBe(402);
     expect(over.json).toMatchObject({ limit: "posts_per_month", used: 2, max: 2 });
     expect(over.json.error).toMatch(/Pro allows 2 posts this month/);
+    expect((await schedule(c, [acc], "now")).status).toBe(402); // publish now
+    // Next month has its own quota, and says which month is full.
+    expect((await schedule(c, [acc, acc], nextMonth())).status).toBe(201);
+    const nextOver = await schedule(c, [acc], nextMonth());
+    expect(nextOver.status).toBe(402);
+    expect(nextOver.json).toMatchObject({ limit: "posts_per_month", used: 2, max: 2 });
+    expect(nextOver.json.error).toContain(`Pro allows 2 posts in ${monthName(nextMonth())}`);
+    expect((await usage(trialWs)).postsThisMonth).toBe(2);
+  });
+
+  it("posts per month: rescheduling, deleting, cancelling and retrying", async () => {
+    const c = { ...bob, ws: trialWs };
+    const [a, b] = await postsIn(trialWs, "scheduled", soon());
+    const [n1] = await postsIn(trialWs, "scheduled", nextMonth());
+    const [d1, d2] = await postsIn(trialWs, "draft");
+    // Moving within the month keeps its slot; into a full month or scheduling a draft needs one.
+    expect((await patch(c, a, { scheduledAt: soon() + 1000 })).status).toBe(200);
+    expect((await patch(c, a, { content: "edited, still scheduled" })).status).toBe(200);
+    expect((await patch(c, a, { scheduledAt: nextMonth() })).json).toMatchObject({ limit: "posts_per_month", used: 2 });
+    expect((await patch(c, d1, { scheduledAt: soon() })).status).toBe(402);
+    // Deleting a scheduled post frees its slot.
+    expect((await call(c, `/api/posts/${b}`, { method: "DELETE" })).status).toBe(200);
+    expect((await usage(trialWs)).postsThisMonth).toBe(1);
+    expect((await patch(c, d1, { scheduledAt: soon() })).status).toBe(200);
+    expect((await patch(c, d2, { scheduledAt: soon() })).status).toBe(402);
+    // Turning a scheduled post back into a draft frees it too; next month's slot moves with a reschedule.
+    expect((await patch(c, n1, { scheduledAt: null })).status).toBe(200);
+    expect((await patch(c, a, { scheduledAt: nextMonth() })).status).toBe(200);
+    expect((await usage(trialWs)).postsThisMonth).toBe(1);
+    expect((await patch(c, d2, { scheduledAt: soon() })).status).toBe(200);
+    // Cancelling frees the slot; retrying a cancelled or failed post takes one again.
+    expect((await call(c, `/api/posts/${d2}/cancel`, { method: "POST" })).status).toBe(200);
+    expect((await usage(trialWs)).postsThisMonth).toBe(1);
+    expect((await call(c, `/api/posts/${n1}`, { method: "PATCH", body: { scheduledAt: soon() } })).status).toBe(200);
+    const retry = await call(c, `/api/posts/${d2}/retry`, { method: "POST" });
+    expect(retry.status).toBe(402);
+    expect(retry.json).toMatchObject({ limit: "posts_per_month", used: 2, max: 2 });
+  });
+
+  it("posts per month: a published post counts after it is deleted; failed posts don't count", async () => {
+    const c = { ...bob, ws: trialWs };
+    const [p1, p2] = await postsIn(trialWs, "scheduled");
+    await finish(p1, "published");
+    expect((await call(c, `/api/posts/${p1}`, { method: "DELETE" })).status).toBe(200);
+    expect(await one("SELECT id FROM posts WHERE id = ?", p1)).toBeNull();
+    expect((await usage(trialWs)).postsThisMonth).toBe(2);
+    const [d] = await postsIn(trialWs, "draft");
+    expect((await patch(c, d, { scheduledAt: soon() })).status).toBe(402);
+    // A failed attempt frees the slot (and deleting the failed post changes nothing).
+    await finish(p2, "failed");
+    expect((await usage(trialWs)).postsThisMonth).toBe(1);
+    expect((await patch(c, d, { scheduledAt: soon() })).status).toBe(200);
+    expect((await call(c, `/api/posts/${p2}/retry`, { method: "POST" })).json).toMatchObject({ limit: "posts_per_month", used: 2 });
+    // needs_check (maybe published) keeps counting, also once deleted; re-publishing it is not counted twice.
+    await finish(d, "needs_check");
+    expect((await usage(trialWs)).postsThisMonth).toBe(2);
+    await run("UPDATE posts SET status = 'scheduled', revision = revision + 1 WHERE id = ?", d);
+    expect((await usage(trialWs)).postsThisMonth).toBe(2);
+  });
+
+  it("checks every month of a batch", async () => {
+    const snapshot = await loadSnapshot(E.DB, trialWs);
+    const check = (adds: LimitAdds) => enforceWorkspace(E.DB, trialWs, snapshot, adds, ORIGIN);
+    // This month and next month are full (2 of 2), the month after is empty.
+    const later = inMonths(2);
+    await expect(check({ posts_per_month: [{ at: soon(), n: 0 }, { at: later, n: 2 }] })).resolves.toBeUndefined();
+    await expect(check({ posts_per_month: [{ at: later, n: 1 }, { at: soon(), n: 1 }] })).rejects.toMatchObject({ body: { limit: "posts_per_month", used: 2 } });
+    await expect(check({ posts_per_month: [{ at: later, n: 1 }, { at: nextMonth(), n: 1 }] })).rejects.toMatchObject({ body: { used: 2 } });
+    await expect(check({ posts_per_month: [{ at: later, n: 2 }, { at: later + 1000, n: 1 }] })).rejects.toMatchObject({ body: { used: 0 } });
+  });
+
+  it("X posts per month (same rules, X accounts only)", async () => {
     // Free plan: 30 posts, 0 X posts.
+    const f = { ...bob, ws: freeWs };
     const x = await insertAccount(freeWs, "x");
-    const xRes = await draft({ ...bob, ws: freeWs }, [x]);
+    expect((await draft(f, [x])).status).toBe(201);
+    const xRes = await schedule(f, [x], soon());
     expect(xRes.status).toBe(402);
     expect(xRes.json).toMatchObject({ limit: "x_posts_per_month", used: 0, max: 0 });
-    const hook = await connectWebhook({ ...bob, ws: freeWs }, "https://hooks.example.com/free1");
-    expect((await draft({ ...bob, ws: freeWs }, [hook.json.ids[0]])).status).toBe(201);
+    const hook = await connectWebhook(f, "https://hooks.example.com/free1");
+    expect((await schedule(f, [hook.json.ids[0]], soon())).status).toBe(201);
+    // A published X post counts after it is deleted (and after its account is gone).
+    const [p] = await postsIn(freeWs, "scheduled");
+    await run("UPDATE posts SET account_id = ? WHERE id = ?", x, p);
+    await finish(p, "published");
+    expect((await call(f, `/api/posts/${p}`, { method: "DELETE" })).status).toBe(200);
+    await run("DELETE FROM posts WHERE account_id = ?", x);
+    await run("DELETE FROM accounts WHERE id = ?", x);
+    expect((await usage(freeWs))).toMatchObject({ postsThisMonth: 1, xPostsThisMonth: 1 });
   });
 
   it("members (members + pending invitations)", async () => {
@@ -321,7 +454,7 @@ describe("trials and limits", () => {
     expect(locked.status).toBe(402);
     expect(locked.json).toMatchObject({ code: "plan_limit", limit: "locked" });
     expect(locked.json.error).toMatch(/no active plan/);
-    const post = (await one<{ id: string }>("SELECT id FROM posts WHERE workspace_id = ? LIMIT 1", trialWs))!.id;
+    const post = (await one<{ id: string }>("SELECT id FROM posts WHERE workspace_id = ? AND status IN ('draft', 'failed') LIMIT 1", trialWs))!.id;
     expect((await call(c, `/api/posts/${post}`, { method: "PATCH", body: { scheduledAt: Date.now() + 3600_000 } })).status).toBe(402);
     expect((await call(c, `/api/posts/${post}`, { method: "PATCH", body: { content: "still editable as a draft" } })).status).toBe(200);
     expect((await call(c, "/api/upload-links", { body: {} })).status).toBe(402);

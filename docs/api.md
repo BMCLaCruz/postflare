@@ -151,8 +151,8 @@ exporting and deleting still work). `upgradeUrl` = `<origin>/workspace?tab=billi
 | key | counted as | checked by |
 |---|---|---|
 | `accounts` | accounts of the workspace that are not disabled | `POST /connect/:provider`, OAuth callbacks (only accounts new to the workspace; reconnects are free), `PATCH /accounts/:id {status: "active"}` of a disabled account |
-| `posts_per_month` | posts created this UTC month (one per account) | `POST /posts` (REST, MCP `create_post`, CLI, composer, duplicate) |
-| `x_posts_per_month` | the same, X accounts only | `POST /posts` |
+| `posts_per_month` | posts published or scheduled in a UTC calendar month, one per account (drafts and failed posts are free; deleting a published post does not free its slot, deleting or cancelling a scheduled one does) | `POST /posts` with a schedule or `"now"` (REST, MCP `create_post`, CLI, composer, duplicate), `PATCH /posts/:id` that schedules a draft/failed/cancelled post or moves it to another month, `POST /posts/:id/retry`; checked against the month each post is scheduled in |
+| `x_posts_per_month` | the same, X accounts only | the same |
 | `members` | members + pending invitations | `POST /invitations` (into a workspace), `POST /invitations/accept` (existing workspace) |
 | `storage_mb` | sum of media sizes | `POST /media`, `POST /media/from-url`, `POST /media/multipart`, upload links (`/u/:token/file`, `/u/:token/multipart`) |
 | `api` | boolean | `POST /keys`; every API-key request (REST, CLI, MCP) answers 402 when `false` |
@@ -167,7 +167,8 @@ workspace with "This workspace has no active plan…" (already scheduled posts a
   currentPeriodEnd, graceEndsAt, interval, provider, hasSubscription, usage, limits, plans, canManage }`.
   `state`: `unlimited` · `plan` · `trial` · `free` · `locked`. `status`: `none` · `trialing` · `active` · `past_due` ·
   `canceled` (paid until `currentPeriodEnd`) · `expired`. `usage` `{ accounts, postsThisMonth, xPostsThisMonth,
-  members, storageMb }` and `plans` (pricing cards) only while billing is on. `limits: null` = unlimited.
+  members, storageMb }` (posts: the current UTC month, counted like the limits) and `plans` (pricing cards) only
+  while billing is on. `limits: null` = unlimited.
 - `POST /billing/checkout` `{ planId, interval: "month" | "year" }` (`billing.manage`) → `{ url }`: redirect there. The
   checkout returns to `/workspace?tab=billing&checkout=success|canceled`; the plan changes when the provider's webhook
   arrives (poll `GET /billing`). 409: billing off, exempt workspace, already subscribed through a provider (use the
