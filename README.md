@@ -1,6 +1,6 @@
 # Postflare
 
-[![License: AGPL-3.0](https://img.shields.io/github/license/FerdiKT/postflare)](LICENSE)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 [![npm](https://img.shields.io/npm/v/postflare?label=cli)](https://www.npmjs.com/package/postflare)
 [![CI](https://github.com/FerdiKT/postflare/actions/workflows/ci.yml/badge.svg)](https://github.com/FerdiKT/postflare/actions/workflows/ci.yml)
 
