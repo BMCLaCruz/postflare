@@ -2,6 +2,7 @@ import type {
   AccountDTO,
   AccountGroupDTO,
   AccountGroupInput,
+  AdminEmailDTO,
   AdminOverviewDTO,
   AppDTO,
   CampaignLinkDTO,
@@ -140,8 +141,8 @@ export const api = {
     setup: (input: SetupInput) => request<{ ok: true }>("POST", "/auth/setup", input),
     login: (email: string, password: string) => request<{ ok: true }>("POST", "/auth/login", { email, password }),
     logout: () => request<{ ok: true }>("POST", "/auth/logout"),
-    emailLink: (email: string) => request<{ ok: true }>("POST", "/auth/email-link", { email }),
-    verifyEmailLink: (token: string) => request<{ ok: true }>("POST", "/auth/email-link/verify", { token }),
+    magicLink: (email: string) => request<{ ok: true }>("POST", "/auth/magic-link", { email }),
+    verifyMagicLink: (token: string) => request<{ ok: true }>("POST", "/auth/magic-link/verify", { token }),
   },
   me: {
     get: () => get<MeDTO>("/me"),
@@ -263,6 +264,9 @@ export const api = {
   version: () => get<VersionDTO>("/version"),
   admin: {
     overview: (days: number) => get<AdminOverviewDTO>(`/admin/overview?days=${days}`),
+    email: () => get<AdminEmailDTO>("/admin/email"),
+    setEmail: (enabled: boolean) => request<AdminEmailDTO>("PATCH", "/admin/email", { enabled }),
+    testEmail: () => request<{ ok: true; to: string }>("POST", "/admin/email/test", {}),
   },
   updates: {
     get: () => get<UpdateStatusDTO>("/updates"),

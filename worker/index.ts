@@ -184,9 +184,9 @@ export async function dailyJobs(env: Env): Promise<void> {
     sweepMedia(env),
     env.DB.prepare("DELETE FROM oauth_states WHERE created_at < ?").bind(now() - 60 * 60 * 1000).run(),
     env.DB.prepare("DELETE FROM sessions WHERE expires_at < ?").bind(now()).run(),
-    env.DB.prepare("DELETE FROM login_links WHERE expires_at < ?").bind(now()).run(),
+    env.DB.prepare("DELETE FROM magic_links WHERE expires_at < ?").bind(now()).run(),
     env.DB.prepare("DELETE FROM upload_links WHERE expires_at < ?").bind(now() - 7 * 24 * 60 * 60 * 1000).run(),
-    env.DB.prepare("DELETE FROM settings WHERE (key LIKE 'login_fail:%' OR key LIKE 'login_link:%' OR key LIKE 'demo_login:%') AND json_extract(value, '$.until') < ?").bind(now()).run(),
+    env.DB.prepare("DELETE FROM settings WHERE (key LIKE 'login_fail:%' OR key LIKE 'magic_link:%' OR key LIKE 'demo_login:%') AND json_extract(value, '$.until') < ?").bind(now()).run(),
     env.DB.prepare("DELETE FROM invitations WHERE accepted_at IS NULL AND expires_at < ?").bind(now() - 30 * 24 * 60 * 60 * 1000).run(),
     // Meta data deletion requests shown on /data-deletion/ (90 days).
     pruneDeletionsStatement(env.DB, now()).run(),

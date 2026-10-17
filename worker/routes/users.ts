@@ -200,14 +200,16 @@ userRoutes.patch("/users/:id", manageUsers, async (c) => {
   if (sets.length) {
     await db.batch([
       db.prepare(`UPDATE users SET ${sets.join(", ")}, updated_at = ? WHERE id = ?`).bind(...binds, now(), target.id),
-      // A disabled user is signed out everywhere (API keys are rejected while disabled).
-      ...(body.status === "disabled" ? [db.prepare("DELETE FROM sessions WHERE user_id = ?").bind(target.id)] : []),
+      // A disabled user is signed out everywhere (API keys are rejected while disabled) and their sign-in links end.
+      ...(body.status === "disabled"
+        ? [db.prepare("DELETE FROM sessions WHERE user_id = ?").bind(target.id), db.prepare("DELETE FROM magic_links WHERE user_id = ?").bind(target.id)]
+        : []),
     ]);
   }
   return c.json((await listUsers(db, target.id))[0]);
 });
 
-/** Delete a user: memberships, sessions and API keys go; content they created stays in the workspaces. */
+/** Delete a user: memberships, sessions, API keys and sign-in links go; content they created stays in the workspaces. */
 userRoutes.delete("/users/:id", manageUsers, async (c) => {
   const db = c.env.DB;
   const [target] = await listUsers(db, c.req.param("id"));
@@ -223,6 +225,7 @@ userRoutes.delete("/users/:id", manageUsers, async (c) => {
     db.prepare("DELETE FROM sessions WHERE user_id = ?").bind(target.id),
     db.prepare("DELETE FROM api_keys WHERE user_id = ?").bind(target.id),
     db.prepare("DELETE FROM oauth_states WHERE user_id = ?").bind(target.id),
+    db.prepare("DELETE FROM magic_links WHERE user_id = ?").bind(target.id),
     db.prepare("DELETE FROM workspace_members WHERE user_id = ?").bind(target.id),
     db.prepare("DELETE FROM users WHERE id = ?").bind(target.id),
   ]);

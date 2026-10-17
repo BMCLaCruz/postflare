@@ -11,10 +11,8 @@ interface Env {
   UPDATE_CHECK?: string;
   /** GitHub repository (owner/name) whose releases the update check reads. Default: FerdiKT/postflare. */
   UPDATE_REPO?: string;
-  /** Sender of sign-in link emails, e.g. "Postflare <login@example.com>". Email sign-in is on when this and a transport are set. */
+  /** Sender of sign-in link emails, e.g. "Postflare <login@example.com>" or a bare address. */
   EMAIL_FROM?: string;
-  /** Optional Cloudflare `send_email` binding (Email Service) for sign-in link emails. */
+  /** Optional Cloudflare `send_email` binding (Email Sending) for sign-in link emails; an instance admin turns them on. */
   EMAIL?: SendEmail;
-  /** Optional secret: Resend API key, the alternative transport for sign-in link emails. */
-  RESEND_API_KEY?: string;
 }

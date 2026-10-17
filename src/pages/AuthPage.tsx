@@ -5,16 +5,16 @@ import { Button } from "../components/ui/Button";
 import { Field, Input } from "../components/ui/Form";
 import { ApiError, api, errorMessage } from "../lib/api";
 
-/** `emailLogin`: the instance can email sign-in links, offered next to the password. */
+/** `magicLink`: the instance can email sign-in links, offered next to the password. */
 export function AuthPage({
   mode,
   setupToken: askToken = false,
-  emailLogin = false,
+  magicLink = false,
   onDone,
 }: {
   mode: "setup" | "login";
   setupToken?: boolean;
-  emailLogin?: boolean;
+  magicLink?: boolean;
   onDone: () => void;
 }) {
   const [name, setName] = useState("");
@@ -28,7 +28,7 @@ export function AuthPage({
   const setup = mode === "setup";
   const [useLink, setUseLink] = useState(false);
   const [sentTo, setSentTo] = useState<string | null>(null);
-  const linkMode = !setup && emailLogin && useLink;
+  const linkMode = !setup && magicLink && useLink;
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -39,7 +39,7 @@ export function AuthPage({
     setBusy(true);
     try {
       if (linkMode) {
-        await api.auth.emailLink(email.trim());
+        await api.auth.magicLink(email.trim());
         return setSentTo(email.trim());
       }
       if (setup) await api.auth.setup({ name: name.trim(), email: email.trim(), password, workspaceName: workspaceName.trim() || undefined, ...(askToken ? { setupToken: token.trim() } : {}) });
@@ -60,8 +60,8 @@ export function AuthPage({
         <div className="flex gap-3 rounded-xl bg-zinc-50 p-3.5 text-sm text-zinc-600 ring-1 ring-zinc-200 dark:bg-zinc-800/50 dark:text-zinc-300 dark:ring-zinc-800">
           <MailCheck className="mt-0.5 size-5 shrink-0 text-brand-500" />
           <p>
-            If <span className="font-medium text-zinc-900 dark:text-zinc-100">{sentTo}</span> has an account here, a sign-in link is on its way. It works once
-            and expires in 15 minutes.
+            If an account exists for <span className="font-medium text-zinc-900 dark:text-zinc-100">{sentTo}</span>, a sign-in link is on its way. It works
+            once, for 15 minutes.
           </p>
         </div>
         <Button variant="ghost" className="mt-4 w-full" onClick={() => setSentTo(null)}>
@@ -78,7 +78,7 @@ export function AuthPage({
         setup
           ? "Create the first account. You become the admin of this instance."
           : linkMode
-            ? "We email you a link that signs you in, no password needed."
+            ? "We will email you a link to sign in."
             : "Sign in with your email and password."
       }
       footer={
@@ -154,7 +154,7 @@ export function AuthPage({
         <Button type="submit" variant="primary" size="lg" className="w-full" loading={busy} disabled={!email || (!linkMode && !password)}>
           {setup ? "Create account & continue" : linkMode ? "Email me a sign-in link" : "Sign in"}
         </Button>
-        {!setup && emailLogin && (
+        {!setup && magicLink && (
           <Button
             variant="ghost"
             className="w-full"
@@ -164,7 +164,7 @@ export function AuthPage({
             }}
           >
             {linkMode ? <KeyRound className="size-4" /> : <Mail className="size-4" />}
-            {linkMode ? "Sign in with a password" : "Email me a sign-in link instead"}
+            {linkMode ? "Sign in with a password instead" : "Email me a sign-in link instead"}
           </Button>
         )}
       </form>

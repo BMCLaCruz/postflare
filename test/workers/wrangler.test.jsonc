@@ -14,7 +14,7 @@
     { "binding": "PLAYBOOKS_DB", "database_name": "postflare-playbooks", "database_id": "playbooks" },
     { "binding": "DELETION_DB", "database_name": "postflare-deletion", "database_id": "deletion" },
     { "binding": "CAMPAIGNS_DB", "database_name": "postflare-campaigns", "database_id": "campaigns" },
-    { "binding": "EMAIL_LOGIN_DB", "database_name": "postflare-email-login", "database_id": "email-login" }
+    { "binding": "MAGIC_LINK_DB", "database_name": "postflare-magic-link", "database_id": "magic-link" }
   ],
   "r2_buckets": [{ "binding": "MEDIA", "bucket_name": "postflare-media" }],
   "workflows": [{ "name": "postflare-publish", "binding": "PUBLISH_WORKFLOW", "class_name": "PublishWorkflow" }]

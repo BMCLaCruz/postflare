@@ -158,12 +158,17 @@ Optional settings:
 - `PUBLIC_URL` (var): your public URL if you use a custom domain. It can also be changed in Settings.
 - `DEMO_MODE` (var): `"true"` hosts the public live demo. Off by default.
 - `UPDATE_CHECK` (var): `"false"` turns off the daily check for new releases (one request a day to the GitHub API).
-- `EMAIL_FROM` (var) plus an email transport: turns on **email sign-in links** ("Email me a sign-in link" on the
-  sign-in page; single use, 15 minutes). `EMAIL_FROM` is the sender, e.g. `"Postflare <login@example.com>"`. Transport:
-  - a Cloudflare [Email Service](https://developers.cloudflare.com/email-service/) `send_email` binding named `EMAIL`
-    (`"send_email": [{ "name": "EMAIL" }]` in `wrangler.local.jsonc`). On the Workers Free plan it only delivers to
-    verified destination addresses of your account, fine for a personal instance; or
-  - a [Resend](https://resend.com) API key: `npx wrangler secret put RESEND_API_KEY` (any recipient, free tier 3,000/month).
+- `EMAIL_FROM` (var) plus a `send_email` binding named `EMAIL`: **sign-in links by email** through Cloudflare
+  [Email Sending](https://developers.cloudflare.com/email-service/). Users can then request a one-time link ("Email me a
+  sign-in link instead" on the sign-in page; single use, 15 minutes, 3 per email and 10 per IP per 15 minutes) instead
+  of typing their password. Off by default: once configured, an instance admin turns it on in **Admin → Instance
+  settings → Sign-in links by email** (with a "Send test email" button). Setup:
+  1. Onboard your domain to Email Sending: `npx wrangler email sending enable example.com`.
+  2. In `wrangler.local.jsonc`: `"send_email": [{ "name": "EMAIL", "remote": true }]` and the var
+     `"EMAIL_FROM": "Postflare <login@example.com>"` (or a bare address), then deploy.
+
+  Sending to any address needs **Workers Paid** ($5/month). On the Free plan the binding only delivers to your
+  account's verified Email Routing destination addresses, enough for a personal instance.
 
 ### Custom domain / personal config
 

@@ -6,13 +6,13 @@ import { api, errorMessage } from "../lib/api";
 import { AuthShell, FormError } from "./AuthPage";
 
 /**
- * `/login/link#<token>`: opened from a sign-in link email. The token stays in the fragment (never sent in a URL, so not
+ * `/auth/link#<token>`: opened from a sign-in link email. The token stays in the fragment (never sent in a URL, so not
  * in logs) and is only used up by the button press: email link scanners that open the page do not sign anyone in.
  */
-export function LoginLinkPage() {
+export function MagicLinkPage() {
   const [token] = useState(() => window.location.hash.slice(1));
   const [error, setError] = useState<string | null>(
-    token ? null : "This sign-in link is incomplete. Copy the whole link from the email, or ask for a new one.",
+    token ? null : "This sign-in link is incomplete. Open it again from the email, or request a new one.",
   );
   const [busy, setBusy] = useState(false);
 
@@ -20,7 +20,7 @@ export function LoginLinkPage() {
     setBusy(true);
     setError(null);
     try {
-      await api.auth.verifyEmailLink(token);
+      await api.auth.verifyMagicLink(token);
       // A full reload: the link may sign in a different user than the current session.
       window.location.replace("/");
     } catch (err) {

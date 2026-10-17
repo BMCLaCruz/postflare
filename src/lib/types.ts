@@ -13,7 +13,7 @@ export interface AuthStatus {
   authenticated: boolean;
   demo?: true;
   setupToken?: true;
-  emailLogin?: true;
+  magicLink?: true;
 }
 
 export interface Overview {

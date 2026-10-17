@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import type { SetupInput } from "../../shared/types";
 import { createSession, destroySession, sessionUser, throttleIp, type AppEnv } from "../lib/auth";
 import { demoEnabled } from "../lib/demo";
-import { emailEnabled, loginLinkEmail, sendEmail } from "../lib/email";
+import { magicLinkEmail, magicLinkEnabled, sendEmail } from "../lib/email";
 import { hashPassword, needsRehash, verifyPassword } from "../lib/crypto";
 import { ROLE } from "../lib/permissions";
 import { baseUrl, getSetting, setSetting } from "../lib/settings";
@@ -17,7 +17,7 @@ async function hasUsers(db: D1Database) {
 }
 
 authRoutes.get("/status", async (c) => {
-  const [setup, session] = await Promise.all([hasUsers(c.env.DB), sessionUser(c)]);
+  const [setup, session, magicLink] = await Promise.all([hasUsers(c.env.DB), sessionUser(c), magicLinkEnabled(c.env)]);
   // Demo visitors are signed in even on an instance that has no real user yet.
   const demo = !!session?.user.demo;
   return c.json({
@@ -27,8 +27,8 @@ authRoutes.get("/status", async (c) => {
     ...(!setup && c.env.SETUP_TOKEN ? { setupToken: true } : {}),
     // Only when the live demo is on (the landing page shows its "Live demo" buttons then).
     ...(demoEnabled(c.env) ? { demo: true } : {}),
-    // The sign-in page then offers "Email me a sign-in link".
-    ...(setup && emailEnabled(c.env) ? { emailLogin: true } : {}),
+    // The sign-in page then offers "Email me a sign-in link instead" (EMAIL + EMAIL_FROM set and turned on by an admin).
+    ...(setup && magicLink ? { magicLink: true } : {}),
   });
 });
 
@@ -127,54 +127,67 @@ authRoutes.post("/login", async (c) => {
 
 const LINK_TTL_MS = 15 * 60 * 1000;
 const MAX_LINKS_IP = 10;
-const MAX_LINKS_EMAIL = 5;
+const MAX_LINKS_EMAIL = 3;
+const INVALID_LINK = "This sign-in link is invalid, used or expired. Request a new one.";
+const NOT_ENABLED = "Sign-in links by email are not turned on for this instance";
 
 /**
- * Email sign-in ("magic link"): mails a single-use link to an existing active user. The answer is the same whether
- * or not the email has an account, and the email goes out after the response (no enumeration by timing either).
+ * Sign-in links by email ("magic link"): mails a single-use link to an existing active user. The answer is the same
+ * whether or not the email has an account: the user lookup, the link and the email all happen after the response.
+ * Throttled per email (3) and per IP (10) in 15 minutes, counting every request.
  */
-authRoutes.post("/email-link", async (c) => {
-  if (!emailEnabled(c.env)) return c.json({ error: "Email sign-in is not set up on this instance" }, 404);
+authRoutes.post("/magic-link", async (c) => {
+  if (!(await magicLinkEnabled(c.env))) return c.json({ error: NOT_ENABLED }, 404);
   const body = await c.req.json<{ email?: unknown }>().catch(() => ({}) as { email?: unknown });
   const email = normalizeEmail(body.email);
   if (!email) return c.json({ error: "A valid email is required" }, 400);
-  const ipKey = `login_link:${throttleIp(c.req.header("cf-connecting-ip"))}`;
-  const emailKey = `login_link:email:${email.toLowerCase()}`;
+  const ipKey = `magic_link:${throttleIp(c.req.header("cf-connecting-ip"))}`;
+  const emailKey = `magic_link:email:${email.toLowerCase()}`;
   const [ipF, emailF] = await Promise.all([failures(c.env, ipKey), failures(c.env, emailKey)]);
   const over = (f: Failures, max: number) => f.n >= max && f.until > Date.now();
-  if (over(ipF, MAX_LINKS_IP) || over(emailF, MAX_LINKS_EMAIL)) return c.json({ error: "Too many sign-in links, try again in a few minutes" }, 429);
+  if (over(ipF, MAX_LINKS_IP) || over(emailF, MAX_LINKS_EMAIL)) return c.json({ error: "Too many sign-in links requested. Try again in 15 minutes." }, 429);
   await Promise.all([recordFailure(c.env, ipKey, ipF), recordFailure(c.env, emailKey, emailF)]);
 
-  const user = await c.env.DB.prepare("SELECT id, email FROM users WHERE email = ? AND is_demo = 0 AND status = 'active'")
-    .bind(email)
-    .first<{ id: string; email: string }>();
-  if (user) {
-    const token = randomToken(32);
-    const t = now();
-    await c.env.DB.prepare("INSERT INTO login_links (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)")
-      .bind(await sha256Hex(token), user.id, t, t + LINK_TTL_MS)
-      .run();
-    // The token goes in the fragment: never sent to a server, so it stays out of request logs.
-    const url = `${await baseUrl(c.env, c.req.url)}/login/link#${token}`;
-    c.executionCtx.waitUntil(sendEmail(c.env, loginLinkEmail(user.email, url, LINK_TTL_MS / 60_000)).catch((err) => console.error("sign-in link email failed", err)));
-  }
+  c.executionCtx.waitUntil(
+    (async () => {
+      const user = await c.env.DB.prepare("SELECT id, email FROM users WHERE email = ? AND is_demo = 0 AND status = 'active'")
+        .bind(email)
+        .first<{ id: string; email: string }>();
+      if (!user) return;
+      const token = randomToken(32);
+      const t = now();
+      await c.env.DB.prepare("INSERT INTO magic_links (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)")
+        .bind(await sha256Hex(token), user.id, t, t + LINK_TTL_MS)
+        .run();
+      // The token goes in the fragment: never sent to a server, so it stays out of request logs.
+      const url = `${await baseUrl(c.env, c.req.url)}/auth/link#${token}`;
+      await sendEmail(c.env, magicLinkEmail(user.email, url, LINK_TTL_MS / 60_000));
+    })().catch((err) => console.error("sign-in link email failed", err?.code ?? "", err?.message ?? err)),
+  );
   return c.json({ ok: true });
 });
 
-/** Opens a session from an emailed sign-in link (POSTed by the /login/link page, so link scanners cannot use it up). */
-authRoutes.post("/email-link/verify", async (c) => {
+/**
+ * Opens a session from an emailed sign-in link (POSTed by the /auth/link page on click, so link scanners cannot use it
+ * up). Single use; the user's other open links end. Turning the feature off ends outstanding links too (404).
+ */
+authRoutes.post("/magic-link/verify", async (c) => {
+  if (!(await magicLinkEnabled(c.env))) return c.json({ error: NOT_ENABLED }, 404);
   const body = await c.req.json<{ token?: unknown }>().catch(() => ({}) as { token?: unknown });
   const token = typeof body.token === "string" ? body.token.trim() : "";
-  if (!token) return c.json({ error: "Missing token" }, 400);
+  if (!/^[\w-]{20,100}$/.test(token)) return c.json({ error: INVALID_LINK }, 400);
   const t = now();
-  const row = await c.env.DB.prepare(
-    `UPDATE login_links SET used_at = ? WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?
-     AND user_id IN (SELECT id FROM users WHERE status = 'active' AND is_demo = 0) RETURNING user_id`,
-  )
+  const row = await c.env.DB.prepare("UPDATE magic_links SET used_at = ? WHERE token_hash = ? AND used_at IS NULL AND expires_at > ? RETURNING user_id")
     .bind(t, await sha256Hex(token), t)
     .first<{ user_id: string }>();
-  if (!row) return c.json({ error: "This sign-in link is invalid, used or expired. Ask for a new one." }, 400);
-  await c.env.DB.prepare("UPDATE users SET last_login_at = ? WHERE id = ?").bind(t, row.user_id).run();
+  if (!row) return c.json({ error: INVALID_LINK }, 400);
+  const user = await c.env.DB.prepare("SELECT status, is_demo FROM users WHERE id = ?").bind(row.user_id).first<{ status: string; is_demo: number }>();
+  if (!user || user.is_demo) return c.json({ error: INVALID_LINK }, 400);
+  if (user.status !== "active") return c.json({ error: "This account is disabled" }, 403);
+  await c.env.DB.batch([
+    c.env.DB.prepare("UPDATE magic_links SET used_at = ? WHERE user_id = ? AND used_at IS NULL").bind(t, row.user_id),
+    c.env.DB.prepare("UPDATE users SET last_login_at = ? WHERE id = ?").bind(t, row.user_id),
+  ]);
   await createSession(c, row.user_id);
   return c.json({ ok: true });
 });

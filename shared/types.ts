@@ -523,8 +523,18 @@ export interface AuthStatusDTO {
   demo?: true;
   /** Present (true) before setup when the deployment has a SETUP_TOKEN secret: the setup form must send it. */
   setupToken?: true;
-  /** Present (true) when email sign-in links are set up (EMAIL_FROM + an EMAIL binding or RESEND_API_KEY). */
-  emailLogin?: true;
+  /** Present (true) when sign-in links by email are on (EMAIL binding + EMAIL_FROM, turned on by an instance admin). */
+  magicLink?: true;
+}
+
+/** GET / PATCH /api/admin/email: sign-in links by email (Cloudflare Email Sending). */
+export interface AdminEmailDTO {
+  /** The EMAIL send_email binding and the EMAIL_FROM var are both set. */
+  configured: boolean;
+  /** EMAIL_FROM, null when unset. */
+  from: string | null;
+  /** The instance admin toggle (setting magic_link_enabled, off by default). */
+  enabled: boolean;
 }
 
 /** Body of POST /api/auth/setup */

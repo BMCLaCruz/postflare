@@ -23,6 +23,12 @@ redeploying from an up-to-date checkout.
 - Passwords are hashed with PBKDF2-SHA256 at 20,000 iterations (what fits the Workers Free plan's CPU budget). Online
   guessing is throttled (5 failures per IP or IPv6 /64 and 10 per email per 15 minutes), but use long, unique
   passwords: an offline attack on a leaked database is cheaper than with a slower hash.
+- Sign-in links by email are off unless an instance admin turns them on (Admin → Instance settings). Links are single
+  use, expire after 15 minutes, carry the token in the URL fragment (only its SHA-256 is stored) and are spent by a
+  button press on `/auth/link`, not by opening the page, so mail scanners cannot use them. Requests answer the same for
+  unknown emails (lookup and sending happen after the response) and are throttled (3 per email, 10 per IP per 15
+  minutes). Signing in with one ends the user's other open links; disabling or deleting a user, or turning the feature
+  off, ends them all. Anyone who can read the user's mailbox can sign in as them, like with a password reset.
 - An API key only acts inside its own workspace, with its user's member role there. It never carries instance-admin
   permissions (users, roles, platform apps, settings), even when its user is an instance admin; those need a browser
   session.

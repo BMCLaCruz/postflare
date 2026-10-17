@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useLocation } from "react-router";
-import { AlertTriangle, ArrowUpCircle, ExternalLink, FlaskConical, Globe, HardDrive, Info, Lock, RefreshCw, ShieldCheck } from "lucide-react";
+import { AlertTriangle, ArrowUpCircle, ExternalLink, FlaskConical, Globe, HardDrive, Info, Lock, Mail, RefreshCw, Send, ShieldCheck } from "lucide-react";
 import { StorageUsage } from "../components/media/StorageUsage";
 import { Button } from "../components/ui/Button";
 import { Field, Input, Select, Switch } from "../components/ui/Form";
@@ -15,7 +15,7 @@ import { useSession } from "../lib/session";
 import { invalidate, useFetch } from "../lib/useFetch";
 import { CHANGELOG_URL, COMMIT, REPO_URL, UPDATING_URL, VERSION, releaseUrl } from "@shared/version";
 
-/** Admin → Instance settings: public URL and default timezone (API keys moved to the profile), integrations, version and updates. */
+/** Admin → Instance settings: public URL and default timezone (API keys moved to the profile), integrations, sign-in links by email, version and updates. */
 export function InstanceSettingsPage() {
   const { hash } = useLocation();
   // Links from the sidebar (#about, #updating) land on the section.
@@ -28,6 +28,7 @@ export function InstanceSettingsPage() {
       <div className="space-y-6">
         <GeneralSection />
         <IntegrationsSection />
+        <EmailSection />
         <StorageSection />
         <AboutSection />
         <UpdatingSection />
@@ -303,6 +304,104 @@ function IntegrationsSection() {
                 may conflict with the platform&rsquo;s terms of service, which could put the connected account at risk. Use at your own risk.
               </span>
             </p>
+          </div>
+        )}
+      </Section>
+    </div>
+  );
+}
+
+const EMAIL_SETUP = `// wrangler.local.jsonc
+"send_email": [{ "name": "EMAIL", "remote": true }],
+"vars": { "EMAIL_FROM": "Postflare <login@example.com>" }`;
+
+/** Sign-in links by email (Cloudflare Email Sending): off by default, needs the EMAIL binding and EMAIL_FROM. */
+function EmailSection() {
+  const toast = useToast();
+  const { data, setData } = useFetch("admin-email", api.admin.email, ["settings"]);
+  const [busy, setBusy] = useState<"toggle" | "test" | null>(null);
+
+  async function toggle(next: boolean) {
+    setBusy("toggle");
+    try {
+      const res = await api.admin.setEmail(next);
+      setData(() => res);
+      toast.success(next ? "Sign-in links by email turned on" : "Sign-in links by email turned off");
+    } catch (err) {
+      toast.error(err);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function sendTest() {
+    setBusy("test");
+    try {
+      const res = await api.admin.testEmail();
+      toast.success(`Test email sent to ${res.to}`);
+    } catch (err) {
+      toast.error(err);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div id="email" className="scroll-mt-6">
+      <Section icon={<Mail />} title="Sign-in links by email" description="Users can request a one-time sign-in link instead of typing their password.">
+        {!data ? (
+          <Skeleton className="h-9 w-full max-w-xl" />
+        ) : (
+          <div className="max-w-xl space-y-4 text-sm">
+            <p className="flex gap-2 rounded-lg bg-amber-50 px-3 py-2 text-amber-900 ring-1 ring-amber-200 dark:bg-amber-950/40 dark:text-amber-200 dark:ring-amber-900">
+              <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+              <span>
+                Needs Cloudflare Workers Paid ($5/month) and a domain onboarded to Cloudflare Email Sending. On the Free plan emails only reach your
+                account&rsquo;s verified addresses.
+              </span>
+            </p>
+            <label className="flex items-start gap-3">
+              <Switch
+                id="magic-link-enabled"
+                checked={data.configured && data.enabled}
+                disabled={!data.configured || busy !== null}
+                onChange={toggle}
+                label="Sign-in links by email"
+              />
+              <span>
+                <span className="block font-medium text-zinc-900 dark:text-zinc-100">Offer &ldquo;Email me a sign-in link&rdquo; on the sign-in page</span>
+                <span className="mt-0.5 block text-zinc-500">
+                  {data.configured ? (
+                    <>
+                      Sent from <code className="font-mono text-xs">{data.from}</code>. Links work once, for 15 minutes; turning this off ends the ones
+                      already sent.
+                    </>
+                  ) : (
+                    "Email is not set up on this instance yet."
+                  )}
+                </span>
+              </span>
+            </label>
+            {data.configured ? (
+              <Button size="sm" variant="outline" loading={busy === "test"} disabled={busy !== null} icon={<Send className="size-3.5" />} onClick={sendTest}>
+                Send test email
+              </Button>
+            ) : (
+              <div className="space-y-2 text-zinc-600 dark:text-zinc-300">
+                <p className="font-medium text-zinc-800 dark:text-zinc-100">To set it up:</p>
+                <ol className="list-decimal space-y-1 pl-5">
+                  <li>
+                    Onboard your domain to Cloudflare Email Sending: <code className="font-mono text-xs">npx wrangler email sending enable example.com</code>
+                  </li>
+                  <li>
+                    Add the <code className="font-mono text-xs">send_email</code> binding <code className="font-mono text-xs">EMAIL</code> and the{" "}
+                    <code className="font-mono text-xs">EMAIL_FROM</code> var in <code className="font-mono text-xs">wrangler.local.jsonc</code>:
+                  </li>
+                </ol>
+                <CodeBlock code={EMAIL_SETUP} />
+                <p>Then deploy and come back here to turn it on.</p>
+              </div>
+            )}
           </div>
         )}
       </Section>
