@@ -308,6 +308,23 @@ section.hosted{padding-top:0}
 .hcard .sub{margin:0 auto 28px}
 .hcard .ctas{justify-content:center}
 
+/* Pricing (filled from /api/billing/plans; the section stays hidden while billing is off) */
+.plans{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:16px;max-width:1040px;margin-inline:auto}
+.plan{display:flex;flex-direction:column}
+.plan.hl{border-color:transparent;background:linear-gradient(var(--card),var(--card)) padding-box,var(--grad) border-box;border:1.5px solid transparent}
+.plan .top{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.plan .top h3{margin:0}
+.plan .desc{margin-top:6px;min-height:3.2em}
+.plan .badge{font:700 10px/1 var(--sans);letter-spacing:.07em;text-transform:uppercase;color:#fff;background:var(--grad);padding:5px 8px;border-radius:999px}
+.plan .price{margin:18px 0 4px;display:flex;align-items:baseline;gap:6px}
+.plan .price b{font-size:40px;line-height:1;letter-spacing:-.03em;font-weight:700;color:var(--fg)}
+.plan .price span{color:var(--mut);font-size:15px}
+.plan .alt{color:var(--mut);font-size:13px;min-height:20px;margin:0}
+.plan ul{list-style:none;margin:20px 0 24px;padding:0;display:grid;align-content:start;gap:9px;flex:1;font-size:15px;color:var(--fg2)}
+.plan li{display:flex;gap:10px;align-items:flex-start}
+.plan li::before{content:"";flex:none;width:16px;height:16px;margin-top:4px;border-radius:50%;background:var(--grad);-webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0Zm3.7 5.7-4.5 4.6a1 1 0 0 1-1.4 0L4.3 8.8a1 1 0 1 1 1.4-1.4l.8.8 3.8-3.9a1 1 0 0 1 1.4 1.4Z'/%3E%3C/svg%3E") center/contain no-repeat;mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0Zm3.7 5.7-4.5 4.6a1 1 0 0 1-1.4 0L4.3 8.8a1 1 0 1 1 1.4-1.4l.8.8 3.8-3.9a1 1 0 0 1 1.4 1.4Z'/%3E%3C/svg%3E") center/contain no-repeat}
+.plan .btn{width:100%}
+
 /* Footer */
 footer{border-top:1px solid var(--line);padding:40px 0 48px;color:var(--mut);font-size:14px}
 footer .wrap{display:flex;flex-wrap:wrap;align-items:center;gap:16px 28px}
@@ -353,7 +370,7 @@ html[data-launched="false"] .nav .wrap{gap:18px}
   .stat b{font-size:32px}
   .ctas .btn{flex:1 1 100%}
   .hero .ctas .btn.ghost{flex:1 1 100%;border:1px solid var(--line2)}
-  .nav .gh,.nav .soon{display:none}
+  .nav .gh,.nav .soon,.nav .su{display:none}
   .hcard{padding:40px 22px;border-radius:22px}
   .hcard .soon,.ctas .soon{flex:1 1 100%}
   .hero .ctas .soon.gh{display:none}
@@ -383,10 +400,10 @@ html[data-launched="false"] .nav .wrap{gap:18px}
 <header class="nav">
   <div class="wrap">
     <a class="brand" href="/" aria-label="Postflare home"><svg aria-hidden="true"><use href="#logo"/></svg>Postflare</a>
-    <nav aria-label="Primary"><a href="#features">Features</a><a href="#how">How it works</a><a href="#platforms">Platforms</a><a href="#data">Data use</a><a href="#open-source">Open source</a></nav>
+    <nav aria-label="Primary"><a href="#features">Features</a><a href="#how">How it works</a><a href="#platforms">Platforms</a><a href="#data">Data use</a><a href="#open-source">Open source</a><a href="#pricing" data-pricing hidden>Pricing</a></nav>
     <span class="sp"></span>
     <span class="soon gh" data-launch-href="https://github.com/FerdiKT/postflare" data-launch-class="btn sec sm gh" role="link" aria-disabled="true" title="The GitHub repository goes public at launch"><svg aria-hidden="true"><use href="#i-github"/></svg>GitHub<b data-soon>Soon</b></span>
-    <span class="soon" role="link" aria-disabled="true" title="Hosted Postflare accounts are coming soon">Sign up<b>Coming soon</b></span>
+    <span class="soon" data-signup="btn sec sm su" role="link" aria-disabled="true" title="Hosted Postflare accounts are coming soon">Sign up<b>Coming soon</b></span>
     <a class="btn pri sm" href="/demo" data-demo>Live demo</a>
     <a class="btn sec sm" href="/login">Sign in</a>
   </div>
@@ -608,15 +625,22 @@ curl https://<span class="c1">your-domain</span>/api/posts \
   </div>
 </section>
 
+<section id="pricing" class="pricing" aria-labelledby="pr-title" hidden>
+  <div class="wrap">
+    <div class="head c"><span class="eyebrow">Pricing</span><h2 id="pr-title">Hosted Postflare plans</h2><p class="sub" id="pr-sub">Start free, upgrade when you need more. Cancel any time.</p></div>
+    <div class="plans" id="plans"></div>
+  </div>
+</section>
+
 <section id="hosted" class="hosted" aria-labelledby="hs-title">
   <div class="wrap">
     <div class="hcard rv">
       <span class="eyebrow">Hosted Postflare</span>
       <h2 id="hs-title">Don&rsquo;t want to self-host?</h2>
-      <p class="sub">A hosted version of Postflare is coming soon: the same app, no Cloudflare account to set up.<span data-demo> Try the live demo meanwhile. It is a sandboxed workspace with sample posts: schedule, edit and &ldquo;publish&rdquo; as much as you like, nothing reaches a real account.</span></p>
+      <p class="sub"><span data-signup-copy="Use hosted Postflare: the same app, no Cloudflare account to set up. Create an account and schedule your first post in minutes.">A hosted version of Postflare is coming soon: the same app, no Cloudflare account to set up.</span><span data-demo> Try the live demo meanwhile. It is a sandboxed workspace with sample posts: schedule, edit and &ldquo;publish&rdquo; as much as you like, nothing reaches a real account.</span></p>
       <div class="ctas">
         <a class="btn pri" href="/demo" data-demo><svg class="play" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 2.8v10.4a.8.8 0 0 0 1.2.7l8.3-5.2a.8.8 0 0 0 0-1.4L5.7 2.1a.8.8 0 0 0-1.2.7Z"/></svg>Try the live demo</a>
-        <span class="soon lg" role="link" aria-disabled="true" title="Hosted Postflare accounts are coming soon">Sign up<b>Coming soon</b></span>
+        <span class="soon lg" data-signup="btn sec" role="link" aria-disabled="true" title="Hosted Postflare accounts are coming soon">Sign up<b>Coming soon</b></span>
       </div>
     </div>
   </div>
@@ -654,12 +678,81 @@ curl https://<span class="c1">your-domain</span>/api/posts \
   }
 
   // "Live demo" links only work on instances with DEMO_MODE on: hide them elsewhere (they stay without JS).
-  fetch("/api/auth/status", { credentials: "same-origin" })
-    .then(function (r) { return r.ok ? r.json() : null; })
-    .then(function (s) {
-      if (s && !s.demo) document.querySelectorAll("[data-demo]").forEach(function (el) { el.hidden = true; el.style.display = "none"; });
-    })
-    .catch(function () {});
+  // Hosted mode: with public sign-up on, the "Sign up — coming soon" pills become real links to /signup, and the
+  // pricing section is filled from /api/billing/plans when plans are for sale (it stays hidden otherwise).
+  var json = function (r) { return r.ok ? r.json() : null; };
+  var none = function () { return null; };
+  Promise.all([
+    fetch("/api/auth/status", { credentials: "same-origin" }).then(json, none),
+    fetch("/api/billing/plans", { credentials: "same-origin" }).then(json, none),
+  ]).then(function (res) {
+    var s = res[0], billing = res[1];
+    if (s && !s.demo) document.querySelectorAll("[data-demo]").forEach(function (el) { el.hidden = true; el.style.display = "none"; });
+    var signup = !!(s && s.signup);
+    if (signup) {
+      document.querySelectorAll("[data-signup]").forEach(function (el) {
+        var a = document.createElement("a");
+        a.href = "/signup";
+        a.className = el.getAttribute("data-signup");
+        // The hosted card's only button on instances without the demo: make it the primary one.
+        if (!(s && s.demo) && a.className === "btn sec") a.className = "btn pri";
+        a.textContent = "Sign up";
+        el.replaceWith(a);
+      });
+      document.querySelectorAll("[data-signup-copy]").forEach(function (el) { el.textContent = el.getAttribute("data-signup-copy"); });
+    }
+    if (billing && billing.enabled && billing.plans && billing.plans.length) renderPlans(billing.plans, signup);
+  }).catch(function () {});
+
+  function price(cents, currency) {
+    try {
+      return new Intl.NumberFormat("en-US", { style: "currency", currency: currency || "USD", maximumFractionDigits: cents % 100 ? 2 : 0 }).format(cents / 100);
+    } catch (e) {
+      return (cents / 100).toFixed(2) + " " + currency;
+    }
+  }
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text) e.textContent = text;
+    return e;
+  }
+  function renderPlans(plans, signup) {
+    var box = document.getElementById("plans");
+    plans.forEach(function (p) {
+      var card = el("div", "card plan" + (p.highlight ? " hl" : ""));
+      var top = el("div", "top");
+      top.appendChild(el("h3", "", p.name));
+      if (p.highlight) top.appendChild(el("span", "badge", "Most popular"));
+      card.appendChild(top);
+      card.appendChild(el("p", "desc", p.description || ""));
+      var monthly = p.priceMonth, yearly = p.priceYear, pr = el("p", "price"), alt = el("p", "alt");
+      if (p.isFree || (monthly === null && yearly === null) || (monthly === 0 && !yearly)) {
+        pr.appendChild(el("b", "", "Free"));
+      } else if (monthly !== null) {
+        pr.appendChild(el("b", "", price(monthly, p.currency)));
+        pr.appendChild(el("span", "", "/month"));
+        if (yearly !== null) alt.textContent = "or " + price(yearly, p.currency) + "/year";
+      } else {
+        pr.appendChild(el("b", "", price(yearly, p.currency)));
+        pr.appendChild(el("span", "", "/year"));
+      }
+      card.appendChild(pr);
+      card.appendChild(alt);
+      var ul = el("ul");
+      (p.features || []).forEach(function (f) { ul.appendChild(el("li", "", f)); });
+      card.appendChild(ul);
+      if (signup) {
+        var a = el("a", "btn " + (p.highlight ? "pri" : "sec"), p.isFree ? "Get started" : p.isTrialDefault ? "Start free trial" : "Choose " + p.name);
+        a.href = "/signup";
+        card.appendChild(a);
+      }
+      box.appendChild(card);
+    });
+    if (plans.some(function (p) { return p.isTrialDefault; })) document.getElementById("pr-sub").textContent = "Every new workspace starts with a free trial, no card needed. Cancel any time.";
+    document.getElementById("pricing").hidden = false;
+    document.querySelectorAll("[data-pricing]").forEach(function (a) { a.hidden = false; });
+  }
 
   // Marquee: duplicate the platform list so the loop is seamless.
   var marq = document.getElementById("marq");
