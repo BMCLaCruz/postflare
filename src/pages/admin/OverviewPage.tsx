@@ -3,7 +3,7 @@
 // quota meters whose fill carries severity (status palette, always with an icon + label), recessive grid.
 
 import { useMemo, useState, type ReactNode } from "react";
-import { useNavigate, useSearchParams } from "react-router";
+import { Link, useNavigate, useSearchParams } from "react-router";
 import {
   AlertTriangle,
   ArrowDown,
@@ -25,7 +25,7 @@ import { Badge, Card, CardHeader, EmptyState, PageHeader, Skeleton, Tabs } from 
 import { api } from "../../lib/api";
 import { useApp } from "../../lib/app";
 import { formatDayKey } from "../../lib/analytics";
-import { cn, compactNumber, formatBytes, fullNumber, percent, plural, truncate } from "../../lib/format";
+import { cn, compactNumber, formatBytes, fullNumber, money, percent, plural, truncate } from "../../lib/format";
 import { useSession } from "../../lib/session";
 import { formatDateTime, relativeTime } from "../../lib/time";
 import type { AdminOverviewDTO, AdminQuotaDTO, AdminWorkspaceRowDTO, QuotaLevel } from "../../lib/types";
@@ -105,6 +105,7 @@ function Overview({ o }: { o: AdminOverviewDTO }) {
         </p>
       )}
       <KpiRow o={o} />
+      {o.billing.enabled && <BillingRow o={o} />}
       {/* Two independent columns (main / side) so cards keep their natural height. */}
       <div className="grid min-w-0 items-start gap-4 sm:gap-6 lg:grid-cols-3">
         <div className="min-w-0 space-y-4 sm:space-y-6 lg:col-span-2">
@@ -159,7 +160,7 @@ function KpiRow({ o }: { o: AdminOverviewDTO }) {
     {
       label: "Workspaces",
       value: o.counts.workspaces,
-      caption: `${plural(o.counts.users.active, "user")} · ${plural(o.counts.accounts.total, "account")}`,
+      caption: `${plural(o.counts.users.active, "user")}${o.counts.users.pending ? ` (+${fullNumber(o.counts.users.pending)} pending)` : ""} · ${plural(o.counts.accounts.total, "account")}`,
     },
   ];
   return (
@@ -178,6 +179,49 @@ function KpiRow({ o }: { o: AdminOverviewDTO }) {
           </p>
         </Card>
       ))}
+    </div>
+  );
+}
+
+/** Hosted mode (billing on): subscriptions of non-demo, non-exempt workspaces and the MRR estimate. */
+function BillingRow({ o }: { o: AdminOverviewDTO }) {
+  const b = o.billing;
+  const tiles: Array<{ label: string; value: ReactNode; title: string; caption: string; status?: ReactNode }> = [
+    { label: "Paying", value: compactNumber(b.paying), title: fullNumber(b.paying), caption: `${fullNumber(b.manual)} assigned by hand · ${fullNumber(b.exempt)} exempt` },
+    { label: "Trialing", value: compactNumber(b.trialing), title: fullNumber(b.trialing), caption: "free trials running" },
+    {
+      label: "Past due",
+      value: compactNumber(b.pastDue),
+      title: fullNumber(b.pastDue),
+      caption: b.pastDue ? "failed payment, in the grace period" : "no failed payments",
+      status: b.pastDue ? <AlertTriangle className="size-4 text-amber-500" aria-label="Needs attention" /> : undefined,
+    },
+    { label: "MRR", value: money(b.mrrCents / 100, b.currency, { compact: true }).replace(/\.00$/, ""), title: money(b.mrrCents / 100, b.currency), caption: "estimate: monthly + yearly ÷ 12" },
+  ];
+  return (
+    <div>
+      <p className="mb-2 flex items-center justify-between gap-2 text-xs font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500">
+        Billing
+        <Link to="/admin/billing" className="font-medium normal-case tracking-normal text-brand-600 hover:underline dark:text-brand-400">
+          Manage
+        </Link>
+      </p>
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
+        {tiles.map((t) => (
+          <Card key={t.label} className="min-w-0 p-4">
+            <p className="flex items-center justify-between gap-2 text-sm text-zinc-500 dark:text-zinc-400">
+              <span className="truncate">{t.label}</span>
+              {t.status}
+            </p>
+            <p className="mt-1 text-2xl font-semibold tracking-tight text-zinc-900 dark:text-zinc-50" title={t.title}>
+              {t.value}
+            </p>
+            <p className="mt-1 truncate text-xs text-zinc-500 dark:text-zinc-400" title={t.caption}>
+              {t.caption}
+            </p>
+          </Card>
+        ))}
+      </div>
     </div>
   );
 }
@@ -551,6 +595,7 @@ function AccountsCard({ o }: { o: AdminOverviewDTO }) {
       <p className="border-t border-zinc-100 px-5 py-3 text-xs text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
         {fullNumber(users.active)} active {users.active === 1 ? "user" : "users"}
         {users.disabled ? ` · ${fullNumber(users.disabled)} disabled` : ""}
+        {users.pending ? ` · ${fullNumber(users.pending)} pending email confirmation` : ""}
         {o.counts.demoWorkspaces ? ` · demo: ${fullNumber(o.demo.publishedRange)} simulated posts in ${o.range.days} days` : ""}
       </p>
     </>

@@ -1,4 +1,4 @@
-import { ApiError, UNAUTHORIZED_EVENT, request, workspaceHeaders } from "./api";
+import { ApiError, UNAUTHORIZED_EVENT, planLimitError, request, workspaceHeaders } from "./api";
 import type { MediaDTO } from "./types";
 
 const SINGLE_UPLOAD_MAX = 90 * 1024 * 1024;
@@ -106,6 +106,8 @@ function xhr<T>(
       if (x.status >= 200 && x.status < 300) resolve(data as T);
       else {
         if (x.status === 401) window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+        const limit = planLimitError(x.status, data);
+        if (limit) return reject(limit);
         reject(new ApiError((data as { error?: string } | null)?.error ?? `Upload failed (${x.status})`, x.status));
       }
     };

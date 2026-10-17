@@ -147,6 +147,10 @@ export function UsersPage() {
                           <Badge tone="green" dot>
                             Active
                           </Badge>
+                        ) : u.status === "pending" ? (
+                          <Badge tone="amber" title="Signed up, email not confirmed yet (deleted after 7 days)">
+                            Pending
+                          </Badge>
                         ) : (
                           <Badge tone="red">Disabled</Badge>
                         )}
@@ -155,7 +159,7 @@ export function UsersPage() {
                       <td className="px-5 py-3">
                         {!self && (
                           <div className="flex justify-end gap-1">
-                            <IconButton label={u.status === "active" ? "Disable" : "Enable"} size="sm" disabled={busy === u.id} onClick={() => void toggleStatus(u)}>
+                            <IconButton label={u.status === "active" ? "Disable" : u.status === "pending" ? "Activate (skip email confirmation)" : "Enable"} size="sm" disabled={busy === u.id} onClick={() => void toggleStatus(u)}>
                               {u.status === "active" ? <Ban className="size-4" /> : <CheckCircle2 className="size-4 text-emerald-600" />}
                             </IconButton>
                             <IconButton label="Delete" size="sm" variant="danger" disabled={busy === u.id} onClick={() => void remove(u)}>

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { AlertTriangle, Building2, Check, Copy, Share2, UserPlus } from "lucide-react";
-import { api } from "../lib/api";
+import { api, isPlanLimit } from "../lib/api";
 import { cn, copyText } from "../lib/format";
 import { useSession } from "../lib/session";
 import { formatDateTime } from "../lib/time";
@@ -90,7 +90,7 @@ export function InviteDialog({
       setCreated(res);
       onCreated?.();
     } catch (err) {
-      setError((err as Error).message);
+      if (!isPlanLimit(err)) setError((err as Error).message); // plan limits: PlanLimitDialog
     } finally {
       setBusy(false);
     }

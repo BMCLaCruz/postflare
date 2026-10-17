@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
 import { CheckCircle2, Info, X, XCircle } from "lucide-react";
-import { errorMessage } from "../../lib/api";
+import { errorMessage, isPlanLimit } from "../../lib/api";
 import { cn } from "../../lib/format";
 
 type Kind = "success" | "error" | "info";
@@ -35,7 +35,8 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     () => ({
       success: (t, d) => push("success", t, d),
       info: (t, d) => push("info", t, d),
-      error: (e, d) => push("error", typeof e === "string" ? e : errorMessage(e), d),
+      // Plan limits (402) get the upgrade dialog of the layout instead (PlanLimitDialog).
+      error: (e, d) => void (isPlanLimit(e) || push("error", typeof e === "string" ? e : errorMessage(e), d)),
     }),
     [push],
   );

@@ -14,6 +14,8 @@ export interface AuthStatus {
   demo?: true;
   setupToken?: true;
   magicLink?: true;
+  /** Public sign-up is on: "Create an account" on the sign-in page, /signup. */
+  signup?: true;
 }
 
 export interface Overview {

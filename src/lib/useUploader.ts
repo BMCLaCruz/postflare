@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { errorMessage } from "./api";
+import { errorMessage, isPlanLimit } from "./api";
 import { rememberMedia } from "./mediaCache";
 import { isMediaFile, mimeOf, uploadFile } from "./upload";
 import type { MediaDTO } from "./types";
@@ -66,7 +66,8 @@ export function useUploader(onDone: (m: MediaDTO) => void, onError?: (message: s
         })
         .catch((err) => {
           remove();
-          if (!ctrl.signal.aborted) errRef.current?.(`${file.name}: ${errorMessage(err)}`);
+          // Plan limits (storage) open the upgrade dialog (PlanLimitDialog) instead.
+          if (!ctrl.signal.aborted && !isPlanLimit(err)) errRef.current?.(`${file.name}: ${errorMessage(err)}`);
         });
     }
   }, []);

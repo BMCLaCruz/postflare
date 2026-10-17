@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router";
 import { ArrowLeft, ArrowRight, FlaskConical, KeyRound, Search, Settings2 } from "lucide-react";
-import { api } from "../../lib/api";
+import { api, isPlanLimit } from "../../lib/api";
 import { useApp } from "../../lib/app";
 import { cn } from "../../lib/format";
 import { useSession } from "../../lib/session";
@@ -276,7 +276,7 @@ function CredentialsForm({ provider, onDone }: { provider: Provider; onDone: () 
       invalidate("accounts");
       onDone();
     } catch (err) {
-      setError((err as Error).message);
+      if (!isPlanLimit(err)) setError((err as Error).message); // plan limits: PlanLimitDialog
     } finally {
       setBusy(false);
     }

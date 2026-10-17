@@ -1,20 +1,23 @@
 import { useState, type FormEvent, type ReactNode } from "react";
+import { Link } from "react-router";
 import { CalendarClock, KeyRound, Lock, Mail, MailCheck, Sparkles, Users } from "lucide-react";
 import { Wordmark } from "../components/Logo";
 import { Button } from "../components/ui/Button";
 import { Field, Input } from "../components/ui/Form";
 import { ApiError, api, errorMessage } from "../lib/api";
 
-/** `magicLink`: the instance can email sign-in links, offered next to the password. */
+/** `magicLink`: the instance can email sign-in links, offered next to the password. `signup`: public sign-up is on. */
 export function AuthPage({
   mode,
   setupToken: askToken = false,
   magicLink = false,
+  signup = false,
   onDone,
 }: {
   mode: "setup" | "login";
   setupToken?: boolean;
   magicLink?: boolean;
+  signup?: boolean;
   onDone: () => void;
 }) {
   const [name, setName] = useState("");
@@ -166,6 +169,14 @@ export function AuthPage({
             {linkMode ? <KeyRound className="size-4" /> : <Mail className="size-4" />}
             {linkMode ? "Sign in with a password instead" : "Email me a sign-in link instead"}
           </Button>
+        )}
+        {!setup && signup && (
+          <p className="border-t border-zinc-100 pt-4 text-center text-sm text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
+            New to Postflare?{" "}
+            <Link to="/signup" className="font-medium text-brand-600 hover:text-brand-700 dark:text-brand-400">
+              Create an account
+            </Link>
+          </p>
         )}
       </form>
     </AuthShell>

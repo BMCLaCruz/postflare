@@ -9,7 +9,7 @@ import { Dialog } from "../../components/ui/Dialog";
 import { Switch } from "../../components/ui/Form";
 import { Kbd, Skeleton } from "../../components/ui/Misc";
 import { useToast } from "../../components/ui/Toast";
-import { api, errorMessage } from "../../lib/api";
+import { api, errorMessage, isPlanLimit } from "../../lib/api";
 import { useApp } from "../../lib/app";
 import { cn, plural, truncate } from "../../lib/format";
 import { useMediaLookup } from "../../lib/mediaCache";
@@ -298,7 +298,7 @@ export default function Composer({ options, onClose }: { options: ComposerOption
     } catch (err) {
       const e = err as { errors?: string[] };
       if (e.errors?.length) setServerErrors(attributeErrors(e.errors, selectedAccounts));
-      toast.error(errorMessage(err));
+      if (!isPlanLimit(err)) toast.error(errorMessage(err)); // plan limits: PlanLimitDialog
     } finally {
       setBusy(null);
     }

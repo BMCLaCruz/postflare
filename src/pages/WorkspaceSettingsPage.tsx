@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { useNavigate } from "react-router";
+import { useNavigate, useSearchParams } from "react-router";
 import { AlertTriangle, Building2, LogOut, MailPlus, Trash2, UserPlus, Users } from "lucide-react";
+import { BillingTab } from "../components/billing/BillingTab";
 import { CampaignSections } from "../components/campaigns/CampaignSettings";
 import { grantableRoles, InviteDialog } from "../components/InviteDialog";
 import { InitialsAvatar } from "../components/ui/Avatar";
@@ -8,11 +9,12 @@ import { Button, IconButton } from "../components/ui/Button";
 import { useConfirm } from "../components/ui/Confirm";
 import { Dialog } from "../components/ui/Dialog";
 import { Field, Input, Select } from "../components/ui/Form";
-import { Badge, Card, CardHeader, PageHeader, Skeleton } from "../components/ui/Misc";
+import { Badge, Card, CardHeader, PageHeader, Skeleton, Tabs } from "../components/ui/Misc";
 import { Notice, Section } from "../components/ui/Section";
 import { useToast } from "../components/ui/Toast";
 import { api } from "../lib/api";
 import { useApp } from "../lib/app";
+import { useBilling } from "../lib/billing";
 import { useSession } from "../lib/session";
 import { formatDate, relativeTime } from "../lib/time";
 import type { MemberDTO, MeWorkspace, RoleDTO } from "../lib/types";
@@ -20,7 +22,14 @@ import { invalidate, useFetch } from "../lib/useFetch";
 
 export function WorkspaceSettingsPage() {
   const { workspace } = useSession();
+  const billing = useBilling();
+  const [params, setParams] = useSearchParams();
   if (!workspace) return null; // Gate guarantees one.
+  // Hosted mode only: a Billing tab (deep link ?tab=billing, where checkouts and 402 answers return to).
+  const billingOn = !!billing.data?.enabled;
+  const wantsBilling = params.get("tab") === "billing";
+  const tab = billingOn && wantsBilling ? "billing" : "general";
+  const waiting = wantsBilling && !billing.data && !billing.error && billing.loading;
   return (
     <>
       <PageHeader
@@ -32,12 +41,29 @@ export function WorkspaceSettingsPage() {
           </>
         }
       />
-      <div className="space-y-6">
-        <GeneralSection workspace={workspace} />
-        <MembersCard workspace={workspace} />
-        <CampaignSections />
-        <DangerZone workspace={workspace} />
-      </div>
+      {billingOn && (
+        <Tabs
+          className="mb-6"
+          tabs={[
+            { value: "general", label: "General" },
+            { value: "billing", label: "Billing" },
+          ]}
+          value={tab}
+          onChange={(v) => setParams(v === "billing" ? { tab: "billing" } : {}, { replace: true })}
+        />
+      )}
+      {waiting ? (
+        <Skeleton className="h-40 w-full rounded-xl" />
+      ) : tab === "billing" ? (
+        <BillingTab />
+      ) : (
+        <div className="space-y-6">
+          <GeneralSection workspace={workspace} />
+          <MembersCard workspace={workspace} />
+          <CampaignSections />
+          <DangerZone workspace={workspace} />
+        </div>
+      )}
     </>
   );
 }

@@ -38,7 +38,7 @@ import { Menu } from "../components/ui/Menu";
 import { Badge, Card, EmptyState, PageHeader, Skeleton, Tabs } from "../components/ui/Misc";
 import { useToast } from "../components/ui/Toast";
 import { ACCOUNTS_VIEWS, buildSections, selectionState, type AccountSection, type AccountsView } from "../lib/accountGroups";
-import { api } from "../lib/api";
+import { api, planLimitError } from "../lib/api";
 import { useApp } from "../lib/app";
 import { cn, compactNumber, fullNumber } from "../lib/format";
 import { useSession } from "../lib/session";
@@ -116,6 +116,11 @@ export function AccountsPage() {
       const n = Number(connected);
       toast.success(`${p?.name ?? "Account"} connected`, n > 1 ? `${n} accounts added` : undefined);
       invalidate("accounts");
+    } else if (error && params.get("planLimit")) {
+      // Over the plan's account limit: the upgrade dialog instead of an error toast (next tick: PlanLimitDialog's
+      // listener is registered after this page's effects on a fresh load).
+      const limit = params.get("planLimit");
+      setTimeout(() => planLimitError(402, { error, code: "plan_limit", limit, used: null, max: null, upgradeUrl: "" }), 0);
     } else if (error) {
       toast.error("Connection failed", error);
     }

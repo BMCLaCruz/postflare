@@ -8,10 +8,12 @@ import { ConfirmProvider } from "./components/ui/Confirm";
 import { ToastProvider } from "./components/ui/Toast";
 import { api, UNAUTHORIZED_EVENT } from "./lib/api";
 import { AppDataProvider } from "./lib/app";
+import { BillingProvider } from "./lib/billing";
 import { SessionProvider, useSession } from "./lib/session";
 import type { AuthStatus } from "./lib/types";
 import { AccountsPage } from "./pages/AccountsPage";
 import { AnalyticsPage } from "./pages/AnalyticsPage";
+import { BillingAdminPage } from "./pages/admin/BillingPage";
 import { OverviewPage } from "./pages/admin/OverviewPage";
 import { RolesPage } from "./pages/admin/RolesPage";
 import { UsersPage } from "./pages/admin/UsersPage";
@@ -26,6 +28,8 @@ import { PlatformsPage } from "./pages/PlatformsPage";
 import { PlaybookPage } from "./pages/PlaybookPage";
 import { PlaybooksPage } from "./pages/PlaybooksPage";
 import { PostsPage } from "./pages/PostsPage";
+import { SignupPage } from "./pages/SignupPage";
+import { VerifySignupPage } from "./pages/VerifySignupPage";
 import { ProfilePage } from "./pages/ProfilePage";
 import { InstanceSettingsPage } from "./pages/SettingsPage";
 import { WorkspaceSettingsPage } from "./pages/WorkspaceSettingsPage";
@@ -58,7 +62,10 @@ export function App() {
     return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
   }, [check]);
 
-  const onLogout = useCallback(() => setStatus((s) => ({ setup: true, authenticated: false, ...(s?.magicLink ? { magicLink: true as const } : {}) })), []);
+  const onLogout = useCallback(
+    () => setStatus((s) => ({ setup: true, authenticated: false, ...(s?.magicLink ? { magicLink: true as const } : {}), ...(s?.signup ? { signup: true as const } : {}) })),
+    [],
+  );
 
   return (
     <ToastProvider>
@@ -78,6 +85,9 @@ export function App() {
             <Route path="/invite/:token" element={<InvitePage authenticated={status.setup && status.authenticated} onLoggedOut={onLogout} />} />
             {/* Public: opened from a sign-in link email (signed in too: the link may be for another user). */}
             <Route path="/auth/link" element={<MagicLinkPage />} />
+            {/* Public sign-up (hosted mode, off by default): the form, and the email confirmation link. */}
+            <Route path="/signup" element={status.setup && !status.authenticated && status.signup ? <SignupPage onDone={() => window.location.assign("/")} /> : <Navigate to="/" replace />} />
+            <Route path="/auth/verify" element={<VerifySignupPage />} />
             <Route
               path="*"
               element={
@@ -86,10 +96,11 @@ export function App() {
                     mode={status.setup ? "login" : "setup"}
                     setupToken={!!status.setupToken}
                     magicLink={!!status.magicLink}
+                    signup={!!status.signup}
                     onDone={() => {
                       const next = nextPath();
                       if (window.location.pathname === "/login" || window.location.pathname === "/setup" || next !== "/") navigate(next, { replace: true });
-                      setStatus({ setup: true, authenticated: true });
+                      setStatus((s) => ({ ...s, setup: true, authenticated: true }));
                     }}
                   />
                 ) : (
@@ -128,34 +139,37 @@ function WorkspaceScope() {
   const { workspace, logout } = useSession();
   return (
     <AppDataProvider key={workspace?.id ?? "none"}>
-      <ComposerProvider>
-        <PostDrawerProvider>
-          <Routes>
-            <Route element={<Layout onLogout={logout} />}>
-              <Route index element={<Gate>{<DashboardPage />}</Gate>} />
-              <Route path="calendar" element={<Gate permission="posts.read">{<CalendarPage />}</Gate>} />
-              <Route path="posts" element={<Gate permission="posts.read">{<PostsPage />}</Gate>} />
-              <Route path="analytics" element={<Gate permission="posts.read">{<AnalyticsPage />}</Gate>} />
-              <Route path="playbooks" element={<Gate permission="posts.read">{<PlaybooksPage />}</Gate>} />
-              <Route path="playbooks/:id" element={<Gate permission="posts.read">{<PlaybookPage />}</Gate>} />
-              <Route path="accounts" element={<Gate permission="accounts.read">{<AccountsPage />}</Gate>} />
-              <Route path="media" element={<Gate permission="media.read">{<MediaPage />}</Gate>} />
-              <Route path="workspace" element={<Gate>{<WorkspaceSettingsPage />}</Gate>} />
-              <Route path="profile" element={<ProfilePage />} />
-              <Route path="admin" element={<InstanceGate permission="instance.overview.view">{<OverviewPage />}</InstanceGate>} />
-              <Route path="admin/users" element={<InstanceGate permission="instance.users.manage">{<UsersPage />}</InstanceGate>} />
-              <Route path="admin/roles" element={<InstanceGate permission="instance.users.manage">{<RolesPage />}</InstanceGate>} />
-              <Route path="admin/settings" element={<InstanceGate permission="instance.settings.manage">{<InstanceSettingsPage />}</InstanceGate>} />
-              <Route path="platforms" element={<InstanceGate permission="instance.platforms.manage">{<PlatformsPage />}</InstanceGate>} />
-              <Route path="platforms/:id" element={<InstanceGate permission="instance.platforms.manage">{<PlatformsPage />}</InstanceGate>} />
-              <Route path="settings" element={<SettingsRedirect />} />
-              <Route path="login" element={<Navigate to={nextPath()} replace />} />
-              <Route path="setup" element={<Navigate to="/" replace />} />
-              <Route path="*" element={<Navigate to="/" replace />} />
-            </Route>
-          </Routes>
-        </PostDrawerProvider>
-      </ComposerProvider>
+      <BillingProvider>
+        <ComposerProvider>
+          <PostDrawerProvider>
+            <Routes>
+              <Route element={<Layout onLogout={logout} />}>
+                <Route index element={<Gate>{<DashboardPage />}</Gate>} />
+                <Route path="calendar" element={<Gate permission="posts.read">{<CalendarPage />}</Gate>} />
+                <Route path="posts" element={<Gate permission="posts.read">{<PostsPage />}</Gate>} />
+                <Route path="analytics" element={<Gate permission="posts.read">{<AnalyticsPage />}</Gate>} />
+                <Route path="playbooks" element={<Gate permission="posts.read">{<PlaybooksPage />}</Gate>} />
+                <Route path="playbooks/:id" element={<Gate permission="posts.read">{<PlaybookPage />}</Gate>} />
+                <Route path="accounts" element={<Gate permission="accounts.read">{<AccountsPage />}</Gate>} />
+                <Route path="media" element={<Gate permission="media.read">{<MediaPage />}</Gate>} />
+                <Route path="workspace" element={<Gate>{<WorkspaceSettingsPage />}</Gate>} />
+                <Route path="profile" element={<ProfilePage />} />
+                <Route path="admin" element={<InstanceGate permission="instance.overview.view">{<OverviewPage />}</InstanceGate>} />
+                <Route path="admin/users" element={<InstanceGate permission="instance.users.manage">{<UsersPage />}</InstanceGate>} />
+                <Route path="admin/roles" element={<InstanceGate permission="instance.users.manage">{<RolesPage />}</InstanceGate>} />
+                <Route path="admin/settings" element={<InstanceGate permission="instance.settings.manage">{<InstanceSettingsPage />}</InstanceGate>} />
+                <Route path="admin/billing" element={<InstanceGate permission="instance.settings.manage">{<BillingAdminPage />}</InstanceGate>} />
+                <Route path="platforms" element={<InstanceGate permission="instance.platforms.manage">{<PlatformsPage />}</InstanceGate>} />
+                <Route path="platforms/:id" element={<InstanceGate permission="instance.platforms.manage">{<PlatformsPage />}</InstanceGate>} />
+                <Route path="settings" element={<SettingsRedirect />} />
+                <Route path="login" element={<Navigate to={nextPath()} replace />} />
+                <Route path="setup" element={<Navigate to="/" replace />} />
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Route>
+            </Routes>
+          </PostDrawerProvider>
+        </ComposerProvider>
+      </BillingProvider>
     </AppDataProvider>
   );
 }

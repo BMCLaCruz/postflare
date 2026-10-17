@@ -2,8 +2,25 @@ import type {
   AccountDTO,
   AccountGroupDTO,
   AccountGroupInput,
+  AdminBillingDTO,
+  AdminBillingInput,
   AdminEmailDTO,
   AdminOverviewDTO,
+  AdminPlanDTO,
+  AdminSignupDTO,
+  AdminWorkspaceBillingDTO,
+  AdminWorkspaceBillingInput,
+  BillingDTO,
+  BillingInterval,
+  BillingProviderId,
+  BillingProviderInput,
+  BillingProviderTestDTO,
+  BillingStatus,
+  PlanInput,
+  PlanLimitErrorDTO,
+  PublicPlansDTO,
+  SignupDTO,
+  SignupInput,
   AppDTO,
   CampaignLinkDTO,
   CampaignSettingsDTO,
@@ -60,6 +77,29 @@ export class ApiError extends Error {
   }
 }
 
+/** 402 of an action the workspace's plan does not allow (hosted mode): the app shows the upgrade dialog. */
+export class PlanLimitError extends ApiError {
+  limit: PlanLimitErrorDTO;
+  constructor(body: PlanLimitErrorDTO) {
+    super(body.error, 402);
+    this.limit = body;
+  }
+}
+
+export const isPlanLimit = (err: unknown): err is PlanLimitError => err instanceof PlanLimitError;
+
+/** Fired with a PlanLimitError as `detail` on every 402 plan_limit answer (the layout's PlanLimitDialog listens). */
+export const PLAN_LIMIT_EVENT = "postflare:plan-limit";
+
+/** The PlanLimitError of a 402 `{ code: "plan_limit" }` body (announced to the app), or null for any other error. */
+export function planLimitError(status: number, data: unknown): PlanLimitError | null {
+  const d = data as Partial<PlanLimitErrorDTO> | null;
+  if (status !== 402 || d?.code !== "plan_limit" || typeof d.error !== "string") return null;
+  const err = new PlanLimitError(d as PlanLimitErrorDTO);
+  window.dispatchEvent(new CustomEvent(PLAN_LIMIT_EVENT, { detail: err }));
+  return err;
+}
+
 /** Fired when the session is gone; the app shell listens and sends the user to /login. */
 export const UNAUTHORIZED_EVENT = "postflare:unauthorized";
 /** Fired when the server does not know (or no longer grants access to) the workspace in `X-Workspace-Id`. */
@@ -89,6 +129,8 @@ export async function request<T>(method: string, path: string, body?: unknown, i
     if (res.status === 401 && !path.startsWith("/auth/") && !path.startsWith("/invitations/")) window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
     const d = (data ?? {}) as { error?: string; errors?: string[] };
     if (res.status === 404 && d.error === "Workspace not found" && currentWorkspaceId) window.dispatchEvent(new Event(WORKSPACE_NOT_FOUND_EVENT));
+    const limit = planLimitError(res.status, data);
+    if (limit) throw limit;
     throw new ApiError(d.error || `Request failed (${res.status})`, res.status, d.errors ?? []);
   }
   return data as T;
@@ -143,6 +185,15 @@ export const api = {
     logout: () => request<{ ok: true }>("POST", "/auth/logout"),
     magicLink: (email: string) => request<{ ok: true }>("POST", "/auth/magic-link", { email }),
     verifyMagicLink: (token: string) => request<{ ok: true }>("POST", "/auth/magic-link/verify", { token }),
+    signup: (input: SignupInput) => request<SignupDTO>("POST", "/auth/signup", input),
+    verifySignup: (token: string) => request<{ ok: true; workspaceId: string }>("POST", "/auth/signup/verify", { token }),
+  },
+  billing: {
+    get: () => get<BillingDTO>("/billing"),
+    /** Public pricing table (empty while billing is off). */
+    plans: () => get<PublicPlansDTO>("/billing/plans"),
+    checkout: (planId: string, interval: BillingInterval) => request<{ url: string }>("POST", "/billing/checkout", { planId, interval }),
+    portal: () => request<{ url: string }>("POST", "/billing/portal", {}),
   },
   me: {
     get: () => get<MeDTO>("/me"),
@@ -267,6 +318,22 @@ export const api = {
     email: () => get<AdminEmailDTO>("/admin/email"),
     setEmail: (enabled: boolean) => request<AdminEmailDTO>("PATCH", "/admin/email", { enabled }),
     testEmail: () => request<{ ok: true; to: string }>("POST", "/admin/email/test", {}),
+    signup: () => get<AdminSignupDTO>("/admin/signup"),
+    setSignup: (enabled: boolean) => request<AdminSignupDTO>("PATCH", "/admin/signup", { enabled }),
+    billing: {
+      get: () => get<AdminBillingDTO>("/admin/billing"),
+      update: (input: AdminBillingInput) => request<AdminBillingDTO>("PATCH", "/admin/billing", input),
+      saveProvider: (id: BillingProviderId, input: BillingProviderInput) => request<AdminBillingDTO>("PUT", `/admin/billing/providers/${id}`, input),
+      removeProvider: (id: BillingProviderId) => request<AdminBillingDTO>("DELETE", `/admin/billing/providers/${id}`),
+      testProvider: (id: BillingProviderId) => request<BillingProviderTestDTO>("POST", `/admin/billing/providers/${id}/test`, {}),
+      plans: () => get<AdminPlanDTO[]>("/admin/billing/plans"),
+      createPlan: (input: PlanInput) => request<AdminPlanDTO>("POST", "/admin/billing/plans", input),
+      suggestedPlans: () => request<AdminPlanDTO[]>("POST", "/admin/billing/plans/suggested", {}),
+      updatePlan: (id: string, input: Partial<PlanInput>) => request<AdminPlanDTO>("PATCH", `/admin/billing/plans/${id}`, input),
+      removePlan: (id: string) => request<{ ok: true; archived?: true }>("DELETE", `/admin/billing/plans/${id}`),
+      workspaces: (status: BillingStatus[] = []) => get<AdminWorkspaceBillingDTO[]>(`/admin/billing/workspaces${qs({ status: status.join(",") })}`),
+      setWorkspace: (id: string, input: AdminWorkspaceBillingInput) => request<AdminWorkspaceBillingDTO>("PATCH", `/admin/workspaces/${id}/billing`, input),
+    },
   },
   updates: {
     get: () => get<UpdateStatusDTO>("/updates"),

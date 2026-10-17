@@ -10,6 +10,7 @@ import {
   CalendarDays,
   Check,
   ChevronsUpDown,
+  CreditCard,
   Gauge,
   Image,
   KeyRound,
@@ -36,6 +37,8 @@ import { needsEmail, useSession } from "../lib/session";
 import { useUpdateStatus } from "../lib/updates";
 import type { InstancePermission, WorkspacePermission } from "../lib/types";
 import { useComposer } from "../pages/composer/ComposerProvider";
+import { BillingBanner } from "./billing/BillingBanner";
+import { PlanLimitDialog } from "./billing/PlanLimitDialog";
 import { CreateWorkspaceDialog } from "./Gate";
 import { Wordmark } from "./Logo";
 import { InitialsAvatar } from "./ui/Avatar";
@@ -65,6 +68,7 @@ const ADMIN_NAV: NavItem[] = [
   { to: "/admin/users", label: "Users", icon: UsersRound, instance: "instance.users.manage" },
   { to: "/admin/roles", label: "Roles", icon: Shield, instance: "instance.users.manage" },
   { to: "/admin/settings", label: "Instance settings", icon: SlidersHorizontal, instance: "instance.settings.manage" },
+  { to: "/admin/billing", label: "Billing", icon: CreditCard, instance: "instance.settings.manage" },
   { to: "/platforms", label: "Platforms", icon: Plug, instance: "instance.platforms.manage" },
 ];
 
@@ -156,9 +160,11 @@ export function Layout({ onLogout }: { onLogout: () => void }) {
               <ArrowRight className="size-4 shrink-0" />
             </Link>
           )}
+          <BillingBanner />
           <Outlet />
         </div>
       </main>
+      <PlanLimitDialog />
     </div>
   );
 }

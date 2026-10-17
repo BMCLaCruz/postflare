@@ -9,7 +9,7 @@ import { Dialog } from "../components/ui/Dialog";
 import { Field, Input } from "../components/ui/Form";
 import { Card, CopyButton, EmptyState, PageHeader, Skeleton, Tabs } from "../components/ui/Misc";
 import { useToast } from "../components/ui/Toast";
-import { api } from "../lib/api";
+import { api, isPlanLimit } from "../lib/api";
 import { useApp } from "../lib/app";
 import { cn, copyText, formatBytes, formatDuration } from "../lib/format";
 import { forgetMedia, rememberMedia } from "../lib/mediaCache";
@@ -391,7 +391,7 @@ function ImportDialog({ open, onClose, onImported }: { open: boolean; onClose: (
       toast.success("File imported", m.filename);
       onClose();
     } catch (err) {
-      setError((err as Error).message);
+      if (!isPlanLimit(err)) setError((err as Error).message); // plan limits: PlanLimitDialog
     } finally {
       setBusy(false);
     }

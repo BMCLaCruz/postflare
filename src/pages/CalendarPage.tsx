@@ -7,7 +7,7 @@ import { Button, IconButton } from "../components/ui/Button";
 import { STATUS_META, Tabs } from "../components/ui/Misc";
 import { useToast } from "../components/ui/Toast";
 import { parseAccountFilter, selectable } from "../lib/accountGroups";
-import { api, errorMessage } from "../lib/api";
+import { api, errorMessage, isPlanLimit } from "../lib/api";
 import { useApp } from "../lib/app";
 import { cn, truncate } from "../lib/format";
 import { useSession } from "../lib/session";
@@ -126,7 +126,7 @@ export function CalendarPage() {
       await Promise.all(group.posts.map((p) => api.posts.update(p.id, { scheduledAt: at })));
       toast.success(`Rescheduled to ${formatDate(at, tz, { weekday: "short", month: "short", day: "numeric" })}, ${formatTime(at, tz)}`);
     } catch (err) {
-      toast.error(`Could not reschedule: ${errorMessage(err)}`);
+      if (!isPlanLimit(err)) toast.error(`Could not reschedule: ${errorMessage(err)}`); // plan limits: PlanLimitDialog
     } finally {
       invalidate("posts");
     }

@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { useLocation } from "react-router";
-import { AlertTriangle, ArrowUpCircle, ExternalLink, FlaskConical, Globe, HardDrive, Info, Lock, Mail, RefreshCw, Send, ShieldCheck } from "lucide-react";
+import { Link, useLocation } from "react-router";
+import { AlertTriangle, ArrowUpCircle, ExternalLink, FlaskConical, Globe, HardDrive, Info, Lock, Mail, RefreshCw, Send, ShieldCheck, UserPlus } from "lucide-react";
 import { StorageUsage } from "../components/media/StorageUsage";
 import { Button } from "../components/ui/Button";
 import { Field, Input, Select, Switch } from "../components/ui/Form";
@@ -15,7 +15,7 @@ import { useSession } from "../lib/session";
 import { invalidate, useFetch } from "../lib/useFetch";
 import { CHANGELOG_URL, COMMIT, REPO_URL, UPDATING_URL, VERSION, releaseUrl } from "@shared/version";
 
-/** Admin → Instance settings: public URL and default timezone (API keys moved to the profile), integrations, sign-in links by email, version and updates. */
+/** Admin → Instance settings: public URL and default timezone (API keys moved to the profile), integrations, sign-in links by email, public sign-up, version and updates. */
 export function InstanceSettingsPage() {
   const { hash } = useLocation();
   // Links from the sidebar (#about, #updating) land on the section.
@@ -29,6 +29,7 @@ export function InstanceSettingsPage() {
         <GeneralSection />
         <IntegrationsSection />
         <EmailSection />
+        <SignupSection />
         <StorageSection />
         <AboutSection />
         <UpdatingSection />
@@ -401,6 +402,63 @@ function EmailSection() {
                 <CodeBlock code={EMAIL_SETUP} />
                 <p>Then deploy and come back here to turn it on.</p>
               </div>
+            )}
+          </div>
+        )}
+      </Section>
+    </div>
+  );
+}
+
+/** Public sign-up (hosted mode, off by default): anyone can create an account and gets their own workspace. */
+function SignupSection() {
+  const toast = useToast();
+  const { data, setData } = useFetch("admin-signup", api.admin.signup, ["settings"]);
+  const [busy, setBusy] = useState(false);
+
+  async function toggle(next: boolean) {
+    setBusy(true);
+    try {
+      const res = await api.admin.setSignup(next);
+      setData(() => res);
+      toast.success(next ? "Public sign-up turned on" : "Public sign-up turned off");
+    } catch (err) {
+      toast.error(err);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div id="signup" className="scroll-mt-6">
+      <Section icon={<UserPlus />} title="Public sign-up" description="Let anyone create an account. Each new user gets the Member role and a workspace of their own.">
+        {!data ? (
+          <Skeleton className="h-9 w-full max-w-xl" />
+        ) : (
+          <div className="max-w-xl space-y-4 text-sm">
+            <label className="flex items-start gap-3">
+              <Switch id="signup-enabled" checked={data.enabled} disabled={busy} onChange={toggle} label="Public sign-up" />
+              <span>
+                <span className="block font-medium text-zinc-900 dark:text-zinc-100">Show &ldquo;Create an account&rdquo; on the sign-in page</span>
+                <span className="mt-0.5 block text-zinc-500">
+                  {data.emailConfigured
+                    ? "New accounts confirm their email address with a link that works for 24 hours. At most 5 sign-ups per network per hour."
+                    : "Accounts are active right away (no email confirmation). At most 5 sign-ups per network per hour."}{" "}
+                  With <Link to="/admin/billing" className={linkClass}>billing</Link> on, new workspaces start a free trial.
+                </span>
+              </span>
+            </label>
+            {!data.emailConfigured && (
+              <p className="flex gap-2 rounded-lg bg-amber-50 px-3 py-2 text-amber-900 ring-1 ring-amber-200 dark:bg-amber-950/40 dark:text-amber-200 dark:ring-amber-900">
+                <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+                <span>
+                  Email is not set up, so sign-ups are not verified: anyone can register any address. A public instance should set up email first (see{" "}
+                  <a href="#email" className="font-medium underline">
+                    Sign-in links by email
+                  </a>
+                  ).
+                </span>
+              </p>
             )}
           </div>
         )}
