@@ -12,6 +12,13 @@ file is maintained by release-please from Conventional Commits touching `cli/`.
   `post --playbook <id>@<version> --variant A`, `posts edit --playbook/--no-playbook/--variant`, `posts --playbook`.
   The bundled skill tells agents to look up a playbook before writing and to attribute posts.
 
+## [0.3.0](https://github.com/FerdiKT/postflare/compare/cli-v0.2.0...cli-v0.3.0) (2026-10-17)
+
+
+### Features
+
+* **youtube:** captions, language fields, playlist creation, localizations, watch time and retention analytics ([5f5c791](https://github.com/FerdiKT/postflare/commit/5f5c791186d652aa11daacdebd5cdb61eb82d6d8))
+
 ## [0.2.0](https://github.com/FerdiKT/postflare/compare/cli-v0.1.0...cli-v0.2.0) (2026-10-16)
 
 
