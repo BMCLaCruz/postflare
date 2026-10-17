@@ -110,7 +110,7 @@ const reasonMessages: Record<string, string> = {
   uploadLimitExceeded: "The channel reached its daily YouTube upload limit, try again tomorrow.",
   quotaExceeded: "The YouTube API daily quota of this Google Cloud project is exhausted, try again tomorrow.",
   youtubeSignupRequired: "This Google account has no YouTube channel yet: create one first.",
-  forbidden: "YouTube refused the request (comments disabled or video not public?).",
+  forbidden: "YouTube refused the request (forbidden: e.g. custom thumbnails need a verified channel, comments need a public video with comments on).",
 };
 
 const classify = googleClassify;
