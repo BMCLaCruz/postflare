@@ -1,5 +1,6 @@
 import { commandHelp, parseCommand, splitCommand } from "./args.js";
 import { accountOptions, accounts, platforms } from "./commands/accounts.js";
+import { apps, appsAdd, appsBioLink, appsImport, appsRm, links } from "./commands/apps.js";
 import { analytics, analyticsRefresh, analyticsTop } from "./commands/analytics.js";
 import { login, logout, whoami, workspaces } from "./commands/auth.js";
 import { mediaAlias, mediaImport, mediaList, mediaRm, mediaUpload } from "./commands/media.js";
@@ -43,6 +44,12 @@ export const COMMANDS: Command[] = [
   playbooksSearch,
   playbooksShow,
   playbooksStats,
+  apps,
+  appsAdd,
+  appsImport,
+  appsRm,
+  appsBioLink,
+  links,
   uploadLink,
   skillInstall,
   version,
@@ -55,6 +62,7 @@ const GROUPS: Array<[string, string[]]> = [
   ["Posts", ["post", "posts", "posts show", "posts edit", "posts cancel", "posts retry", "posts resolve", "posts comment", "posts rm"]],
   ["Playbooks", ["playbooks", "playbooks search", "playbooks show", "playbooks stats"]],
   ["Analytics", ["analytics", "analytics top", "analytics refresh"]],
+  ["Apps & links", ["apps", "apps add", "apps import", "apps rm", "apps bio-link", "links"]],
 ];
 
 export function mainHelp(): string {
@@ -86,6 +94,7 @@ export function mainHelp(): string {
     "  postflare post -a tiktok -m clip.mp4 --set privacy_level=SELF_ONLY --now",
     "  postflare playbooks search launch --platform x",
     "  postflare post -a x --text-file post.txt --playbook launch-announcement@1 --now",
+    "  postflare post -a x -a threads --text \"Tempo 2.0 is out\" --app Tempo --at \"fri 9:00\"",
     "  postflare analytics --range 7d",
     "",
     "Help for a command: postflare <command> --help",

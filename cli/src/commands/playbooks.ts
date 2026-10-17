@@ -3,7 +3,8 @@ import type { Command, Ctx } from "../context.js";
 import { UsageError } from "../errors.js";
 import { c, fmtNum, fmtPct, println, printJson, table, truncate } from "../format.js";
 import { resolveAccounts } from "../resolve.js";
-import type { PlaybookDTO, PlaybookStatsDTO, PlaybookStatsRow, PlaybookSummaryDTO } from "../types.js";
+import type { PlaybookDTO, PlaybookStatsDTO, PlaybookStatsRow, PlaybookStatsSort, PlaybookSummaryDTO } from "../types.js";
+import { campaignNote, fmtMoney } from "./apps.js";
 
 const FILTERS = {
   platform: { type: "string", arg: "<id|group>", description: "Platform id (x, tiktok...) or group (short-video, microblog, professional, visual)" },
@@ -85,38 +86,81 @@ const lift = (r: PlaybookStatsRow) => {
 };
 const conf = (r: PlaybookStatsRow) => (r.confidence === "ok" ? c.green("ok") : r.confidence === "low" ? c.yellow("low") : c.gray("insufficient"));
 
+/** --sort values → server values (installs = first-time App Store downloads, proceeds = Apple's revenue estimate). */
+const STATS_SORTS: Record<string, PlaybookStatsSort> = {
+  lift: "lift",
+  installs: "downloads",
+  proceeds: "proceeds",
+  "installs-per-post": "downloadsPerPost",
+  "proceeds-per-post": "proceedsPerPost",
+  // Aliases (server names and "revenue").
+  downloads: "downloads",
+  revenue: "proceeds",
+  downloadsPerPost: "downloadsPerPost",
+  proceedsPerPost: "proceedsPerPost",
+};
+
 export const playbooksStats: Command = {
   name: "playbooks stats",
   summary: "Rank playbooks by performance: lift vs each account's usual, engagement rate, posts, confidence (A/B variants too).",
   description:
     "Lift = median over the playbook's posts of (post engagement rate ÷ the same account's median for posts without a playbook) − 1.\n" +
-    "Confidence: insufficient < 5 posts, low 5–19, ok ≥ 20. Correlational: topics, timing and media differ between posts.",
+    "Confidence: insufficient < 5 posts, low 5–19, ok ≥ 20. Correlational: topics, timing and media differ between posts.\n" +
+    "Posts with tracked App Store links (post --app) add INSTALLS and PROCEEDS: --sort installs|proceeds ranks by them.",
   options: {
     days: { type: "string", arg: "<n>", description: "Look-back window in days (default 90, max 366)" },
     platform: { type: "string", arg: "<id>", description: "One platform, e.g. tiktok" },
     account: { type: "string", short: "a", arg: "<selector>", description: "One account" },
+    sort: { type: "string", arg: "<by>", description: "lift (default), installs, proceeds, installs-per-post, proceeds-per-post" },
   },
   max: 0,
-  examples: ["postflare playbooks stats", "postflare playbooks stats --platform tiktok --days 30", "postflare playbooks stats -a @tempoapp --json"],
+  examples: ["postflare playbooks stats", "postflare playbooks stats --platform tiktok --days 30", "postflare playbooks stats --sort installs-per-post", "postflare playbooks stats -a @tempoapp --json"],
   async run(ctx, { values }) {
     const accountId = str(values.account) ? resolveAccounts(list(values.account), await ctx.accounts())[0].id : undefined;
-    const s = await ctx.api.get<PlaybookStatsDTO>("/playbooks/stats", { days: str(values.days), platform: str(values.platform), accountId });
+    const rawSort = str(values.sort);
+    const sort = rawSort === undefined ? undefined : STATS_SORTS[rawSort];
+    if (rawSort !== undefined && !sort) throw new UsageError("--sort must be one of lift, installs, proceeds, installs-per-post, proceeds-per-post", "playbooks stats");
+    const s = await ctx.api.get<PlaybookStatsDTO>("/playbooks/stats", { days: str(values.days), platform: str(values.platform), accountId, sort: sort === "lift" ? undefined : sort });
     if (ctx.json) return printJson(s);
     if (!s.postsAnalyzed) return println(`No published posts with metrics in the last ${s.days} days.`);
+    const all = [s.baseline, ...s.playbooks.flatMap((p) => [p, ...p.variants, ...p.versions])];
+    const camp = all.some((r) => (r.campaignPosts ?? 0) > 0);
+    const perPost = sort === "downloadsPerPost" || sort === "proceedsPerPost";
+    const money = (r: PlaybookStatsRow) => (r.campaignPosts ? fmtMoney(perPost ? r.proceedsPerPost : r.proceeds, s.currency) : "");
+    const installs = (r: PlaybookStatsRow) => (r.campaignPosts ? (perPost ? (r.downloadsPerPost === null || r.downloadsPerPost === undefined ? "-" : String(+r.downloadsPerPost.toFixed(1))) : fmtNum(r.downloads)) : "");
+    const cells = (r: PlaybookStatsRow, id: string, name: string) => [
+      id,
+      name,
+      lift(r),
+      fmtPct(r.medianEngagementRate),
+      fmtNum(r.medianViews),
+      String(r.posts),
+      ...(camp ? [installs(r), money(r)] : []),
+      conf(r),
+    ];
     const rows: Array<Array<string>> = [];
     for (const p of s.playbooks) {
-      rows.push([p.playbookId ?? "", truncate(p.name, 40), lift(p), fmtPct(p.medianEngagementRate), fmtNum(p.medianViews), String(p.posts), conf(p)]);
-      for (const v of p.variants) rows.push(["", c.gray(`  variant ${v.variant ?? "(none)"}`), lift(v), fmtPct(v.medianEngagementRate), fmtNum(v.medianViews), String(v.posts), conf(v)]);
-      if (p.versions.length > 1) for (const v of p.versions) rows.push(["", c.gray(`  v${v.version}`), lift(v), fmtPct(v.medianEngagementRate), fmtNum(v.medianViews), String(v.posts), conf(v)]);
+      rows.push(cells(p, p.playbookId ?? "", truncate(p.name, 40)));
+      for (const v of p.variants) rows.push(cells(v, "", c.gray(`  variant ${v.variant ?? "(none)"}`)));
+      if (p.versions.length > 1) for (const v of p.versions) rows.push(cells(v, "", c.gray(`  v${v.version}`)));
     }
-    const b = s.baseline;
-    rows.push([c.gray("—"), c.gray("No playbook (baseline)"), lift(b), fmtPct(b.medianEngagementRate), fmtNum(b.medianViews), String(b.posts), conf(b)]);
+    rows.push(cells(s.baseline, c.gray("—"), c.gray("No playbook (baseline)")));
     println(
       table(
-        [{ header: "ID" }, { header: "PLAYBOOK" }, { header: "LIFT", align: "right" }, { header: "ENG. RATE", align: "right" }, { header: "VIEWS", align: "right" }, { header: "POSTS", align: "right" }, { header: "CONFIDENCE" }],
+        [
+          { header: "ID" },
+          { header: "PLAYBOOK" },
+          { header: "LIFT", align: "right" },
+          { header: "ENG. RATE", align: "right" },
+          { header: "VIEWS", align: "right" },
+          { header: "POSTS", align: "right" },
+          ...(camp ? [{ header: perPost ? "INSTALLS/POST" : "INSTALLS", align: "right" as const }, { header: perPost ? "PROCEEDS/POST" : "PROCEEDS", align: "right" as const }] : []),
+          { header: "CONFIDENCE" },
+        ],
         rows,
       ),
     );
     println(c.gray(`${s.postsAnalyzed} posts in the last ${s.days} days${s.capped ? " (most recent only)" : ""}. Correlation, not causation: compare playbooks with enough posts.`));
+    if (camp) println(campaignNote());
   },
 };

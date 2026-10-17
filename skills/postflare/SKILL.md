@@ -63,7 +63,7 @@ postflare upload-link --note "Photos for Friday" --wait   # user uploads from a 
 ```bash
 postflare post -a <account> [-a <account>...] --text "..." [-m <id|path>...] \
   (--at "<when>" | --now | --draft) [--set key=value | --set <platform>.key=value ...] [--thread "..."...] \
-  [--playbook <id>@<version> [--variant A]] [--dry-run]
+  [--playbook <id>@<version> [--variant A]] [--app <app> [--no-autolink]] [--dry-run]
 ```
 - `-a`: account id (safest), `@username`, platform id (if only one account there), or `platform:@username`.
 - `--at`: user's local time: `"2026-10-14 09:00"`, `"tomorrow 9:00"`, `"fri 18:00"`, `"in 2h"`, or ISO with offset.
@@ -72,6 +72,7 @@ postflare post -a <account> [-a <account>...] --text "..." [-m <id|path>...] \
 - Run with `--dry-run` first when unsure; it validates against every platform's rules.
 - Missing required settings are reported with the exact `--set` to add.
 - Always pass `--playbook` when you followed one (`posts edit <id> --playbook <id>@<v>` fixes a forgotten one).
+- Post about an iOS app? Pass `--app <app>` (section 7).
 
 ## 6. Verify
 
@@ -86,6 +87,31 @@ postflare posts --status failed  # then: posts show <id>, fix with posts edit, p
 (timeout, network error, 5xx). It is never retried automatically. Ask the user to check the profile (or check it yourself),
 then `posts resolve <id> --published [--url URL]` if it is live, or `posts resolve <id> --retry` if it is not
 (retrying a post that did go through publishes a duplicate). List them with `posts --status needs_check`.
+
+## 7. App Store apps: tracked links, installs and revenue
+
+When a post promotes an App Store app, tag it so Postflare can measure clicks, installs and proceeds per post.
+
+```bash
+postflare apps                                    # the workspace's apps: id, App Store id, name
+postflare post -a x -a threads --text "Tempo 2.0: https://apps.apple.com/app/id1234567890" --app Tempo --at "fri 9:00"
+postflare apps bio-link -a <instagram/tiktok account> --app Tempo   # tracked URL for the bio
+postflare links --app Tempo --json                # clicks, downloads (installs), proceeds per link
+```
+- `--app` takes the app id, App Store id or name. Not listed? `postflare apps add <appStoreId>` or `apps import`
+  (from Revflare) if the user agrees; an unknown app is a usage error listing the apps.
+- Clickable platforms (X, Threads, Bluesky, LinkedIn, Facebook, Pinterest, Reddit, Mastodon, YouTube...) get a tracked
+  link `https://<postflare>/a/<code>` with its own App Store campaign token. With auto-insert (workspace default, or
+  `--autolink`) the app's App Store URL in the text is replaced by it, or it is appended: so just write the normal App
+  Store link (or none) and count it in the length limit (~30 characters). `--no-autolink` keeps the text as written.
+  The CLI prints "Tracked link added for ..."; `posts show <id>` shows the link and its results.
+- Instagram/TikTok captions are not clickable: never put the link there; give the user the account's bio link
+  (`apps bio-link`) instead. No link at all? The workspace needs the Apple provider token (Workspace settings → App
+  Store campaigns): tell the user.
+- Results: `analytics` (Clicks, Installs, Proceeds, Proceeds/post), `analytics top --sort installs|proceeds|clicks`,
+  `playbooks stats --sort installs|proceeds|installs-per-post|proceeds-per-post` (which playbooks drive installs and
+  revenue, not just engagement). Installs = first-time downloads. Apple's numbers lag 2-3 days, small numbers (fewer
+  than 5 users) are withheld and proceeds are an estimate: say so, and don't judge posts younger than ~3 days by them.
 
 ## Recipes
 
@@ -120,6 +146,7 @@ failures only warn in the log (`posts show`): the video is already live.
 postflare analytics --range 7d --json        # totals vs previous 7 days, byProvider, byAccount, followers
 postflare analytics top --range 7d --sort engagementRate --limit 5 --json
 postflare playbooks stats --days 30 --json   # which playbooks (and A/B variants) beat each account's usual
+postflare analytics top --range 7d --sort installs --json   # with tracked App Store links: installs, proceeds
 postflare accounts --json                    # analytics status per account
 ```
 Report: posts published, views/impressions, engagements, engagement rate (and change vs the previous period), follower

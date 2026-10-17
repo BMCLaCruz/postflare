@@ -5,6 +5,7 @@ import { UsageError } from "../errors.js";
 import { c, fmtDate, fmtDelta, fmtNum, fmtPct, fmtStatus, println, printJson, table, truncate } from "../format.js";
 import { resolveAccounts } from "../resolve.js";
 import { exposure, type AnalyticsBreakdown, type AnalyticsPostDTO, type AnalyticsSummaryDTO } from "../types.js";
+import { campaignNote, fmtMoney } from "./apps.js";
 
 const RANGE_OPTIONS = {
   range: { type: "string", arg: "<span>", description: "Last 7d, 30d (default), 90d, 12h..." },
@@ -14,7 +15,9 @@ const RANGE_OPTIONS = {
   platform: { type: "string", arg: "<id>", description: "One platform, e.g. tiktok" },
 } as const;
 
-const SORTS = ["views", "engagements", "engagementRate", "publishedAt"];
+const SORTS = ["views", "engagements", "engagementRate", "publishedAt", "clicks", "installs", "downloads", "proceeds"];
+/** CLI sort → server sort (installs is an alias of downloads, first-time App Store downloads). */
+const SERVER_SORT: Record<string, string> = { installs: "downloads" };
 
 /** Query of the analytics endpoints from the range/filter flags. */
 async function rangeQuery(ctx: Ctx, values: Parsed["values"]) {
@@ -49,10 +52,19 @@ function kpis(s: AnalyticsSummaryDTO): string {
     t.engagementRate !== null && p.engagementRate !== null ? `${t.engagementRate >= p.engagementRate ? "+" : ""}${+((t.engagementRate - p.engagementRate) * 100).toFixed(2)} pts` : "";
   items.push(["Eng. rate", fmtPct(t.engagementRate), rateDelta ? (t.engagementRate! >= p.engagementRate! ? c.green(rateDelta) : c.red(rateDelta)) : ""]);
   if (t.followers !== null) items.push(["Followers", fmtNum(t.followers), t.followersChange !== null ? fmtDelta(t.followers, t.followers - t.followersChange) : ""]);
-  return items.map(([k, v, d]) => `  ${k.padEnd(12)} ${c.bold(v.padStart(9))}  ${d}`).join("\n");
+  if (t.campaignPosts) {
+    items.push(["Clicks", fmtNum(t.clicks), fmtDelta(t.clicks, p.clicks)]);
+    items.push(["Installs", fmtNum(t.downloads), fmtDelta(t.downloads, p.downloads)]);
+    items.push(["Proceeds", fmtMoney(t.proceeds, s.currency), fmtDelta(t.proceeds, p.proceeds)]);
+    items.push(["Proceeds/post", fmtMoney((t.proceeds ?? 0) / t.campaignPosts, s.currency), c.gray(`${fmtNum(t.campaignPosts)} posts with tracked links`)]);
+  }
+  return items.map(([k, v, d]) => `  ${k.padEnd(13)} ${c.bold(v.padStart(9))}  ${d}`).join("\n");
 }
 
-function breakdownTable(rows: AnalyticsBreakdown[], first: string, label: (r: AnalyticsBreakdown) => string) {
+const hasCampaign = (rows: Array<{ campaignPosts?: number }>) => rows.some((r) => (r.campaignPosts ?? 0) > 0);
+
+function breakdownTable(rows: AnalyticsBreakdown[], first: string, label: (r: AnalyticsBreakdown) => string, currency?: string | null) {
+  const camp = hasCampaign(rows);
   return table(
     [
       { header: first, flex: true },
@@ -62,6 +74,7 @@ function breakdownTable(rows: AnalyticsBreakdown[], first: string, label: (r: An
       { header: "RATE", align: "right" },
       { header: "FOLLOWERS", align: "right" },
       { header: "CHANGE", align: "right" },
+      ...(camp ? [{ header: "CLICKS", align: "right" as const }, { header: "INSTALLS", align: "right" as const }, { header: "PROCEEDS", align: "right" as const }] : []),
     ],
     rows.map((r) => [
       label(r),
@@ -71,11 +84,13 @@ function breakdownTable(rows: AnalyticsBreakdown[], first: string, label: (r: An
       fmtPct(r.engagementRate),
       fmtNum(r.followers),
       r.followersChange === null ? "" : `${r.followersChange >= 0 ? "+" : ""}${fmtNum(r.followersChange)}`,
+      ...(camp ? (r.campaignPosts ? [fmtNum(r.clicks), fmtNum(r.downloads), fmtMoney(r.proceeds, currency)] : ["", "", ""]) : []),
     ]),
   );
 }
 
 function topTable(rows: AnalyticsPostDTO[]) {
+  const camp = rows.some((p) => p.campaign);
   return table(
     [
       { header: "ID" },
@@ -84,6 +99,7 @@ function topTable(rows: AnalyticsPostDTO[]) {
       { header: "VIEWS", align: "right" },
       { header: "ENG", align: "right" },
       { header: "RATE", align: "right" },
+      ...(camp ? [{ header: "CLICKS", align: "right" as const }, { header: "INSTALLS", align: "right" as const }, { header: "PROCEEDS", align: "right" as const }] : []),
       { header: "TEXT", flex: true },
       { header: "URL", flex: true },
     ],
@@ -94,6 +110,7 @@ function topTable(rows: AnalyticsPostDTO[]) {
       p.metrics ? fmtNum(exposure(p.metrics)) : c.gray("n/a"),
       p.metrics ? fmtNum(p.engagements) : "",
       fmtPct(p.engagementRate),
+      ...(camp ? (p.campaign ? [fmtNum(p.campaign.clicks), fmtNum(p.campaign.downloads), fmtMoney(p.campaign.proceeds, p.campaign.currency)] : ["", "", ""]) : []),
       truncate(p.excerpt, 50),
       p.externalUrl ?? "",
     ]),
@@ -106,7 +123,8 @@ export const analytics: Command = {
   description:
     "A post's metrics count for the day it was published. Engagements = likes + comments + shares + saves + replies +\n" +
     "reposts + quotes + clicks; rate = engagements / views (else impressions, else reach). Metrics are collected ~1h,\n" +
-    "24h, 3d, 7d and 30d after publishing, then weekly up to 90 days. Subcommands: top, refresh.",
+    "24h, 3d, 7d and 30d after publishing, then weekly up to 90 days. Posts with tracked App Store links (post --app) add\n" +
+    "clicks, installs (first-time App Store downloads) and proceeds; Apple's numbers lag 2-3 days. Subcommands: top, refresh.",
   options: { ...RANGE_OPTIONS, top: { type: "string", arg: "<n>", description: "Top posts to show (default 5, 0 = none)" } },
   max: 0,
   examples: ["postflare analytics", "postflare analytics --range 7d --platform instagram_standalone", "postflare analytics --from 2026-09-01 --to 2026-10-01 --json"],
@@ -123,16 +141,17 @@ export const analytics: Command = {
     println(kpis(summary));
     if (summary.byProvider.length) {
       println("");
-      println(breakdownTable(summary.byProvider, "PLATFORM", (r) => r.name));
+      println(breakdownTable(summary.byProvider, "PLATFORM", (r) => r.name, summary.currency));
     }
     if (summary.byAccount.length > 1) {
       println("");
-      println(breakdownTable(summary.byAccount, "ACCOUNT", (r) => `${r.provider} ${r.username ? `@${r.username.replace(/^@/, "")}` : r.name}`));
+      println(breakdownTable(summary.byAccount, "ACCOUNT", (r) => `${r.provider} ${r.username ? `@${r.username.replace(/^@/, "")}` : r.name}`, summary.currency));
     }
     if (top.length) {
       println(`\n${c.bold("Top posts")} ${c.gray("by views")}`);
       println(topTable(top));
     }
+    if (summary.totals.campaignPosts || top.some((p) => p.campaign)) println(`\n${campaignNote()}`);
     if (!summary.totals.posts) println(c.gray("\nNo posts were published in this range."));
     else if (!summary.totals.postsWithMetrics) println(c.gray("\nNo metrics collected yet for these posts (first collection ~1h after publishing)."));
   },
@@ -143,19 +162,20 @@ export const analyticsTop: Command = {
   summary: "Published posts with their latest metrics, best first.",
   options: {
     ...RANGE_OPTIONS,
-    sort: { type: "string", arg: "<by>", description: "views (default), engagements, engagementRate, publishedAt" },
+    sort: { type: "string", arg: "<by>", description: "views (default), engagements, engagementRate, publishedAt, clicks, installs, proceeds" },
     limit: { type: "string", arg: "<n>", description: "How many (default 10, max 200)" },
   },
   max: 0,
-  examples: ["postflare analytics top --range 90d --sort engagementRate --limit 20", "postflare analytics top --platform tiktok --json"],
+  examples: ["postflare analytics top --range 90d --sort engagementRate --limit 20", "postflare analytics top --sort installs --range 30d", "postflare analytics top --platform tiktok --json"],
   async run(ctx, { values }) {
     const sort = str(values.sort) ?? "views";
     if (!SORTS.includes(sort)) throw new UsageError(`--sort must be one of ${SORTS.join(", ")}`);
     const q = await rangeQuery(ctx, values);
-    const rows = await ctx.api.get<AnalyticsPostDTO[]>("/analytics/posts", { ...q, sort, limit: Math.min(Number(str(values.limit)) || 10, 200) });
+    const rows = await ctx.api.get<AnalyticsPostDTO[]>("/analytics/posts", { ...q, sort: SERVER_SORT[sort] ?? sort, limit: Math.min(Number(str(values.limit)) || 10, 200) });
     if (ctx.json) return printJson(rows);
     if (!rows.length) return println("No published posts in this range.");
     println(topTable(rows));
+    if (rows.some((p) => p.campaign)) println(campaignNote());
   },
 };
 

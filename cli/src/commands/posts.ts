@@ -6,7 +6,19 @@ import { CliError, UsageError } from "../errors.js";
 import { c, eprintln, fmtDate, fmtNum, fmtPct, fmtStatus, fmtWhen, println, printJson, table, truncate } from "../format.js";
 import { readStdin } from "../io.js";
 import { accountLabel, buildSettings, missingSettings, resolveAccounts, type Target } from "../resolve.js";
-import { exposure, type AccountDTO, type CreatePostsInput, type PostDTO, type PostMetricsDTO, type ResolvePostInput, type ThreadItem } from "../types.js";
+import {
+  BIO_LINK_PLATFORMS,
+  exposure,
+  type AccountDTO,
+  type AppDTO,
+  type CampaignLinkDTO,
+  type CreatePostsInput,
+  type PostDTO,
+  type PostMetricsDTO,
+  type ResolvePostInput,
+  type ThreadItem,
+} from "../types.js";
+import { APP_OPTION, AUTOLINK_OPTIONS, appsOf, campaignNote, campaignResultsLine, readAutoLink, resolveApp } from "./apps.js";
 import { uploadAll } from "./media.js";
 import { parsePlaybookRef } from "./playbooks.js";
 
@@ -119,6 +131,9 @@ export const post: Command = {
     "Settings: --set key=value applies to every selected platform that has the setting; --set <platform>.key=value or",
     "--set <accountId>.key=value targets one. Defaults of each platform's settings are filled in like in the app.",
     "List settings with: postflare platforms <id>. Exactly one of --at, --now or --draft is required.",
+    "--app tags the post with an App Store app (postflare apps): clickable platforms (X, Threads, Bluesky, LinkedIn...)",
+    "get a tracked link (clicks, installs, proceeds per post), inserted in the text when auto-insert is on (workspace",
+    "setting, --autolink / --no-autolink). Instagram/TikTok captions aren't clickable: use postflare apps bio-link.",
   ].join("\n"),
   options: {
     account: { type: "string", short: "a", multiple: true, arg: "<selector>", description: "Target account(s)" },
@@ -129,6 +144,8 @@ export const post: Command = {
     set: { type: "string", multiple: true, arg: "<key=value>", description: "Platform setting, e.g. tiktok.privacy_level=SELF_ONLY" },
     thread: { type: "string", multiple: true, arg: "<text>", description: "Follow-up (thread reply / first comment), in order" },
     ...PLAYBOOK_OPTIONS,
+    ...APP_OPTION,
+    ...AUTOLINK_OPTIONS,
     "dry-run": { type: "boolean", description: "Only validate (files given to --media are still uploaded)" },
   },
   max: 0,
@@ -139,6 +156,7 @@ export const post: Command = {
     "postflare post -a youtube -m video.mp4 --set title=\"Launch\" --set privacy=public --draft",
     "echo \"Hello\" | postflare post -a @me --now --dry-run",
     "postflare post -a x --text-file a.txt --playbook text-thread@1 --variant A --at \"tue 9:00\"",
+    "postflare post -a x -a threads --text \"Tempo 2.0 is out\" --app Tempo --at \"tomorrow 9:00\"",
   ],
   async run(ctx, { values }) {
     const all = await ctx.accounts();
@@ -159,6 +177,9 @@ export const post: Command = {
       const missing = missingSettings(targets, settings);
       if (missing.length) throw new CliError(`Missing settings:\n  ${missing.join("\n  ")}`);
     }
+    const autoLink = readAutoLink(values, "post");
+    if (autoLink !== undefined && !str(values.app)) throw new UsageError("--autolink / --no-autolink go with --app", "post");
+    const app = str(values.app) ? await resolveApp(ctx, str(values.app)!) : null;
     const media = await resolveMedia(ctx, list(values.media), str(values.alt));
     const body: CreatePostsInput = {
       scheduledAt,
@@ -170,6 +191,8 @@ export const post: Command = {
         thread: t.provider.capabilities.thread ? thread : [],
       })),
       ...readPlaybook(values),
+      ...(app ? { appId: app.id } : {}),
+      ...(autoLink !== undefined ? { autoLink } : {}),
     };
 
     if (values["dry-run"]) {
@@ -191,9 +214,35 @@ export const post: Command = {
     const what = scheduledAt === null ? "Saved draft" : scheduledAt === "now" ? "Publishing now" : `Scheduled for ${fmtDate(scheduledAt)}`;
     println(`${c.green("✓")} ${what}: ${created.length} post${created.length > 1 ? "s" : ""}`);
     println(postsTable(created, all));
+    if (app) await reportLinks(ctx, app, created, targets);
     println(c.gray(`Check: postflare posts show ${created[0].id}`));
   },
 };
+
+/** After creating posts with --app: which got a tracked link (inserted or not), and the bio-link hint. */
+async function reportLinks(ctx: Ctx, app: AppDTO, created: PostDTO[], targets: Target[]) {
+  const ids = new Set(created.map((p) => p.id));
+  const found = await ctx.api
+    .get<CampaignLinkDTO[]>("/campaigns/links", { appId: app.id, kind: "post", limit: Math.min(created.length + 20, 500) })
+    .then((rows) => rows.filter((l) => l.postId && ids.has(l.postId)))
+    .catch(() => null);
+  const name = (accountId: string) => targets.find((t) => t.account.id === accountId)?.provider.name ?? accountId;
+  if (found) {
+    const inText = (l: CampaignLinkDTO) => {
+      const p = created.find((x) => x.id === l.postId);
+      return !!p && JSON.stringify([p.content, p.thread, p.settings]).includes(l.trackedUrl);
+    };
+    const inserted = found.filter(inText);
+    const kept = found.filter((l) => !inText(l));
+    if (inserted.length) println(`${c.green("✓")} Tracked link added for ${inserted.map((l) => name(l.accountId!)).join(", ")}`);
+    for (const l of kept) println(`${c.green("✓")} Tracked link for ${name(l.accountId!)} (not inserted in the text): ${c.cyan(l.trackedUrl)}`);
+    const clickable = targets.filter((t) => !BIO_LINK_PLATFORMS.has(t.provider.id));
+    if (clickable.length && !found.length) println(c.yellow("! No tracked link was created: set the Apple provider token in Workspace settings → App Store campaigns"));
+  }
+  for (const t of targets.filter((t) => BIO_LINK_PLATFORMS.has(t.provider.id))) {
+    println(c.gray(`  ${t.provider.name} captions aren't clickable: use the bio link: postflare apps bio-link -a ${t.account.id} --app ${app.id}`));
+  }
+}
 
 // ---------------------------------------------------------------------------------------------------------------
 // posts
@@ -255,6 +304,7 @@ export const postsShow: Command = {
     const metrics = p.status === "published" ? await ctx.api.get<PostMetricsDTO>(`/posts/${p.id}/metrics`).catch(() => null) : null;
     if (ctx.json) return printJson({ ...p, metrics });
     const a = (await ctx.accounts().catch(() => [] as AccountDTO[])).find((x) => x.id === p.accountId);
+    const app = p.appId ? ((await appsOf(ctx).catch(() => [] as AppDTO[])).find((x) => x.id === p.appId) ?? null) : null;
     println(`${c.bold(p.id)}  ${fmtStatus(p.status)}  ${a ? `${a.provider} ${accountLabel(a)}` : p.accountId}`);
     if (p.status === "published") println(`Published: ${fmtWhen(p.publishedAt)}${p.externalUrl ? `  ${c.cyan(p.externalUrl)}` : ""}`);
     else if (p.scheduledAt) println(`Scheduled: ${fmtWhen(p.scheduledAt)}`);
@@ -264,6 +314,18 @@ export const postsShow: Command = {
     } else if (p.error) println(c.red(`Error: ${p.error}`));
     println(c.gray(`Group ${p.groupId} · created ${fmtDate(p.createdAt)} · attempts ${p.attempts}`));
     if (p.playbookId) println(c.gray(`Playbook ${p.playbookId}${p.playbookVersion ? `@${p.playbookVersion}` : ""}${p.variant ? ` · variant ${p.variant}` : ""}`));
+    if (p.appId || p.campaign) {
+      const appLabel = app ? `${app.name} (${app.appStoreId})` : (p.appId ?? `App Store id ${p.campaign!.appStoreId}`);
+      println(`App: ${appLabel}${p.autoLink === false ? c.gray(" · auto-insert off") : p.autoLink === true ? c.gray(" · auto-insert on") : ""}`);
+      if (p.campaign) {
+        const results = { ...p.campaign, ...(metrics?.campaign ?? {}) };
+        println(`  Tracked link: ${c.cyan(p.campaign.trackedUrl)}  ${c.gray(`ct ${p.campaign.ct}`)}`);
+        println(`  ${campaignResultsLine(results)}`);
+        println(`  ${campaignNote()}`);
+      } else if (a && BIO_LINK_PLATFORMS.has(a.provider)) {
+        println(c.gray(`  Captions aren't clickable here: use the bio link: postflare apps bio-link -a ${a.id} --app ${p.appId}`));
+      }
+    }
     println("");
     println(p.content || c.gray("(no text)"));
     if (p.media.length) println(`\nMedia: ${p.media.join(", ")}`);
@@ -316,10 +378,17 @@ export const postsEdit: Command = {
     "no-thread": { type: "boolean", description: "Remove the follow-ups" },
     ...PLAYBOOK_OPTIONS,
     "no-playbook": { type: "boolean", description: "Remove the playbook attribution" },
+    ...APP_OPTION,
+    "no-app": { type: "boolean", description: "Remove the App Store app (and stop using its tracked link)" },
+    ...AUTOLINK_OPTIONS,
   },
   min: 1,
   max: 1,
-  examples: ["postflare posts edit pst_abc --at \"tomorrow 18:00\"", "postflare posts edit pst_abc --text \"Fixed typo\" --set privacy=public"],
+  examples: [
+    "postflare posts edit pst_abc --at \"tomorrow 18:00\"",
+    "postflare posts edit pst_abc --text \"Fixed typo\" --set privacy=public",
+    "postflare posts edit pst_abc --app Tempo --autolink",
+  ],
   async run(ctx, { values, positionals }) {
     const current = await ctx.api.get<PostDTO>(`/posts/${encodeURIComponent(positionals[0])}`);
     const body: Record<string, unknown> = {};
@@ -342,7 +411,13 @@ export const postsEdit: Command = {
       body.playbookId = null;
     }
     Object.assign(body, readPlaybook(values));
-    if (!Object.keys(body).length) throw new UsageError("Nothing to change: give --text, --at/--now/--draft, --set, --media, --thread or --playbook", "posts edit");
+    if (values["no-app"]) {
+      if (str(values.app)) throw new UsageError("Use either --app or --no-app", "posts edit");
+      body.appId = null;
+    } else if (str(values.app)) body.appId = (await resolveApp(ctx, str(values.app)!)).id;
+    const autoLink = readAutoLink(values, "posts edit");
+    if (autoLink !== undefined) body.autoLink = autoLink;
+    if (!Object.keys(body).length) throw new UsageError("Nothing to change: give --text, --at/--now/--draft, --set, --media, --thread, --playbook or --app", "posts edit");
     const updated = await ctx.api.patch<PostDTO>(`/posts/${current.id}`, body);
     if (ctx.json) return printJson(updated);
     println(`${c.green("✓")} Updated ${updated.id}: ${fmtStatus(updated.status)} ${updated.status === "scheduled" ? fmtWhen(updated.scheduledAt) : ""}`);

@@ -112,6 +112,12 @@ export interface PostDTO {
   playbookId?: string | null;
   playbookVersion?: number | null;
   variant?: string | null;
+  /** App Store app the post is about (workspace app id, GET /api/apps), null when none. Older servers omit it. */
+  appId?: string | null;
+  /** Per-post override of the workspace's "auto-insert tracked links" setting; null = workspace default. */
+  autoLink?: boolean | null;
+  /** Tracked link of the post (GET /api/posts/:id only; null without an app or on non-clickable platforms). */
+  campaign?: CampaignLinkDTO | null;
   logs?: Array<{ id: number; level: string; message: string; createdAt: number }>;
 }
 
@@ -129,6 +135,10 @@ export interface CreatePostsInput {
   playbookId?: string | null;
   playbookVersion?: number | null;
   variant?: string | null;
+  /** App Store app: workspace app id (app_...), App Store id or app name; null removes it (PATCH). */
+  appId?: string | null;
+  /** Override the workspace's auto-insert setting (null/absent = workspace default). */
+  autoLink?: boolean | null;
 }
 
 export interface AnalyticsTotals {
@@ -144,6 +154,12 @@ export interface AnalyticsTotals {
   engagementRate: number | null;
   followers: number | null;
   followersChange: number | null;
+  /** Posts with a tracked App Store link, their clicks, App Store downloads and proceeds (older servers omit them). */
+  campaignPosts?: number;
+  clicks?: number;
+  downloads?: number;
+  redownloads?: number;
+  proceeds?: number;
 }
 
 export interface AnalyticsBreakdown extends AnalyticsTotals {
@@ -164,6 +180,8 @@ export interface AnalyticsSummaryDTO {
   byAccount: AnalyticsBreakdown[];
   daily: Array<{ day: string; posts: number; views: number; engagements: number }>;
   followers: Array<{ accountId: string; provider: string; name: string; points: Array<{ day: string; followers: number }> }>;
+  /** Currency of `proceeds`, null before the first Revflare sync. */
+  currency?: string | null;
 }
 
 export interface AnalyticsPostDTO {
@@ -183,6 +201,8 @@ export interface AnalyticsPostDTO {
   metricsNextAt: number | null;
   engagements: number;
   engagementRate: number | null;
+  /** Tracked link results (null when the post has no tracked link). */
+  campaign?: CampaignResultsDTO | null;
 }
 
 export interface PostMetricsDTO {
@@ -195,6 +215,8 @@ export interface PostMetricsDTO {
   /** Servers with YouTube Analytics support; older servers omit them. */
   details?: MetricDetails | null;
   detailsAt?: number | null;
+  /** Tracked link results (null when the post has no tracked link). */
+  campaign?: CampaignResultsDTO | null;
 }
 
 export interface MeDTO {
@@ -257,7 +279,17 @@ export interface PlaybookStatsRow {
   lift: number | null;
   liftPosts: number;
   confidence: "insufficient" | "low" | "ok";
+  /** Posts with a tracked App Store link, their clicks, downloads and proceeds (older servers omit them). */
+  campaignPosts?: number;
+  clicks?: number;
+  downloads?: number;
+  proceeds?: number;
+  downloadsPerPost?: number | null;
+  proceedsPerPost?: number | null;
 }
+
+/** GET /api/playbooks/stats?sort= */
+export type PlaybookStatsSort = "lift" | "downloads" | "proceeds" | "downloadsPerPost" | "proceedsPerPost";
 
 export interface PlaybookStatsDTO {
   from: number;
@@ -270,4 +302,69 @@ export interface PlaybookStatsDTO {
   baseline: PlaybookStatsRow;
   playbooks: Array<PlaybookStatsRow & { versions: PlaybookStatsRow[]; variants: PlaybookStatsRow[] }>;
   method: string;
+  sort?: PlaybookStatsSort;
+  /** Currency of `proceeds`, null before the first Revflare sync. */
+  currency?: string | null;
 }
+
+// App Store campaign links (GET /api/apps, /api/campaigns/*)
+
+export interface AppDTO {
+  id: string;
+  appStoreId: string;
+  name: string;
+  iconUrl: string | null;
+  /** Imported from Revflare (its app id there). */
+  revflareAppId: string | null;
+  createdAt: number;
+}
+
+export interface CampaignSettingsDTO {
+  providerToken: string | null;
+  autoLink: boolean;
+  revflare: {
+    url: string | null;
+    keyConfigured: boolean;
+    status: "ok" | "error" | null;
+    message: string | null;
+    syncedAt: number | null;
+    nextSyncAt: number | null;
+    currency: string | null;
+  };
+  linkBase: string;
+}
+
+/** Results of a tracked link: Postflare clicks and Apple's numbers for its campaign token. */
+export interface CampaignResultsDTO {
+  clicks: number;
+  /** First-time downloads (Apple App Analytics). Null until Revflare reported the token. */
+  downloads: number | null;
+  redownloads: number | null;
+  purchases: number | null;
+  proceeds: number | null;
+  sales: number | null;
+  currency: string | null;
+  /** Latest report day with this token (YYYY-MM-DD). */
+  asOf: string | null;
+}
+
+/** A tracked link (GET /api/campaigns/links, PostDTO.campaign). */
+export interface CampaignLinkDTO extends CampaignResultsDTO {
+  code: string;
+  kind: "post" | "bio";
+  trackedUrl: string;
+  appStoreUrl: string;
+  ct: string;
+  postId: string | null;
+  accountId: string | null;
+  provider: string;
+  appId: string;
+  appStoreId: string;
+  createdAt: number;
+}
+
+export const CAMPAIGN_DATA_NOTE =
+  "App Store numbers come from Apple App Analytics (via Revflare): they lag 2-3 days, Apple withholds small numbers (fewer than 5 users) for privacy, and proceeds are Apple's estimate.";
+
+/** Platforms whose captions are not clickable: they use the account's bio link (shared/campaigns.ts). */
+export const BIO_LINK_PLATFORMS = new Set(["instagram", "instagram_standalone", "tiktok", "tiktok_business"]);

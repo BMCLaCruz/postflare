@@ -47,14 +47,17 @@ profile (handy in CI). `postflare logout [--profile x | --all]`.
 | `post ...` | Create posts (see below) |
 | `posts [--status] [--upcoming] [--from] [--to] [-a]` | List posts |
 | `posts show <id>` | Post with its publishing log and metrics |
-| `posts edit <id> [--text] [--at] [--set] [--media] [--thread]` | Edit / reschedule |
+| `posts edit <id> [--text] [--at] [--set] [--media] [--thread] [--app\|--no-app] [--autolink\|--no-autolink]` | Edit / reschedule |
 | `posts cancel\|retry\|rm <ids...>` | |
 | `analytics [--range 7d\|30d\|90d \| --from --to] [-a] [--platform]` | KPIs vs the previous period, per platform/account, top posts |
-| `analytics top [--sort views\|engagements\|engagementRate\|publishedAt] [--limit]` | Best posts |
+| `analytics top [--sort views\|engagements\|engagementRate\|publishedAt\|clicks\|installs\|proceeds] [--limit]` | Best posts |
 | `analytics refresh --post <id> \| --account <selector>` | Collect metrics now |
 | `playbooks [query] [--platform] [--goal] [--format]`, `playbooks search <query>` | Find a recipe for the post (built-in and the workspace's own) |
 | `playbooks show <id>[@version] [--prompt] [-a]` | The playbook, or `--prompt`: the ready-to-use agent prompt with your accounts' limits |
-| `playbooks stats [--days] [--platform] [-a]` | Rank playbooks (and A/B variants) by lift vs each account's usual |
+| `playbooks stats [--days] [--platform] [-a] [--sort lift\|installs\|proceeds\|installs-per-post\|proceeds-per-post]` | Rank playbooks (and A/B variants) by lift vs each account's usual, or by App Store installs / proceeds |
+| `apps`, `apps add <appStoreId> [--name]`, `apps import`, `apps rm <app>` | App Store apps of the workspace (added by id, or imported from Revflare) |
+| `apps bio-link -a <account> --app <app>` | Tracked bio link of an account for an app (Instagram/TikTok captions aren't clickable) |
+| `links [-a] [--app] [--kind post\|bio] [--post]` | Tracked links with clicks, installs and proceeds |
 | `skill install [--dir ~/.claude/skills]` | Install/update the bundled Claude Code skill (`<dir>/postflare/SKILL.md`) |
 
 `postflare <command> --help` shows every option with examples.
@@ -90,6 +93,28 @@ postflare post -a youtube -m video.mp4 --set title="Launch" --draft --dry-run
 - `--thread "text"` (repeatable): follow-ups (thread replies, first comment) for platforms that support them.
 - `--playbook <id>[@version]` records the playbook the post was written with (for `playbooks stats`), `--variant A`
   labels an A/B version. `posts edit --playbook ... | --no-playbook | --variant` changes it.
+- `--app <app>` (app id, App Store id or name, see `postflare apps`) tags the post with an App Store app: posts on
+  clickable platforms (X, Threads, Bluesky, LinkedIn, Facebook, Pinterest, Reddit, Mastodon, YouTube...) get a tracked
+  link `https://<postflare>/a/<code>` with an App Store campaign token per post and platform. With auto-insert on
+  (workspace setting, or `--autolink`) the app's App Store URLs in the text are replaced by it, or it is appended;
+  `--no-autolink` creates the link but leaves the text alone. Instagram/TikTok captions aren't clickable: use
+  `postflare apps bio-link -a <account> --app <app>` and put that URL in the bio. `posts edit --app ... | --no-app` changes it.
+
+### App Store campaign links
+
+```bash
+postflare apps                                   # apps of the workspace (postflare apps add 1234567890 / apps import)
+postflare post -a x -a threads --text "Tempo 2.0 is out: https://apps.apple.com/app/id1234567890" --app Tempo --at "fri 9:00"
+postflare apps bio-link -a instagram_standalone --app Tempo
+postflare links --app Tempo                      # clicks, installs, proceeds per link
+postflare analytics top --sort installs --range 30d
+postflare playbooks stats --sort proceeds-per-post
+```
+
+Clicks are counted by Postflare (bots filtered roughly). Installs (first-time App Store downloads), redownloads and
+proceeds come from Apple App Analytics through Revflare: they lag 2-3 days, Apple withholds small numbers (fewer than 5
+users) and proceeds are Apple's estimate. `posts show <id>`, `analytics`, `analytics top` and `playbooks stats` show them
+when posts have tracked links.
 
 ### Scripting
 
