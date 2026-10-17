@@ -68,3 +68,16 @@ export function percent(rate: number, digits = 1): string {
 export function signedCompact(n: number): string {
   return `${n > 0 ? "+" : n < 0 ? "−" : ""}${compactNumber(Math.abs(n))}`;
 }
+
+/** 12.5, "EUR" → "€12.50" (plain number with the code when the currency is unknown). */
+export function money(n: number, currency: string | null | undefined, opts: { compact?: boolean } = {}): string {
+  try {
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: currency || "USD",
+      ...(opts.compact && Math.abs(n) >= 1000 ? { notation: "compact", maximumFractionDigits: 1 } : { maximumFractionDigits: 2 }),
+    }).format(n);
+  } catch {
+    return `${n.toFixed(2)} ${currency ?? ""}`.trim();
+  }
+}

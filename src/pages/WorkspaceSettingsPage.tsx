@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router";
 import { AlertTriangle, Building2, LogOut, MailPlus, Trash2, UserPlus, Users } from "lucide-react";
+import { CampaignSections } from "../components/campaigns/CampaignSettings";
 import { grantableRoles, InviteDialog } from "../components/InviteDialog";
 import { InitialsAvatar } from "../components/ui/Avatar";
 import { Button, IconButton } from "../components/ui/Button";
@@ -34,6 +35,7 @@ export function WorkspaceSettingsPage() {
       <div className="space-y-6">
         <GeneralSection workspace={workspace} />
         <MembersCard workspace={workspace} />
+        <CampaignSections />
         <DangerZone workspace={workspace} />
       </div>
     </>

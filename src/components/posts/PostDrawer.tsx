@@ -12,6 +12,7 @@ import type { PostDTO, PostWithLogs } from "../../lib/types";
 import { invalidate, useFetch } from "../../lib/useFetch";
 import { useComposer } from "../../pages/composer/ComposerProvider";
 import { PostPerformance } from "../analytics/PostPerformance";
+import { PostCampaign } from "../campaigns/bits";
 import { AccountAvatar } from "../ProviderLogo";
 import { Button } from "../ui/Button";
 import { useConfirm } from "../ui/Confirm";
@@ -232,6 +233,13 @@ function PostBody({ post }: { post: PostWithLogs }) {
       {post.playbookId && <PlaybookLine post={post} />}
 
       {post.status === "published" && <PostPerformance post={post} />}
+
+      {post.campaign && (
+        <section>
+          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-400">Tracked App Store link</h3>
+          <PostCampaign link={post.campaign} />
+        </section>
+      )}
 
       {post.thread.length > 0 && (
         <section>

@@ -1,4 +1,6 @@
 import { PlaybookRanking } from "../components/playbooks/PlaybookRanking";
+import { CampaignAnalytics } from "../components/campaigns/CampaignAnalytics";
+import { campaignSummary } from "../components/campaigns/bits";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useSearchParams } from "react-router";
 import { AlertTriangle, BarChart3, ExternalLink, FileText, Hourglass, ImageIcon, Info, PenSquare, Table2, Users, Zap } from "lucide-react";
@@ -40,6 +42,12 @@ const SORT_TABS: Array<{ value: AnalyticsSort; label: string }> = [
   { value: "engagementRate", label: "Best rate" },
   { value: "publishedAt", label: "Newest" },
 ];
+/** Extra sorts once the period has posts with tracked App Store links. */
+const CAMPAIGN_SORT_TABS: Array<{ value: AnalyticsSort; label: string }> = [
+  { value: "downloads", label: "Most installs" },
+  { value: "proceeds", label: "Most revenue" },
+  { value: "clicks", label: "Most clicks" },
+];
 
 const hasAnalytics = (p: Provider | undefined) => !!p && (p.analytics.post || p.analytics.account);
 
@@ -54,7 +62,7 @@ export function AnalyticsPage() {
   const range = resolveRange(preset, tz, { from: params.get("from"), to: params.get("to") });
   const accountId = params.get("account") ?? "";
   const provider = params.get("platform") ?? "";
-  const sort = (SORT_TABS.some((s) => s.value === params.get("sort")) ? params.get("sort") : "views") as AnalyticsSort;
+  const sort = ([...SORT_TABS, ...CAMPAIGN_SORT_TABS].some((s) => s.value === params.get("sort")) ? params.get("sort") : "views") as AnalyticsSort;
   const setParam = (patch: Record<string, string | null>) =>
     setParams(
       (p) => {
@@ -168,7 +176,14 @@ export function AnalyticsPage() {
                 <Breakdown title="By platform" rows={s.byProvider} kind="provider" providerMap={providerMap} accounts={accounts} />
                 <Breakdown title="By account" rows={s.byAccount} kind="account" providerMap={providerMap} accounts={accounts} />
               </div>
-              <TopPosts query={query} queryKey={queryKey} sort={sort} onSort={(v) => setParam({ sort: v === "views" ? null : v })} />
+              {s.totals.campaignPosts > 0 && <CampaignAnalytics s={s} providerMap={providerMap} accounts={accounts} accountId={accountId || undefined} />}
+              <TopPosts
+                query={query}
+                queryKey={queryKey}
+                sort={sort}
+                campaigns={s.totals.campaignPosts > 0}
+                onSort={(v) => setParam({ sort: v === "views" ? null : v })}
+              />
               <PlaybookRanking compact accountId={accountId || undefined} />
             </>
           )}
@@ -611,7 +626,19 @@ function Breakdown({
 // ---------------------------------------------------------------------------------------------------------------
 // Top posts
 
-function TopPosts({ query, queryKey, sort, onSort }: { query: Parameters<typeof api.analytics.posts>[0]; queryKey: string; sort: AnalyticsSort; onSort: (s: AnalyticsSort) => void }) {
+function TopPosts({
+  query,
+  queryKey,
+  sort,
+  onSort,
+  campaigns,
+}: {
+  query: Parameters<typeof api.analytics.posts>[0];
+  queryKey: string;
+  sort: AnalyticsSort;
+  onSort: (s: AnalyticsSort) => void;
+  campaigns?: boolean;
+}) {
   const { tz, providerMap, accountMap } = useApp();
   const { can } = useSession();
   const { openPost } = usePostDrawer();
@@ -644,7 +671,7 @@ function TopPosts({ query, queryKey, sort, onSort }: { query: Parameters<typeof 
           <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">Top posts</h2>
           <p className="mt-0.5 text-sm text-zinc-500 dark:text-zinc-400">Published in this period. Click a post for details.</p>
         </div>
-        <Tabs tabs={SORT_TABS} value={sort} onChange={onSort} className="max-w-full overflow-x-auto [&_button]:shrink-0 [&_button]:whitespace-nowrap" />
+        <Tabs tabs={campaigns ? [...SORT_TABS, ...CAMPAIGN_SORT_TABS] : SORT_TABS} value={sort} onChange={onSort} className="max-w-full overflow-x-auto [&_button]:shrink-0 [&_button]:whitespace-nowrap" />
       </div>
       {!first.data ? (
         <div className="space-y-3 p-5">
@@ -706,6 +733,11 @@ function TopPosts({ query, queryKey, sort, onSort }: { query: Parameters<typeof 
                             <span className="truncate">{accountMap.get(p.accountId)?.name ?? p.accountName}</span>
                             <span className="shrink-0 md:hidden">· {formatDateTime(p.publishedAt, tz, { hour: undefined, minute: undefined })}</span>
                           </div>
+                          {p.campaign && (
+                            <p className="mt-0.5 truncate text-xs tabular-nums text-brand-700 dark:text-brand-300" title="Tracked App Store link (installs and proceeds: Apple App Analytics, 2-3 days delay)">
+                              App Store: {campaignSummary(p.campaign)}
+                            </p>
+                          )}
                           <p className="mt-0.5 truncate text-xs tabular-nums text-zinc-500 md:hidden dark:text-zinc-400">
                             {p.metrics ? (
                               <>

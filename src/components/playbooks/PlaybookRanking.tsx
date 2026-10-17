@@ -3,15 +3,22 @@ import { Link } from "react-router";
 import { ArrowDownRight, ArrowUpRight, ChevronRight, CircleHelp, Gauge, Info, Minus } from "lucide-react";
 import { api } from "../../lib/api";
 import { useApp } from "../../lib/app";
-import { cn, percent, plural } from "../../lib/format";
+import { cn, fullNumber, money, percent, plural } from "../../lib/format";
 import { CONFIDENCE_LABEL, liftText } from "../../lib/playbooks";
-import type { PlaybookConfidence, PlaybookStatsRow } from "../../lib/types";
+import type { PlaybookConfidence, PlaybookStatsRow, PlaybookStatsSort } from "../../lib/types";
 import { useFetch } from "../../lib/useFetch";
 import { Num } from "../analytics/bits";
 import { Select } from "../ui/Form";
 import { Badge, Card, EmptyState, Skeleton } from "../ui/Misc";
 
 const DAYS = [30, 90, 180, 365];
+const SORTS: Array<{ value: PlaybookStatsSort; label: string }> = [
+  { value: "lift", label: "Rank by engagement lift" },
+  { value: "downloads", label: "Rank by installs" },
+  { value: "proceeds", label: "Rank by revenue" },
+  { value: "downloadsPerPost", label: "Rank by installs per post" },
+  { value: "proceedsPerPost", label: "Rank by revenue per post" },
+];
 
 /** Confidence as a badge: icon + label (never color alone). */
 export function ConfidenceBadge({ value, className }: { value: PlaybookConfidence; className?: string }) {
@@ -55,7 +62,8 @@ export function LiftBar({ row, max }: { row: PlaybookStatsRow; max: number }) {
   );
 }
 
-function Cells({ row, max, label, sub }: { row: PlaybookStatsRow; max: number; label: React.ReactNode; sub?: boolean }) {
+function Cells({ row, max, label, sub, campaigns, currency }: { row: PlaybookStatsRow; max: number; label: React.ReactNode; sub?: boolean; campaigns?: boolean; currency?: string | null }) {
+  const none = <span className="text-zinc-400">–</span>;
   return (
     <>
       <td className={cn("py-2.5 pr-3", sub ? "pl-10" : "pl-5")}>{label}</td>
@@ -66,6 +74,16 @@ function Cells({ row, max, label, sub }: { row: PlaybookStatsRow; max: number; l
       <td className="px-3 py-2.5 text-right tabular-nums">
         <Num value={row.medianViews} />
       </td>
+      {campaigns && (
+        <>
+          <td className="px-3 py-2.5 text-right tabular-nums" title={row.campaignPosts ? `${plural(row.campaignPosts, "tracked post")} · ${fullNumber(row.clicks)} clicks` : "No tracked App Store links"}>
+            {row.campaignPosts ? fullNumber(row.downloads) : none}
+          </td>
+          <td className="px-3 py-2.5 text-right tabular-nums" title={row.proceedsPerPost !== null ? `${money(row.proceedsPerPost, currency)} per tracked post` : undefined}>
+            {row.campaignPosts ? money(row.proceeds, currency) : none}
+          </td>
+        </>
+      )}
       <td className="px-3 py-2.5 text-right tabular-nums">{row.posts}</td>
       <td className="hidden px-3 py-2.5 text-right tabular-nums md:table-cell">{row.accounts}</td>
       <td className="py-2.5 pl-3 pr-5">
@@ -84,8 +102,12 @@ export function PlaybookRanking({ compact = false, initialDays = 90, accountId }
   const [days, setDays] = useState(initialDays);
   const [platform, setPlatform] = useState("");
   const [open, setOpen] = useState<Record<string, boolean>>({});
-  const stats = useFetch(`playbook-stats:${days}:${platform}:${accountId ?? ""}`, () => api.playbooks.stats({ days, platform: platform || undefined, accountId }), ["posts", "analytics", "playbooks"]);
+  const [sort, setSort] = useState<PlaybookStatsSort>("lift");
+  const stats = useFetch(`playbook-stats:${days}:${platform}:${accountId ?? ""}:${sort}`, () => api.playbooks.stats({ days, platform: platform || undefined, accountId, sort }), ["posts", "analytics", "playbooks"]);
   const s = stats.data;
+  // Installs / revenue columns once some ranked post has a tracked App Store link.
+  const campaigns = !!s && [s.baseline, ...s.playbooks].some((r) => r.campaignPosts > 0);
+  const cellProps = { campaigns, currency: s?.currency ?? null };
   const connected = useMemo(() => new Set(accounts.map((a) => a.provider)), [accounts]);
   const rows = s ? (compact ? s.playbooks.slice(0, 5) : s.playbooks) : [];
   const max = useMemo(() => {
@@ -101,7 +123,16 @@ export function PlaybookRanking({ compact = false, initialDays = 90, accountId }
           <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-50">Playbook ranking</h2>
           <p className="mt-0.5 text-sm text-zinc-500 dark:text-zinc-400">Engagement of posts written with each playbook, compared with the same account's usual.</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          {(campaigns || sort !== "lift") && (
+            <Select value={sort} onChange={(e) => setSort(e.target.value as PlaybookStatsSort)} className="w-52" aria-label="Rank by">
+              {SORTS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </Select>
+          )}
           <Select value={platform} onChange={(e) => setPlatform(e.target.value)} className="w-40" aria-label="Platform">
             <option value="">All platforms</option>
             {providers
@@ -147,6 +178,12 @@ export function PlaybookRanking({ compact = false, initialDays = 90, accountId }
                 <th className="px-3 py-2.5 font-medium">Lift vs account usual</th>
                 <th className="px-3 py-2.5 text-right font-medium">Eng. rate</th>
                 <th className="px-3 py-2.5 text-right font-medium">Views</th>
+                {campaigns && (
+                  <>
+                    <th className="px-3 py-2.5 text-right font-medium">Installs</th>
+                    <th className="px-3 py-2.5 text-right font-medium">Proceeds</th>
+                  </>
+                )}
                 <th className="px-3 py-2.5 text-right font-medium">Posts</th>
                 <th className="hidden px-3 py-2.5 text-right font-medium md:table-cell">Accounts</th>
                 <th className="py-2.5 pl-3 pr-5 font-medium">Confidence</th>
@@ -161,6 +198,7 @@ export function PlaybookRanking({ compact = false, initialDays = 90, accountId }
                   <Fragment key={key}>
                     <tr className="hover:bg-zinc-50/70 dark:hover:bg-zinc-800/30">
                       <Cells
+                        {...cellProps}
                         row={p}
                         max={max}
                         label={
@@ -190,14 +228,14 @@ export function PlaybookRanking({ compact = false, initialDays = 90, accountId }
                     {expanded &&
                       subs.map((sub) => (
                         <tr key={sub.label} className="bg-zinc-50/50 dark:bg-zinc-900/40">
-                          <Cells row={sub.row} max={max} sub label={<span className="text-zinc-600 dark:text-zinc-400">{sub.label}</span>} />
+                          <Cells {...cellProps} row={sub.row} max={max} sub label={<span className="text-zinc-600 dark:text-zinc-400">{sub.label}</span>} />
                         </tr>
                       ))}
                   </Fragment>
                 );
               })}
               <tr className="bg-zinc-50/70 dark:bg-zinc-900/50">
-                <Cells row={s.baseline} max={max} label={<span className="text-zinc-600 dark:text-zinc-400">No playbook (baseline)</span>} />
+                <Cells {...cellProps} row={s.baseline} max={max} label={<span className="text-zinc-600 dark:text-zinc-400">No playbook (baseline)</span>} />
               </tr>
             </tbody>
           </table>
@@ -211,6 +249,7 @@ export function PlaybookRanking({ compact = false, initialDays = 90, accountId }
             Correlation, not causation: topics, timing and media differ between posts. Lift = median over the playbook's posts of (engagement rate ÷ the same
             account's median for posts without a playbook) − 1. {plural(s.postsAnalyzed, "post")} with metrics in the last {s.days} days
             {s.capped ? " (the most recent ones)" : ""}.
+            {campaigns && " Installs and proceeds: Apple App Analytics for the posts' tracked links (via Revflare), 2–3 days delay, small numbers withheld."}
             {compact && s.playbooks.length > rows.length && (
               <>
                 {" "}

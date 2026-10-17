@@ -1,6 +1,13 @@
 import type {
   AccountDTO,
   AdminOverviewDTO,
+  AppDTO,
+  CampaignLinkDTO,
+  CampaignSettingsDTO,
+  CampaignSettingsInput,
+  CampaignSyncDTO,
+  PlaybookStatsSort,
+  RevflareTestDTO,
   AnalyticsPostDTO,
   AnalyticsRefreshDTO,
   AnalyticsSummaryDTO,
@@ -91,7 +98,7 @@ export function errorMessage(err: unknown): string {
   return String(err);
 }
 
-type PostPatch = Partial<Pick<PostDTO, "content" | "media" | "settings" | "playbookId" | "playbookVersion" | "variant">> & {
+type PostPatch = Partial<Pick<PostDTO, "content" | "media" | "settings" | "playbookId" | "playbookVersion" | "variant" | "appId" | "autoLink">> & {
   thread?: ThreadItem[];
   scheduledAt?: CreatePostsInput["scheduledAt"];
 };
@@ -106,7 +113,7 @@ export interface PostQuery {
   limit?: number;
 }
 
-export type AnalyticsSort = "views" | "engagements" | "engagementRate" | "publishedAt";
+export type AnalyticsSort = "views" | "engagements" | "engagementRate" | "publishedAt" | "clicks" | "downloads" | "proceeds";
 
 export interface AnalyticsQuery {
   from: number;
@@ -211,13 +218,27 @@ export const api = {
     update: (id: string, input: PlaybookInput) => request<PlaybookDTO>("PATCH", `/playbooks/${encodeURIComponent(id)}`, input),
     duplicate: (id: string, body: { name?: string; slug?: string } = {}) => request<PlaybookDTO>("POST", `/playbooks/${encodeURIComponent(id)}/duplicate`, body),
     archive: (id: string) => request<{ ok: true }>("DELETE", `/playbooks/${encodeURIComponent(id)}`),
-    stats: (q: { days?: number; platform?: string; accountId?: string } = {}) => get<PlaybookStatsDTO>(`/playbooks/stats${qs(q)}`),
+    stats: (q: { days?: number; platform?: string; accountId?: string; sort?: PlaybookStatsSort } = {}) => get<PlaybookStatsDTO>(`/playbooks/stats${qs(q)}`),
   },
   analytics: {
     summary: (q: AnalyticsQuery) => get<AnalyticsSummaryDTO>(`/analytics/summary${qs(q)}`),
     posts: (q: AnalyticsQuery & { sort?: AnalyticsSort; limit?: number; offset?: number }) => get<AnalyticsPostDTO[]>(`/analytics/posts${qs(q)}`),
     postMetrics: (id: string) => get<PostMetricsDTO>(`/posts/${id}/metrics`),
     refresh: (body: { postId: string } | { accountId: string }) => request<AnalyticsRefreshDTO>("POST", "/analytics/refresh", body),
+  },
+  apps: {
+    list: () => get<AppDTO[]>("/apps"),
+    add: (appStoreId: string, name?: string) => request<AppDTO>("POST", "/apps", { appStoreId, ...(name ? { name } : {}) }),
+    import: () => request<{ imported: number; apps: AppDTO[] }>("POST", "/apps/import", {}),
+    remove: (id: string) => request<{ ok: true }>("DELETE", `/apps/${id}`),
+  },
+  campaigns: {
+    settings: () => get<CampaignSettingsDTO>("/campaigns/settings"),
+    save: (input: CampaignSettingsInput) => request<CampaignSettingsDTO>("PUT", "/campaigns/settings", input),
+    test: (input: CampaignSettingsInput = {}) => request<RevflareTestDTO>("POST", "/campaigns/test", input),
+    sync: () => request<CampaignSyncDTO>("POST", "/campaigns/sync", {}),
+    links: (q: { postId?: string; accountId?: string; appId?: string; kind?: "post" | "bio"; limit?: number } = {}) => get<CampaignLinkDTO[]>(`/campaigns/links${qs(q)}`),
+    bioLink: (accountId: string, appId: string) => request<CampaignLinkDTO>("POST", "/campaigns/bio-links", { accountId, appId }),
   },
   settings: {
     get: () => get<AppSettings>("/settings"),

@@ -18,6 +18,7 @@ import type { AccountDTO, CreatePostsInput, PostDTO, Provider } from "../../lib/
 import { invalidate } from "../../lib/useFetch";
 import { uploadsInFlight } from "../../lib/useUploader";
 import { AccountPicker } from "./AccountPicker";
+import { AppPicker } from "./AppPicker";
 import type { ComposerOptions } from "./ComposerProvider";
 import { ItemEditor } from "./ItemEditor";
 import { PlaybookPanel, PlaybookPicker, type PlaybookRef } from "./PlaybookPicker";
@@ -59,6 +60,8 @@ export default function Composer({ options, onClose }: { options: ComposerOption
     options.playbook ?? (options.duplicate?.playbookId ? { id: options.duplicate.playbookId, version: options.duplicate.playbookVersion ?? 1 } : null),
   );
   const [variant, setVariant] = useState(options.duplicate?.variant ?? "");
+  const [appId, setAppId] = useState<string | null>(options.duplicate?.appId ?? null);
+  const [autoLink, setAutoLink] = useState<boolean | null>(options.duplicate?.autoLink ?? null);
   const initial = useRef<string>("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -72,6 +75,8 @@ export default function Composer({ options, onClose }: { options: ComposerOption
         setState(stateFromPost(p));
         setPlaybook(p.playbookId ? { id: p.playbookId, version: p.playbookVersion ?? 1 } : null);
         setVariant(p.variant ?? "");
+        setAppId(p.appId ?? null);
+        setAutoLink(p.autoLink ?? null);
         if (p.scheduledAt && p.scheduledAt > Date.now()) setScheduledAt(p.scheduledAt);
       })
       .catch((err) => {
@@ -200,7 +205,8 @@ export default function Composer({ options, onClose }: { options: ComposerOption
   };
 
   const playbookChanged = editing ? (playbook?.id ?? null) !== (original?.playbookId ?? null) || variant !== (original?.variant ?? "") : false;
-  const dirty = settingsTouched || playbookChanged || snapshot(state) !== initial.current;
+  const appChanged = editing ? appId !== (original?.appId ?? null) || autoLink !== (original?.autoLink ?? null) : !!appId;
+  const dirty = settingsTouched || playbookChanged || appChanged || snapshot(state) !== initial.current;
   const requestClose = async () => {
     if (dirty && !(await confirm({ title: "Discard changes?", message: "Your post has not been saved.", confirmLabel: "Discard", danger: true }))) return;
     onClose();
@@ -251,9 +257,17 @@ export default function Composer({ options, onClose }: { options: ComposerOption
         const p = posts[0];
         // Attribution only when it changed (an archived playbook stays on the post).
         const changed = playbookChanged || (playbook?.version ?? null) !== (original?.playbookVersion ?? null);
-        await api.posts.update(editing, { content: p.content, media: p.media, settings: p.settings, thread: p.thread, scheduledAt: at, ...(changed ? attribution : {}) });
+        await api.posts.update(editing, {
+          content: p.content,
+          media: p.media,
+          settings: p.settings,
+          thread: p.thread,
+          scheduledAt: at,
+          ...(changed ? attribution : {}),
+          ...(appChanged ? { appId, autoLink } : {}),
+        });
       } else {
-        await api.posts.create({ scheduledAt: at, posts, ...(playbook ? attribution : {}) });
+        await api.posts.create({ scheduledAt: at, posts, ...(playbook ? attribution : {}), ...(appId ? { appId, autoLink } : {}) });
       }
       const n = posts.length;
       toast.success(
@@ -337,6 +351,8 @@ export default function Composer({ options, onClose }: { options: ComposerOption
           </section>
 
           <PlaybookPicker value={playbook} variant={variant} onChange={setPlaybook} onVariant={setVariant} onNavigate={onClose} />
+
+          <AppPicker appId={appId} autoLink={autoLink} onApp={setAppId} onAutoLink={setAutoLink} accounts={selectedAccounts} providerOf={providerOf} />
 
           {selectedAccounts.length > 0 && !editing && (
             <div className="-mx-1 flex gap-1 overflow-x-auto px-1 pb-1" role="tablist" aria-label="Content per account">

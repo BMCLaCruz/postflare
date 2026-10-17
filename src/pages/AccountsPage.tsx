@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router";
-import { AlertTriangle, BarChart3, ExternalLink, Loader2, Plus, Power, RefreshCw, Trash2, Users, Zap } from "lucide-react";
+import { AlertTriangle, BarChart3, ExternalLink, Link2, Loader2, Plus, Power, RefreshCw, Trash2, Users, Zap } from "lucide-react";
+import { BioLinkDialog } from "../components/campaigns/bits";
 import { MetricsStatusBadge } from "../components/analytics/bits";
 import { ConnectDialog } from "../components/accounts/ConnectDialog";
 import { AccountAvatar, ProviderLogo } from "../components/ProviderLogo";
@@ -15,12 +16,16 @@ import { cn, compactNumber, fullNumber } from "../lib/format";
 import { useSession } from "../lib/session";
 import { formatDate, relativeTime } from "../lib/time";
 import type { AccountDTO, Provider } from "../lib/types";
-import { invalidate } from "../lib/useFetch";
+import { invalidate, useFetch } from "../lib/useFetch";
 import { useComposer } from "./composer/ComposerProvider";
 
 export function AccountsPage() {
   const { accounts, providerMap, loading } = useApp();
   const canManage = useSession().can("accounts.manage");
+  const canRead = useSession().can("posts.read");
+  // Bio links (tracked App Store links for profiles) are offered once the workspace has apps.
+  const apps = useFetch(canRead ? "apps" : null, api.apps.list, ["campaigns"]);
+  const hasApps = !!apps.data?.length;
   const [params, setParams] = useSearchParams();
   const [connect, setConnect] = useState<{ provider: string | null } | null>(null);
   const toast = useToast();
@@ -94,7 +99,7 @@ export function AccountsPage() {
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {accounts.map((a) => (
-            <AccountCard key={a.id} account={a} provider={providerMap.get(a.provider)} onReconnect={() => setConnect({ provider: a.provider })} />
+            <AccountCard key={a.id} account={a} provider={providerMap.get(a.provider)} onReconnect={() => setConnect({ provider: a.provider })} hasApps={hasApps} />
           ))}
           {canManage && (
           <button
@@ -112,7 +117,8 @@ export function AccountsPage() {
   );
 }
 
-function AccountCard({ account: a, provider, onReconnect }: { account: AccountDTO; provider: Provider | undefined; onReconnect: () => void }) {
+function AccountCard({ account: a, provider, onReconnect, hasApps }: { account: AccountDTO; provider: Provider | undefined; onReconnect: () => void; hasApps?: boolean }) {
+  const [bioOpen, setBioOpen] = useState(false);
   const toast = useToast();
   const confirm = useConfirm();
   const composer = useComposer();
@@ -256,6 +262,11 @@ function AccountCard({ account: a, provider, onReconnect }: { account: AccountDT
           )
         )}
         <div className="flex-1" />
+        {hasApps && (
+          <IconButton label="Bio link (tracked App Store link for the profile)" size="sm" onClick={() => setBioOpen(true)}>
+            <Link2 className="size-4" />
+          </IconButton>
+        )}
         {hasAnalytics && can("posts.write") && a.metricsStatus.status !== "not_supported" && (
           <IconButton label="Refresh stats" size="sm" disabled={!!busy} onClick={refreshStats}>
             {busy === "stats" ? <Loader2 className="size-4 animate-spin" /> : <BarChart3 className="size-4" />}
@@ -313,6 +324,7 @@ function AccountCard({ account: a, provider, onReconnect }: { account: AccountDT
         )}
         {!canManage && <span className="h-8" />}
       </div>
+      {bioOpen && <BioLinkDialog account={a} open onClose={() => setBioOpen(false)} />}
     </Card>
   );
 }
