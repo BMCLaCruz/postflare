@@ -34,6 +34,10 @@ workspace with sample data that never publishes anything, reset daily).
 - Composer with per-account customisation, live limits per platform, platform-specific settings (titles, privacy, boards,
   subreddits, channels, playlists...), threads / first comments, previews, drafts.
 - Calendar (month/week, drag to reschedule), posts list with publishing logs, retry/cancel.
+- **Account groups**: group accounts by brand or project (e.g. one app's Instagram, TikTok and YouTube). The Accounts
+  page shows them by platform, by group or as one list, with search and bulk "Move to group"; the composer selects a
+  whole group at once, Posts and Calendar filter by group, and agents post to a group (`pf post -a group:<name>`, MCP
+  `list_accounts` with `group`).
 - Media library on R2: multipart uploads up to 5GB, alt text, import from URL. Big videos are streamed to platforms in
   chunks, never loaded into memory. Storage usage is shown against the R2 Free plan's 10 GB, and a daily job applies
   the **media retention** (Instance settings, default 30 days, 0 = keep forever): media older than that is deleted
@@ -420,7 +424,8 @@ Claude Code:
 claude mcp add --transport http postflare https://<your-app>/mcp --header "Authorization: Bearer pf_..."
 ```
 
-MCP tools: `list_platforms`, `list_accounts` (with followers and analytics status), `get_account_options`, media
+MCP tools: `list_platforms`, `list_accounts` (with followers, analytics status and group; filter by `group`),
+`list_account_groups`, `get_account_options`, media
 (`upload_media_from_url`, `create_upload_link`, `get_upload_link`, `list_media`), posts (`create_post`, `list_posts`,
 `get_post`, `update_post`, `cancel_post`, `retry_post`, `delete_post`; `create_post` takes `playbookId`,
 `playbookVersion`, `variant`, `appId` and `autoLink`), App Store campaigns (`list_apps`, `get_bio_link`), playbooks (`search_playbooks`, `get_playbook`, `get_playbook_stats`) and analytics
@@ -429,7 +434,8 @@ MCP tools: `list_platforms`, `list_accounts` (with followers and analytics statu
 
 ### CLI
 
-[`cli/`](cli/README.md) is a zero-dependency Node.js (20+) command line client: `postflare login`, `accounts`,
+[`cli/`](cli/README.md) is a zero-dependency Node.js (20+) command line client: `postflare login`, `accounts`
+(`--group`, `accounts group`), `groups`,
 `platforms`, `media upload` (streamed, multipart for big files), `post` (natural dates, per-platform settings, threads,
 dry runs, `--playbook <id>@<version>`), `posts show|edit|cancel|retry|rm`, `playbooks [search|show|stats]`, `analytics`,
 `upload-link`, with `--json` on every command.

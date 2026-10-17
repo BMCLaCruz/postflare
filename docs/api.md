@@ -6,9 +6,33 @@ session cookie (plus `X-Workspace-Id`), or `Authorization: Bearer pf_...` (an AP
 Profile). Every endpoint is workspace-scoped: ids of other workspaces answer 404. Permissions are listed per endpoint
 (catalog: [workspaces-spec.md](workspaces-spec.md)).
 
-This file documents the App Store campaign endpoints in detail and lists the changes they brought to existing
+This file documents the account group and App Store campaign endpoints in detail and lists the changes they brought to existing
 endpoints. The rest of the API (accounts, media, posts, analytics, playbooks, users, workspaces) is summarized in the
 README ("API & MCP", "Analytics", "Playbooks") and typed in `shared/types.ts`.
+
+## Account groups
+
+Workspace-scoped "brand / project" folders for accounts (migration `0010_account_groups.sql`). An account is in at most
+one group; deleting a group ungroups its accounts. Reading needs `accounts.read`, every change `accounts.manage`. Ids of
+other workspaces answer 404, and a group of another workspace can never be assigned.
+
+- `GET /account-groups` → `AccountGroupDTO[]` `{ id, name, color, position, accountCount, createdAt, updatedAt }`, in
+  display order.
+- `POST /account-groups` `{ name, color? }` → 201 `AccountGroupDTO`. `name`: 1–50 characters, unique per workspace
+  (case-insensitive, 409 otherwise). `color`: one of `zinc red orange amber green teal sky indigo violet pink`
+  (`shared/accountGroups.ts`); without one the palette is cycled. New groups go last.
+- `PATCH /account-groups/:id` `{ name?, color?, position? }` → `AccountGroupDTO`. `position` moves the group to that
+  index (clamped) and renumbers the others.
+- `DELETE /account-groups/:id` → `{ ok, ungrouped }` (number of accounts that became ungrouped).
+- `PATCH /accounts/:id` `{ groupId }` (group id or `null`; `status` still works, alone or together) → `AccountDTO`.
+- `POST /accounts/group` `{ accountIds: string[], groupId: string | null }` → `{ ok, updated, groupId }`: bulk move
+  (at most 500 ids, one statement). Any id not in the workspace → 404 and nothing changes.
+- `AccountDTO.groupId` (`null` = ungrouped). `GET /posts?accountGroupId=<id>|none`: posts of the group's accounts.
+- MCP: `list_accounts` returns each account's `group: { id, name }` (absent when ungrouped) and takes `group` (id or
+  name, `"none"` = ungrouped); `list_account_groups` lists `{ id, name, accounts }`.
+- CLI: `pf groups [create|rename|rm]`, `pf accounts` GROUP column and `--group`, `pf accounts group <account...> --to
+  <group|none>`, and the `group:<name|id>` account selector (`pf post -a "group:Party Games"`: every enabled account of
+  the group).
 
 ## App Store campaign links
 

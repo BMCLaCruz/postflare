@@ -26,8 +26,8 @@ Workspace scope:
 | `workspace.manage` | rename the workspace; App Store campaign settings (Apple provider token, auto-insert default, Revflare connection, test/sync) and the workspace's apps (add, import, remove). Reading apps and tracked links needs `posts.read`; bio links need `posts.write`. No new permission or migration of roles was needed. |
 | `workspace.delete` | delete the workspace and everything in it |
 | `members.manage` | invite members to this workspace, change their roles, remove them |
-| `accounts.read` | see connected accounts |
-| `accounts.manage` | connect, reconnect, disable, remove accounts |
+| `accounts.read` | see connected accounts and account groups |
+| `accounts.manage` | connect, reconnect, disable, remove accounts; create, rename, recolor, reorder and delete account groups and move accounts between them (migration 0010, no role changes needed) |
 | `posts.read` | see posts, calendar, logs |
 | `posts.write` | create, edit, schedule, publish now, retry, cancel, delete posts |
 | `media.read` | see the media library |

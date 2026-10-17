@@ -38,8 +38,10 @@ profile (handy in CI). `postflare logout [--profile x | --all]`.
 |---|---|
 | `whoami`, `workspaces` | User, workspace and permissions of the key |
 | `version` | CLI version and the server's version/commit (`--version` prints the CLI version only) |
-| `accounts [--platform id]` | Connected accounts, status, followers, analytics state |
+| `accounts [--platform id] [--group g]` | Connected accounts, group, status, followers, analytics state |
 | `accounts options <account> <key>` | Choices of a dynamic setting (Pinterest boards, subreddits, TikTok privacy...) |
+| `accounts group <account...> --to <group\|none>` | Move accounts into an account group (or out of it) |
+| `groups [create\|rename\|rm]` | Account groups (brands / projects) |
 | `platforms [id] [--connected]` | Limits and per-post settings of each platform (`platforms tiktok` lists every field and option) |
 | `media upload <files...> [--alt]` | Upload (streamed; >90MB uses multipart, up to 5GB, with a progress bar) |
 | `media list`, `media import <url>`, `media rm <ids...>` | Media library |
@@ -80,7 +82,8 @@ postflare post -a youtube -m video.mp4 --set title="Launch" --draft --dry-run
 ```
 
 - `--account/-a` (repeatable or comma separated): account id, `@username`, a platform id when you have one account
-  there, an account name, or `platform:@username`. Ambiguous or unknown selectors list the candidates.
+  there, an account name, `platform:@username`, or `group:<name>` (every enabled account of an account group). Ambiguous
+  or unknown selectors list the candidates.
 - Text: `--text`, `--text-file <path>`, `--text -` / `--text-file -` (stdin), or just pipe it.
 - `--media/-m`: media ids (`med_...`) or local files (uploaded first; width/height/duration are read from the file).
 - When: exactly one of `--at <when>`, `--now`, `--draft`. `--at` understands `"2026-10-14 09:00"`, `"tomorrow 9am"`,

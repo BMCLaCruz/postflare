@@ -28,6 +28,16 @@ postflare platforms tiktok         # every setting of a platform with its option
 postflare accounts options <account> <key>   # choices of dynamic settings (Pinterest board, subreddit, TikTok privacy)
 ```
 Accounts with STATUS `reconnect` or `disabled` cannot publish: tell the user to reconnect in the app.
+
+**Account groups** (brand / project, e.g. one app with its Instagram, TikTok and YouTube; an account is in at most one):
+```bash
+postflare groups                                   # groups with account counts
+postflare accounts --group "Party Games"           # one group's accounts (--group none: ungrouped)
+postflare post -a "group:Party Games" ...          # every enabled account of the group
+postflare groups create "Party Games" [--color violet]; postflare groups rename <group> [name] [--color c]; postflare groups rm <group>
+postflare accounts group <account...> --to <group|none>   # move accounts (one request)
+```
+"Post to <brand>" usually means `-a "group:<brand>"`; check `postflare accounts --group <brand>` first when unsure.
 Write text per platform limits (X 280 unless the account has Premium, Bluesky 300, Threads 500, Instagram/TikTok
 2200 with ≤30 hashtags on Instagram). If texts must differ per platform, create one post per platform.
 
