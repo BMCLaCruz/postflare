@@ -381,3 +381,13 @@ export const CAMPAIGN_DATA_NOTE =
 
 /** Platforms whose captions are not clickable: they use the account's bio link (shared/campaigns.ts). */
 export const BIO_LINK_PLATFORMS = new Set(["instagram", "instagram_standalone", "tiktok", "tiktok_business"]);
+
+/** 402 answer of hosted instances when the workspace's plan does not allow an action (shared/types.ts PlanLimitErrorDTO). */
+export interface PlanLimitErrorDTO {
+  error: string;
+  code: "plan_limit";
+  limit: "accounts" | "posts_per_month" | "x_posts_per_month" | "members" | "storage_mb" | "api" | "locked";
+  used: number | null;
+  max: number | boolean | null;
+  upgradeUrl: string;
+}

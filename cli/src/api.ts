@@ -57,6 +57,8 @@ export class Api {
     if (!res.ok) {
       let message: string = data?.error ?? (text && !text.trimStart().startsWith("<") ? text.slice(0, 300) : `HTTP ${res.status} ${res.statusText}`);
       if (res.status === 401) message += " (check your API key: postflare login)";
+      // Hosted instances: the workspace's plan does not allow it (limit reached, no API access, or no active plan).
+      if (res.status === 402 && data?.code === "plan_limit" && typeof data.upgradeUrl === "string") message += ` Manage the plan: ${data.upgradeUrl}`;
       throw new ApiError(message, res.status, data);
     }
     if (data === null && text) throw new ApiError(`Unexpected response from ${this.baseUrl} (not JSON). Is the URL right?`, res.status);
