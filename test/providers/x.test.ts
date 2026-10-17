@@ -90,6 +90,14 @@ describe("x publish", () => {
     });
   });
 
+  it("replies to another post given its URL", async () => {
+    const m = mockFetch([["POST https://api.x.com/2/tweets", () => ({ data: { id: "2" } })]]);
+    await x.publish(testContext(m.fetch, app), account, post({ settings: { replyTo: "https://x.com/zerocost_lab/status/2111442603388314109?s=46" } }));
+    expect(m.requests[0].json).toEqual({ text: "hello", reply: { in_reply_to_tweet_id: "2111442603388314109" } });
+    expect(x.validate!(post({ settings: { replyTo: "https://example.com/nope" } }))).toContain("X: reply to must be a post URL or numeric id");
+    expect(x.validate!(post({ settings: { replyTo: "2111442603388314109" } }))).toEqual([]);
+  });
+
   it("posts a poll", async () => {
     const m = mockFetch([["POST https://api.x.com/2/tweets", () => ({ data: { id: "1" } })]]);
     await x.publish(testContext(m.fetch, app), account, post({ settings: { poll: true, pollOptions: ["Yes", "No"], pollDuration: "60" } }));

@@ -240,6 +240,9 @@ async function createTweet(ctx: ProviderContext, account: AccountRecord, body: R
   return res.data.id;
 }
 
+/** Post id from a post URL (x.com / twitter.com /status/<id>) or a bare numeric id. */
+const replyTarget = (v: unknown) => String(v ?? "").trim().match(/^(?:https?:\/\/(?:www\.|mobile\.)?(?:x|twitter)\.com\/\w+\/status(?:es)?\/)?(\d{5,})(?:[/?#].*)?$/)?.[1];
+
 function tweetBody(post: PublishPost, mediaIds: string[]): Record<string, unknown> {
   const s = post.settings;
   const body: Record<string, unknown> = { text: post.content };
@@ -256,6 +259,8 @@ function tweetBody(post: PublishPost, mediaIds: string[]): Record<string, unknow
   }
   if (s.madeWithAi) body.made_with_ai = true;
   if (s.paidPartnership) body.paid_partnership = true;
+  const replyTo = replyTarget(s.replyTo);
+  if (replyTo) body.reply = { in_reply_to_tweet_id: replyTo };
   return body;
 }
 
@@ -387,6 +392,13 @@ export const x: Provider = {
       help: "Optional community URL or id to post into.",
     },
     { key: "shareWithFollowers", label: "Also share community post with followers", type: "checkbox", default: false },
+    {
+      key: "replyTo",
+      label: "Reply to post",
+      type: "text",
+      placeholder: "https://x.com/someone/status/2111442603388314109",
+      help: "Optional: publish as a reply to this post (URL or id). X only accepts API replies when the post's author mentions or quotes this account.",
+    },
     { key: "madeWithAi", label: "Made with AI", type: "checkbox", default: false },
     { key: "paidPartnership", label: "Paid partnership", type: "checkbox", default: false },
     {
@@ -475,6 +487,7 @@ export const x: Provider = {
     }
     if (post.settings.community && !/(\d{5,})\/?$/.test(String(post.settings.community)))
       errors.push("X: community must be a community URL or numeric id");
+    if (post.settings.replyTo && !replyTarget(post.settings.replyTo)) errors.push("X: reply to must be a post URL or numeric id");
     return errors;
   },
 
