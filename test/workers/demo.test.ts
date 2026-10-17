@@ -126,6 +126,15 @@ describe("demo login", () => {
     expect(accounts.map((a: any) => a.provider).sort()).toEqual(
       ["bluesky", "instagram_standalone", "linkedin_page", "pinterest", "threads", "tiktok", "x", "youtube"].sort(),
     );
+    // Account groups: one per app plus the studio; Threads stays ungrouped.
+    const accountGroups = (await call(ON, demo, "/api/account-groups")).json;
+    expect(accountGroups.map((g: any) => [g.name, g.accountCount])).toEqual([
+      ["Tempo", 1],
+      ["Pocket Plants", 2],
+      ["Acme Studio", 4],
+    ]);
+    expect(accounts.find((a: any) => a.provider === "threads").groupId).toBeNull();
+    expect(accounts.find((a: any) => a.provider === "x").groupId).toBe(accountGroups[0].id);
     const media = (await call(ON, demo, "/api/media")).json;
     expect(media).toHaveLength(8);
     // Copied from the static assets into R2 and served like any media.
@@ -297,6 +306,9 @@ describe("the demo user is locked down", () => {
     expect((await call(ON, demo, "/api/connect/webhook", { body: { values: { name: "h", url: "https://example.com/h" } } })).status).toBe(403);
     expect((await call(ON, demo, "/api/connect/x/url")).status).toBe(403);
     expect((await call(ON, demo, "/api/accounts/acc_demo_x", { method: "DELETE" })).status).toBe(403);
+    // Groups are read-only for visitors (no accounts.manage).
+    expect((await call(ON, demo, "/api/account-groups", { body: { name: "Mine" } })).status).toBe(403);
+    expect((await call(ON, demo, "/api/accounts/group", { body: { accountIds: ["acc_demo_x"], groupId: null } })).status).toBe(403);
   });
 
   it("only ever reaches the demo workspace, even when an admin adds it elsewhere", async () => {

@@ -35,6 +35,17 @@ export const DEMO_ACCOUNTS = {
 
 type AccountKey = keyof typeof DEMO_ACCOUNTS;
 
+/** Account groups of the demo (one per app, plus the studio). Threads stays ungrouped to show that section too. */
+export const DEMO_ACCOUNT_GROUPS: Array<{ id: string; name: string; color: string; accounts: AccountKey[] }> = [
+  { id: "agr_demo_tempo", name: "Tempo", color: "violet", accounts: ["x"] },
+  { id: "agr_demo_plants", name: "Pocket Plants", color: "green", accounts: ["tt", "pin"] },
+  { id: "agr_demo_acme", name: "Acme Studio", color: "orange", accounts: ["ig", "yt", "li", "bs"] },
+];
+
+/** Demo account id → its group id. */
+export const demoAccountGroup = (accountId: string): string | null =>
+  DEMO_ACCOUNT_GROUPS.find((g) => g.accounts.some((k) => DEMO_ACCOUNTS[k].id === accountId))?.id ?? null;
+
 export interface DemoMedia {
   id: string;
   /** File in public/demo/ (static asset), copied to R2 under `demo/<file>`. */

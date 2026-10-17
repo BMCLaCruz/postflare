@@ -189,6 +189,10 @@ postRoutes.get("/posts", requirePermission("posts.read"), async (c) => {
   }
   if (accountId) where.push("account_id = ?") && binds.push(accountId);
   if (groupId) where.push("group_id = ?") && binds.push(groupId);
+  // Posts of the accounts in an account group ("none" = ungrouped accounts).
+  const accountGroupId = c.req.query("accountGroupId");
+  if (accountGroupId === "none") where.push("account_id IN (SELECT id FROM accounts WHERE workspace_id = ? AND group_id IS NULL)") && binds.push(wsId(c));
+  else if (accountGroupId) where.push("account_id IN (SELECT id FROM accounts WHERE workspace_id = ? AND group_id = ?)") && binds.push(wsId(c), accountGroupId);
   const playbookId = c.req.query("playbookId");
   if (playbookId === "none") where.push("playbook_id IS NULL");
   else if (playbookId === "any") where.push("playbook_id IS NOT NULL");

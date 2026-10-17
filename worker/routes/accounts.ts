@@ -15,6 +15,7 @@ import { connectBlocked } from "../lib/settings";
 import { demoOptions } from "../lib/demo";
 import { errorMessage, now, parseJson, randomToken } from "../lib/util";
 import { ProviderError } from "../providers/errors";
+import { findGroup } from "./accountGroups";
 import { getProvider } from "../providers/registry";
 
 export const accountRoutes = new Hono<AppEnv>();
@@ -26,13 +27,24 @@ accountRoutes.get("/accounts", requirePermission("accounts.read"), async (c) => 
   return c.json(results.map(accountDto));
 });
 
+/** `{ status?: "active" | "disabled", groupId?: string | null }` (group of this workspace, null = ungrouped). */
 accountRoutes.patch("/accounts/:id", requirePermission("accounts.manage"), async (c) => {
-  const { status } = await c.req.json<{ status: "active" | "disabled" }>();
-  if (status !== "active" && status !== "disabled") return c.json({ error: "Invalid status" }, 400);
-  await c.env.DB.prepare("UPDATE accounts SET status = ?, updated_at = ? WHERE id = ? AND workspace_id = ?")
-    .bind(status, now(), c.req.param("id"), wsId(c))
+  const input = (await c.req.json<{ status?: unknown; groupId?: unknown }>().catch(() => null)) ?? {};
+  const { status, groupId } = input;
+  const hasGroup = "groupId" in input;
+  if (status === undefined && !hasGroup) return c.json({ error: "Nothing to change (status or groupId)" }, 400);
+  if (status !== undefined && status !== "active" && status !== "disabled") return c.json({ error: "Invalid status" }, 400);
+  if (hasGroup && groupId !== null && typeof groupId !== "string") return c.json({ error: "groupId must be a group id or null" }, 400);
+  const ws = wsId(c);
+  if (typeof groupId === "string" && !(await findGroup(c.env.DB, ws, groupId))) return c.json({ error: "Group not found" }, 404);
+  const sets: string[] = [];
+  const binds: unknown[] = [];
+  if (status !== undefined) sets.push("status = ?") && binds.push(status);
+  if (hasGroup) sets.push("group_id = ?") && binds.push(groupId);
+  await c.env.DB.prepare(`UPDATE accounts SET ${sets.join(", ")}, updated_at = ? WHERE id = ? AND workspace_id = ?`)
+    .bind(...binds, now(), c.req.param("id"), ws)
     .run();
-  const row = await findAccount(c.env, wsId(c), c.req.param("id"));
+  const row = await findAccount(c.env, ws, c.req.param("id"));
   return row ? c.json(accountDto(row)) : c.json({ error: "Not found" }, 404);
 });
 

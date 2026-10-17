@@ -220,6 +220,29 @@ export interface AccountDTO {
   createdAt: number;
   /** Analytics collection state. */
   metricsStatus: AccountMetricsStatusDTO;
+  /** Account group (GET /api/account-groups) the account belongs to, null when ungrouped. */
+  groupId: string | null;
+}
+
+/** GET /api/account-groups: a workspace's "brand / project" folder for accounts (an account is in at most one). */
+export interface AccountGroupDTO {
+  id: string;
+  name: string;
+  /** Palette key (shared/accountGroups.ts ACCOUNT_GROUP_COLORS). */
+  color: string;
+  /** Display order, 0 first. */
+  position: number;
+  /** Accounts in the group. */
+  accountCount: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** POST /api/account-groups; PATCH takes any subset (`position` moves the group to that index). */
+export interface AccountGroupInput {
+  name?: string;
+  color?: string;
+  position?: number;
 }
 
 export interface MediaDTO {

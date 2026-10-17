@@ -12,7 +12,7 @@
 import type { FieldOption } from "../../shared/types";
 import { getProvider } from "../providers/registry";
 import { encryptJson } from "./crypto";
-import { DEMO_ACCOUNTS, DEMO_APPS, DEMO_MEDIA, DEMO_PROVIDER_TOKEN, SIMULATED_LOG, fakeExternalId, fakePostUrl, seedCampaigns, seedPosts } from "./demo-seed";
+import { DEMO_ACCOUNTS, DEMO_ACCOUNT_GROUPS, DEMO_APPS, demoAccountGroup, DEMO_MEDIA, DEMO_PROVIDER_TOKEN, SIMULATED_LOG, fakeExternalId, fakePostUrl, seedCampaigns, seedPosts } from "./demo-seed";
 import { appStoreCampaignUrl, bioCampaignToken, isClickable, newLinkCode, postCampaignToken } from "../../shared/campaigns";
 import { demoAccountMetrics, demoPostMetrics, demoSnapshotTimes } from "./demo-metrics";
 import { CHECKPOINTS, nextAccountRun, nextCheckpoint, utcDay, withoutDetails } from "./metrics";
@@ -185,7 +185,7 @@ export async function resetDemo(env: Env): Promise<void> {
     const tz = (await getSetting(db, "timezone")) || "UTC";
     const credentials = await encryptJson(env, { accessToken: "demo-not-a-real-token", note: "Postflare live demo: publishing is simulated" });
     const { posts, logs } = seedPosts(t, tz, newId);
-    const accounts = Object.values(DEMO_ACCOUNTS).map((a, i) => ({ ...a, created_at: t - (30 - i) * 24 * HOUR }));
+    const accounts = Object.values(DEMO_ACCOUNTS).map((a, i) => ({ ...a, created_at: t - (30 - i) * 24 * HOUR, group_id: demoAccountGroup(a.id) }));
     const media = Object.values(DEMO_MEDIA).map((m) => ({ ...m, r2_key: `demo/${m.file}`, created_at: t - m.age * 24 * HOUR }));
     const ws = DEMO_WORKSPACE_ID;
     const j = (k: string) => `json_extract(value, '$.${k}')`;
@@ -207,6 +207,7 @@ export async function resetDemo(env: Env): Promise<void> {
       db.prepare("DELETE FROM account_metrics WHERE workspace_id = ? OR account_id IN (SELECT id FROM accounts WHERE workspace_id = ?)").bind(ws, ws),
       db.prepare("DELETE FROM posts WHERE workspace_id = ?").bind(ws),
       db.prepare("DELETE FROM accounts WHERE workspace_id = ?").bind(ws),
+      db.prepare("DELETE FROM account_groups WHERE workspace_id = ?").bind(ws),
       db.prepare("DELETE FROM media WHERE workspace_id = ?").bind(ws),
       db.prepare("DELETE FROM upload_links WHERE workspace_id = ?").bind(ws),
       db.prepare("DELETE FROM api_keys WHERE workspace_id = ?").bind(ws),
@@ -217,11 +218,17 @@ export async function resetDemo(env: Env): Promise<void> {
       // One statement per table: rows come in as a JSON array (D1 caps bound parameters per query at 100).
       db
         .prepare(
-          `INSERT OR REPLACE INTO accounts (id, provider, external_id, name, username, avatar_url, profile_url, credentials_enc, expires_at, meta, status, status_message, created_at, updated_at, workspace_id, created_by)
-           SELECT ${j("id")}, ${j("provider")}, ${j("externalId")}, ${j("name")}, ${j("username")}, NULL, ${j("profileUrl")}, ?, NULL, '{"demo":true}', 'active', NULL, ${j("created_at")}, ${j("created_at")}, ?, NULL
+          `INSERT OR REPLACE INTO accounts (id, provider, external_id, name, username, avatar_url, profile_url, credentials_enc, expires_at, meta, status, status_message, created_at, updated_at, workspace_id, created_by, group_id)
+           SELECT ${j("id")}, ${j("provider")}, ${j("externalId")}, ${j("name")}, ${j("username")}, NULL, ${j("profileUrl")}, ?, NULL, '{"demo":true}', 'active', NULL, ${j("created_at")}, ${j("created_at")}, ?, NULL, ${j("group_id")}
            FROM json_each(?)`,
         )
         .bind(credentials, ws, JSON.stringify(accounts)),
+      db
+        .prepare(
+          `INSERT OR REPLACE INTO account_groups (id, workspace_id, name, color, position, created_at, updated_at)
+           SELECT ${j("id")}, ?, ${j("name")}, ${j("color")}, key, ?, ? FROM json_each(?)`,
+        )
+        .bind(ws, t - 30 * 24 * HOUR, t - 30 * 24 * HOUR, JSON.stringify(DEMO_ACCOUNT_GROUPS.map(({ id, name, color }) => ({ id, name, color })))),
       db
         .prepare(
           `INSERT OR REPLACE INTO media (id, r2_key, filename, mime, size, kind, width, height, duration, alt, status, upload_id, created_at, workspace_id, created_by)

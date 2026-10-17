@@ -3,6 +3,7 @@ import {
   engagements,
   exposure,
   type AccountDTO,
+  type AccountGroupDTO,
   type AnalyticsBreakdown,
   type AnalyticsPostDTO,
   type AnalyticsSummaryDTO,
@@ -92,9 +93,35 @@ export function mcpRoutes(api: { fetch: (req: Request, env: Env, ctx: ExecutionC
     list_accounts: {
       description:
         "List connected social accounts. Use the account id when creating posts. `status` is the publishing state; " +
-        "`analytics` is the analytics collection state (ok, pending, reconnect_required, not_supported, error) and `followers` the latest follower count.",
+        "`analytics` is the analytics collection state (ok, pending, reconnect_required, not_supported, error) and `followers` the latest follower count. " +
+        "`group` is the account's group (brand / project, see list_account_groups; absent when ungrouped); pass `group` (id or name, \"none\" = ungrouped) to list one group's accounts, " +
+        "e.g. to post to every account of a brand.",
+      inputSchema: {
+        type: "object",
+        properties: { group: { type: "string", description: "Only accounts of this group: group id or name (case-insensitive); \"none\" for ungrouped accounts." } },
+      },
+      run: async (c, a) => {
+        const [accounts, groups] = (await Promise.all([call(c, "GET", "/accounts"), call(c, "GET", "/account-groups")])) as [AccountDTO[], AccountGroupDTO[]];
+        const byId = new Map(groups.map((g) => [g.id, g]));
+        let list = accounts;
+        if (a?.group !== undefined && a.group !== null && a.group !== "") {
+          const ref = String(a.group).trim();
+          if (ref.toLowerCase() === "none") list = accounts.filter((x) => !x.groupId || !byId.has(x.groupId));
+          else {
+            const g = groups.find((x) => x.id === ref) ?? groups.find((x) => x.name.toLowerCase() === ref.toLowerCase());
+            if (!g) throw new Error(`No account group matches "${ref}". Groups: ${groups.map((x) => `${x.name} (${x.id})`).join(", ") || "none yet"}`);
+            list = accounts.filter((x) => x.groupId === g.id);
+          }
+        }
+        return list.map((x) => compactAccount(x, x.groupId ? byId.get(x.groupId) : undefined));
+      },
+    },
+    list_account_groups: {
+      description:
+        "List this workspace's account groups (brands / projects, e.g. one per app): id, name and how many accounts each has. " +
+        "Use list_accounts with `group` to get a group's accounts.",
       inputSchema: { type: "object", properties: {} },
-      run: async (c) => ((await call(c, "GET", "/accounts")) as any[]).map(compactAccount),
+      run: async (c) => ((await call(c, "GET", "/account-groups")) as AccountGroupDTO[]).map((g) => ({ id: g.id, name: g.name, accounts: g.accountCount })),
     },
     get_account_options: {
       description: "Load choices for a dynamic settings field of an account (e.g. Pinterest boards, subreddits, Discord channels).",
@@ -493,7 +520,7 @@ export function mcpRoutes(api: { fetch: (req: Request, env: Env, ctx: ExecutionC
             serverInfo: { name: "postflare", version: "1.0.0" },
             instructions:
               "Schedule social posts and read their analytics. This API key works in one Postflare workspace: you only see and change its accounts, posts and media, " +
-              "and only what the key's user is allowed to (tools return a permission error otherwise). Typical flow: list_accounts -> attach media -> create_post. Check list_platforms for limits and required settings. " +
+              "and only what the key's user is allowed to (tools return a permission error otherwise). Typical flow: list_accounts -> attach media -> create_post. Accounts can be grouped by brand/project: \"post to <brand>\" = list_accounts with `group` (list_account_groups). Check list_platforms for limits and required settings. " +
               "Before writing a post, search_playbooks for the goal/platform, get_playbook and follow it, and pass its playbookId (and playbookVersion) to create_post; " +
               "get_playbook_stats shows which playbooks perform best in this workspace. " +
               "Media from a public URL: upload_media_from_url. Files attached in chat or on the user's device: create_upload_link " +
@@ -663,7 +690,7 @@ function compactPost(p: AnalyticsPostDTO) {
   });
 }
 
-function compactAccount(a: AccountDTO) {
+function compactAccount(a: AccountDTO, group?: AccountGroupDTO) {
   const ms = a.metricsStatus;
   return drop({
     id: a.id,
@@ -676,5 +703,6 @@ function compactAccount(a: AccountDTO) {
     followers: ms?.metrics?.followers,
     analytics: ms?.status,
     analyticsMessage: ms && (ms.status === "reconnect_required" || ms.status === "error") ? ms.message : undefined,
+    group: group ? { id: group.id, name: group.name } : null,
   });
 }

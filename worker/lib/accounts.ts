@@ -32,6 +32,7 @@ export interface AccountRow {
   metrics_checked_at?: number | null;
   metrics_next_at?: number | null;
   metrics_fails?: number;
+  group_id?: string | null;
 }
 
 /**
@@ -61,6 +62,7 @@ export function accountDto(row: AccountRow): AccountDTO {
     expiresAt: row.expires_at,
     createdAt: row.created_at,
     metricsStatus: metricsStatusDto(row),
+    groupId: row.group_id ?? null,
   };
 }
 
