@@ -2,7 +2,7 @@
 
 import { parseTime } from "./dates.js";
 import { UsageError } from "./errors.js";
-import type { AccountDTO, FieldDef, ProviderInfo } from "./types.js";
+import type { AccountDTO, AccountGroupDTO, FieldDef, ProviderInfo } from "./types.js";
 
 const bare = (u: string | null | undefined) => (u ?? "").replace(/^@/, "").toLowerCase();
 
@@ -34,16 +34,41 @@ export function matchAccounts(selector: string, accounts: AccountDTO[]): Account
   return [];
 }
 
+const GROUP_PREFIX = "group:";
+const split = (selectors: string[]) => selectors.flatMap((s) => s.split(",")).map((s) => s.trim()).filter(Boolean);
+const isGroupSelector = (s: string) => s.toLowerCase().startsWith(GROUP_PREFIX);
+
+/** True when a selector is `group:<name|id>` (the caller then loads the account groups). */
+export const usesGroups = (selectors: string[]) => split(selectors).some(isGroupSelector);
+
+/** A group by id or name (case-insensitive). Errors list the groups. */
+export function matchGroup(ref: string, groups: AccountGroupDTO[]): AccountGroupDTO {
+  const r = ref.trim();
+  const found = groups.find((g) => g.id === r) ?? groups.find((g) => g.name.toLowerCase() === r.toLowerCase());
+  if (found) return found;
+  if (!groups.length) throw new UsageError(`No account group matches "${r}": this workspace has no groups yet (postflare groups create <name>)`);
+  throw new UsageError(`No account group matches "${r}". Groups:\n${groups.map((g) => `  ${g.id}  ${g.name}`).join("\n")}`);
+}
+
 /**
  * Resolve --account values (repeatable, comma separated) to accounts. A selector is an account id, `@username`,
- * a platform id (e.g. `bluesky`, when you have one account there), an account name, or `platform:@username`.
- * Errors list the candidates.
+ * a platform id (e.g. `bluesky`, when you have one account there), an account name, `platform:@username`, or
+ * `group:<name|id>` (every account of that group except disabled ones; needs `groups`). Errors list the candidates.
  */
-export function resolveAccounts(selectors: string[], accounts: AccountDTO[]): AccountDTO[] {
+export function resolveAccounts(selectors: string[], accounts: AccountDTO[], groups?: AccountGroupDTO[]): AccountDTO[] {
   const out: AccountDTO[] = [];
-  const list = selectors.flatMap((s) => s.split(",")).map((s) => s.trim()).filter(Boolean);
+  const add = (a: AccountDTO) => !out.some((x) => x.id === a.id) && out.push(a);
+  const list = split(selectors);
   if (!list.length) throw new UsageError("Choose at least one account with --account (id, @username or platform). See: postflare accounts");
   for (const sel of list) {
+    if (isGroupSelector(sel)) {
+      if (!groups) throw new Error("resolveAccounts: group selectors need the account groups");
+      const g = matchGroup(sel.slice(GROUP_PREFIX.length), groups);
+      const members = accounts.filter((a) => a.groupId === g.id && a.status !== "disabled");
+      if (!members.length) throw new UsageError(`Group "${g.name}" has no ${accounts.some((a) => a.groupId === g.id) ? "enabled " : ""}accounts. See: postflare accounts --group "${g.name}"`);
+      members.forEach(add);
+      continue;
+    }
     const found = matchAccounts(sel, accounts);
     if (!found.length) {
       throw new UsageError(
@@ -54,10 +79,10 @@ export function resolveAccounts(selectors: string[], accounts: AccountDTO[]): Ac
     }
     if (found.length > 1) {
       throw new UsageError(
-        `"${sel}" matches ${found.length} accounts:\n${candidates(found)}\nUse an account id or platform:@username (repeat --account to post to several).`,
+        `"${sel}" matches ${found.length} accounts:\n${candidates(found)}\nUse an account id or platform:@username (repeat --account to post to several, or group:<name> for a whole group).`,
       );
     }
-    if (!out.some((a) => a.id === found[0].id)) out.push(found[0]);
+    add(found[0]);
   }
   return out;
 }

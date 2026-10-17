@@ -5,7 +5,7 @@ import { parseFuture, parseTime } from "../dates.js";
 import { CliError, UsageError } from "../errors.js";
 import { c, eprintln, fmtDate, fmtNum, fmtPct, fmtStatus, fmtWhen, println, printJson, table, truncate } from "../format.js";
 import { readStdin } from "../io.js";
-import { accountLabel, buildSettings, missingSettings, resolveAccounts, type Target } from "../resolve.js";
+import { accountLabel, buildSettings, missingSettings, type Target } from "../resolve.js";
 import {
   BIO_LINK_PLATFORMS,
   exposure,
@@ -126,7 +126,8 @@ export const post: Command = {
   summary: "Create a post on one or more accounts: schedule it, publish it now, or save a draft.",
   description: [
     "Accounts (--account, repeatable or comma separated): an account id, @username, a platform id when you have one",
-    "account there (e.g. bluesky), an account name, or platform:@username.",
+    "account there (e.g. bluesky), an account name, platform:@username, or group:<name> (every enabled account of an",
+    "account group, see postflare groups).",
     "Text: --text, --text-file, or piped on stdin. Media: ids (med_...) or local files (uploaded first).",
     "Settings: --set key=value applies to every selected platform that has the setting; --set <platform>.key=value or",
     "--set <accountId>.key=value targets one. Defaults of each platform's settings are filled in like in the app.",
@@ -157,10 +158,10 @@ export const post: Command = {
     "echo \"Hello\" | postflare post -a @me --now --dry-run",
     "postflare post -a x --text-file a.txt --playbook text-thread@1 --variant A --at \"tue 9:00\"",
     "postflare post -a x -a threads --text \"Tempo 2.0 is out\" --app Tempo --at \"tomorrow 9:00\"",
+    "postflare post -a \"group:Party Games\" -m clip.mp4 --text \"New level!\" --at \"fri 18:00\"",
   ],
   async run(ctx, { values }) {
-    const all = await ctx.accounts();
-    const accounts = resolveAccounts(list(values.account), all);
+    const accounts = await ctx.resolveAccounts(list(values.account));
     const scheduledAt = readWhen(ctx, values);
     if (scheduledAt === undefined) throw new UsageError("Say when: --at <when>, --now or --draft", "post");
     const targets = await targetsFor(ctx, accounts);
@@ -213,7 +214,7 @@ export const post: Command = {
     if (ctx.json) return printJson(created);
     const what = scheduledAt === null ? "Saved draft" : scheduledAt === "now" ? "Publishing now" : `Scheduled for ${fmtDate(scheduledAt)}`;
     println(`${c.green("✓")} ${what}: ${created.length} post${created.length > 1 ? "s" : ""}`);
-    println(postsTable(created, all));
+    println(postsTable(created, await ctx.accounts()));
     if (app) await reportLinks(ctx, app, created, targets);
     println(c.gray(`Check: postflare posts show ${created[0].id}`));
   },
@@ -263,7 +264,7 @@ export const posts: Command = {
   examples: ["postflare posts --upcoming", "postflare posts --status failed", "postflare posts -a tiktok --from 7d --json"],
   async run(ctx, { values }) {
     const all = await ctx.accounts();
-    const selected = list(values.account).length ? resolveAccounts(list(values.account), all) : null;
+    const selected = list(values.account).length ? await ctx.resolveAccounts(list(values.account)) : null;
     const opt = { now: ctx.now, relativePast: true, defaultClock: [0, 0] as [number, number] };
     const limit = Math.min(Number(str(values.limit)) || 50, 1000);
     let rows = await ctx.api.get<PostDTO[]>("/posts", {

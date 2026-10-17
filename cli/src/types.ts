@@ -68,6 +68,19 @@ export interface AccountDTO {
   expiresAt: number | null;
   createdAt: number;
   metricsStatus?: { status: string; message: string | null; checkedAt: number | null; metrics: MetricValues | null };
+  /** Account group id, null when ungrouped (absent on servers without groups). */
+  groupId?: string | null;
+}
+
+/** GET /api/account-groups */
+export interface AccountGroupDTO {
+  id: string;
+  name: string;
+  color: string;
+  position: number;
+  accountCount: number;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface MediaDTO {

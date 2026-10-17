@@ -2,32 +2,59 @@ import { list, str } from "../args.js";
 import type { Command } from "../context.js";
 import { UsageError } from "../errors.js";
 import { c, fmtNum, fmtStatus, println, printJson, table, truncate } from "../format.js";
-import { buildSettings, resolveAccounts } from "../resolve.js";
-import type { FieldDef, ProviderInfo } from "../types.js";
+import { accountLabel, buildSettings, matchGroup, resolveAccounts } from "../resolve.js";
+import type { AccountDTO, FieldDef, ProviderInfo } from "../types.js";
 
 export const accounts: Command = {
   name: "accounts",
-  summary: "List connected accounts with their status, followers and analytics state.",
+  summary: "List connected accounts with their group, status, followers and analytics state.",
   description:
     "STATUS is the publishing state (reconnect = token expired: reconnect it in the app). ANALYTICS: ok, pending (not\n" +
-    "collected yet), reconnect_required (reconnect to grant the analytics permissions), not_supported, error.",
-  options: { platform: { type: "string", arg: "<id>", description: "Only accounts of this platform" } },
+    "collected yet), reconnect_required (reconnect to grant the analytics permissions), not_supported, error.\n" +
+    "GROUP is the account group (brand / project): see postflare groups, postflare accounts group.",
+  options: {
+    platform: { type: "string", arg: "<id>", description: "Only accounts of this platform" },
+    group: { type: "string", arg: "<name|id>", description: "Only accounts of this group (\"none\": ungrouped)" },
+  },
   max: 0,
-  examples: ["postflare accounts", "postflare accounts --platform tiktok --json"],
+  examples: ["postflare accounts", "postflare accounts --platform tiktok --json", "postflare accounts --group \"Party Games\""],
   async run(ctx, { values }) {
-    let rows = await ctx.accounts();
+    const groupRef = str(values.group);
+    // Older servers have no groups: list without the column (unless --group asks for them).
+    const [all, groups] = await Promise.all([ctx.accounts(), groupRef ? ctx.groups() : ctx.groups().catch(() => null)]);
+    let rows = all;
     const platform = str(values.platform);
     if (platform) rows = rows.filter((a) => a.provider === platform);
-    if (ctx.json) return printJson(rows);
-    if (!rows.length) return println("No connected accounts. Connect them in the Postflare app (Accounts page).");
+    const byId = new Map((groups ?? []).map((g) => [g.id, g]));
+    if (groupRef) {
+      if (groupRef.toLowerCase() === "none") rows = rows.filter((a) => !a.groupId || !byId.has(a.groupId));
+      else {
+        const g = matchGroup(groupRef, groups ?? []);
+        rows = rows.filter((a) => a.groupId === g.id);
+      }
+    }
+    const groupOf = (a: AccountDTO) => (a.groupId ? byId.get(a.groupId) : undefined);
+    if (ctx.json) return printJson(groups ? rows.map((a) => ({ ...a, group: groupOf(a) ? { id: a.groupId, name: groupOf(a)!.name } : null })) : rows);
+    if (!rows.length) return println(all.length ? "No accounts match." : "No connected accounts. Connect them in the Postflare app (Accounts page).");
+    const showGroup = !!groups?.length;
     println(
       table(
-        [{ header: "ID" }, { header: "PLATFORM" }, { header: "NAME", flex: true }, { header: "USERNAME" }, { header: "STATUS" }, { header: "FOLLOWERS", align: "right" }, { header: "ANALYTICS" }],
+        [
+          { header: "ID" },
+          { header: "PLATFORM" },
+          { header: "NAME", flex: true },
+          { header: "USERNAME" },
+          ...(showGroup ? [{ header: "GROUP", max: 24 }] : []),
+          { header: "STATUS" },
+          { header: "FOLLOWERS", align: "right" as const },
+          { header: "ANALYTICS" },
+        ],
         rows.map((a) => [
           a.id,
           a.provider,
           a.name,
           a.username ? `@${a.username.replace(/^@/, "")}` : "",
+          ...(showGroup ? [groupOf(a)?.name ?? ""] : []),
           fmtStatus(a.status),
           fmtNum(a.metricsStatus?.metrics?.followers),
           a.metricsStatus ? fmtStatus(a.metricsStatus.status) : "",
@@ -39,6 +66,28 @@ export const accounts: Command = {
       const msg = a.statusMessage ?? a.metricsStatus?.message;
       println(c.yellow(`  ${a.id}: ${truncate(msg, 160)}`));
     }
+  },
+};
+
+export const accountsGroup: Command = {
+  name: "accounts group",
+  args: "<account...>",
+  summary: "Move accounts into an account group (--to <group>) or out of it (--to none).",
+  description: "Accounts are selectors like --account (id, @username, platform:@username, group:<name>...). One request for all.",
+  options: { to: { type: "string", arg: "<group|none>", description: "Target group (name or id), or none to ungroup" } },
+  min: 1,
+  examples: ["postflare accounts group acc_ig1 acc_yt1 --to \"Party Games\"", "postflare accounts group instagram:@airportofficer --to none"],
+  async run(ctx, { values, positionals }) {
+    const to = str(values.to);
+    if (!to) throw new UsageError("Say where: --to <group> (name or id) or --to none", "accounts group");
+    const [list, group] = await Promise.all([
+      ctx.resolveAccounts(positionals),
+      to.toLowerCase() === "none" ? null : ctx.groups().then((g) => matchGroup(to, g)),
+    ]);
+    const res = await ctx.api.post<{ ok: true; updated: number; groupId: string | null }>("/accounts/group", { accountIds: list.map((a) => a.id), groupId: group?.id ?? null });
+    if (ctx.json) return printJson({ ...res, accounts: list.map((a) => a.id) });
+    const n = `${list.length} account${list.length === 1 ? "" : "s"}`;
+    println(`${c.green("✓")} ${group ? `Moved ${n} to ${c.bold(group.name)}` : `Removed ${n} from their group`}: ${list.map(accountLabel).join(", ")}`);
   },
 };
 

@@ -96,7 +96,8 @@ describe("compatibility warning", () => {
     d.env!.POSTFLARE_NO_VERSION_CHECK = "1";
     expect(await run(["accounts", "--json"], d)).toBe(0);
     expect(err).toBe("");
-    expect(paths).toEqual(["/api/accounts"]);
+    // No /api/version call (accounts also loads the account groups for its GROUP column).
+    expect(paths.sort()).toEqual(["/api/account-groups", "/api/accounts"]);
   });
 
   it("suggests updating the server when its API is too old", () => {

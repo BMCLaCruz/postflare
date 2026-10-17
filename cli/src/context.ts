@@ -2,7 +2,8 @@ import { Api, type FetchLike } from "./api.js";
 import { serverVersion } from "./compat.js";
 import type { CommandDef, Parsed } from "./args.js";
 import { resolveAuth, type ResolvedAuth } from "./config.js";
-import type { AccountDTO, ProviderInfo } from "./types.js";
+import { resolveAccounts, usesGroups } from "./resolve.js";
+import type { AccountDTO, AccountGroupDTO, ProviderInfo } from "./types.js";
 
 export interface Deps {
   fetch?: FetchLike;
@@ -20,6 +21,7 @@ export class Ctx {
   private _auth?: ResolvedAuth;
   private _accounts?: Promise<AccountDTO[]>;
   private _providers?: Promise<ProviderInfo[]>;
+  private _groups?: Promise<AccountGroupDTO[]>;
 
   constructor(
     readonly parsed: Parsed,
@@ -60,6 +62,16 @@ export class Ctx {
 
   accounts(): Promise<AccountDTO[]> {
     return (this._accounts ??= this.api.get<AccountDTO[]>("/accounts"));
+  }
+
+  groups(): Promise<AccountGroupDTO[]> {
+    return (this._groups ??= this.api.get<AccountGroupDTO[]>("/account-groups"));
+  }
+
+  /** --account selectors → accounts; loads the account groups only when a `group:<name>` selector is used. */
+  async resolveAccounts(selectors: string[]): Promise<AccountDTO[]> {
+    const [accounts, groups] = await Promise.all([this.accounts(), usesGroups(selectors) ? this.groups() : undefined]);
+    return resolveAccounts(selectors, accounts, groups);
   }
 
   providers(): Promise<ProviderInfo[]> {

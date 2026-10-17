@@ -1,5 +1,6 @@
 import { commandHelp, parseCommand, splitCommand } from "./args.js";
-import { accountOptions, accounts, platforms } from "./commands/accounts.js";
+import { accountOptions, accounts, accountsGroup, platforms } from "./commands/accounts.js";
+import { groups, groupsCreate, groupsRename, groupsRm } from "./commands/groups.js";
 import { apps, appsAdd, appsBioLink, appsImport, appsRm, links } from "./commands/apps.js";
 import { analytics, analyticsRefresh, analyticsTop } from "./commands/analytics.js";
 import { login, logout, whoami, workspaces } from "./commands/auth.js";
@@ -22,6 +23,11 @@ export const COMMANDS: Command[] = [
   workspaces,
   accounts,
   accountOptions,
+  accountsGroup,
+  groups,
+  groupsCreate,
+  groupsRename,
+  groupsRm,
   platforms,
   mediaUpload,
   mediaList,
@@ -57,7 +63,7 @@ export const COMMANDS: Command[] = [
 
 const GROUPS: Array<[string, string[]]> = [
   ["Setup", ["login", "logout", "whoami", "workspaces", "version", "skill install"]],
-  ["Accounts & platforms", ["accounts", "accounts options", "platforms"]],
+  ["Accounts & platforms", ["accounts", "accounts options", "accounts group", "groups", "groups create", "groups rename", "groups rm", "platforms"]],
   ["Media", ["media upload", "media list", "media import", "media rm", "upload-link"]],
   ["Posts", ["post", "posts", "posts show", "posts edit", "posts cancel", "posts retry", "posts resolve", "posts comment", "posts rm"]],
   ["Playbooks", ["playbooks", "playbooks search", "playbooks show", "playbooks stats"]],
@@ -95,6 +101,7 @@ export function mainHelp(): string {
     "  postflare playbooks search launch --platform x",
     "  postflare post -a x --text-file post.txt --playbook launch-announcement@1 --now",
     "  postflare post -a x -a threads --text \"Tempo 2.0 is out\" --app Tempo --at \"fri 9:00\"",
+    "  postflare post -a \"group:Party Games\" -m clip.mp4 --text \"New level\" --at \"fri 18:00\"",
     "  postflare analytics --range 7d",
     "",
     "Help for a command: postflare <command> --help",
