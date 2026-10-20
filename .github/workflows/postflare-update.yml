@@ -6,6 +6,7 @@
 # Needs: Settings → Actions → General → Workflow permissions → "Allow GitHub Actions to create and approve pull
 # requests". Without it the workflow opens an issue with instructions instead.
 # Optional repository variable POSTFLARE_UPSTREAM_REPO (owner/name) to follow another repository.
+# GitHub only registers a workflow file once a push to the default branch changes it, so a copy may need one edit here.
 name: Postflare update
 
 on:
